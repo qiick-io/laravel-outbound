@@ -2,6 +2,104 @@
 
 > **In development. Not released and not on Packagist yet: do not depend on it.**
 
-SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products (in development).
+SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.
 
-Part of the qiick fleet. Design decisions live in the qiick knowledge base (`decisions/2026-11-19-shared-packages-for-api-keys-and-outbound-http.md`).
+## Status
+
+This package is under active construction against the approved design
+(`projects/qiick/packages/laravel-outbound-design.md` in the qiick knowledge
+base). Public APIs, evaluation order and security properties are binding once
+shipped; until `0.1.0` lands on Packagist, treat every surface as unstable.
+
+## Purpose
+
+One canonical path for:
+
+- **SSRF-safe outbound HTTP** — curl-style IPv4 reading, metadata blocking
+  (including Alibaba/Oracle even when private hosts are allowed), resolve-all
+  DNS checks, and `CURLOPT_CONNECT_TO` pinning (never `CURLOPT_RESOLVE` alone).
+- **Standard Webhooks** — symmetric `v1` signing and verification over the
+  exact raw body bytes, multi-secret rotation bounds, and pure retry schedules.
+
+Non-goals for v1: delivery tables/migrations, queue job bases / auto-disable
+enforcement (product duty), asymmetric Standard Webhooks (`v2a`), global
+helpers, a hard dependency on `laravel/framework`.
+
+## Threat model
+
+Attackers who control a destination URL (webhook endpoint, IdP discovery URL,
+user-supplied fetch target) must not reach:
+
+- Cloud metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`,
+  `192.0.0.192`, `metadata` / `metadata.google.internal`)
+- Loopback, private, CGNAT, link-local, ULA, or unspecified addresses when
+  private hosts are disallowed
+- Transition prefixes that re-embed IPv4 (NAT64, 6to4, Teredo)
+- DNS-rebinding races (pin the checked address with `CURLOPT_CONNECT_TO` on
+  every hop; redirects never use transport auto-follow)
+- Signature forgery or replay on inbound Standard Webhooks (exact raw body,
+  integer timestamps, tolerance window, `hash_equals`)
+
+Products that adopt this package must still enforce per-endpoint concurrency
+caps, timeouts, circuit-break / auto-disable after repeated failures, and
+honour `Retry-After` / 410 / 429. The package documents that duty; it does not
+ship auto-disable.
+
+## Requirements
+
+- PHP ^8.3 with `ext-curl` and `ext-intl`
+- illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
+- guzzlehttp/guzzle ^7.8 or ^8.0
+
+## Install (when released)
+
+```bash
+composer require qiick/laravel-outbound
+php artisan vendor:publish --tag=outbound-config
+```
+
+The service provider is auto-discovered.
+
+## Configuration
+
+| Config key | Env | Default |
+| --- | --- | --- |
+| `outbound.ssrf.allow_private_hosts` | `OUTBOUND_ALLOW_PRIVATE_HOSTS` | `false` |
+| `outbound.ssrf.https_only` | `OUTBOUND_HTTPS_ONLY` | `false` |
+| `outbound.http.timeout_seconds` | `OUTBOUND_TIMEOUT_SECONDS` | `5` |
+| `outbound.http.connect_timeout_seconds` | `OUTBOUND_CONNECT_TIMEOUT_SECONDS` | `3` |
+| `outbound.http.max_response_bytes` | `OUTBOUND_MAX_RESPONSE_BYTES` | `1048576` |
+| `outbound.http.max_redirects` | `OUTBOUND_MAX_REDIRECTS` | `0` |
+| `outbound.webhooks.replay_tolerance_seconds` | `OUTBOUND_WEBHOOK_TOLERANCE_SECONDS` | `300` |
+| `outbound.webhooks.max_payload_bytes` | `OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES` | `1048576` |
+| `outbound.webhooks.max_signatures` | `OUTBOUND_WEBHOOK_MAX_SIGNATURES` | `8` |
+| `outbound.webhooks.max_secrets` | `OUTBOUND_WEBHOOK_MAX_SECRETS` | `4` |
+| `outbound.webhooks.retry_preset` | `OUTBOUND_WEBHOOK_RETRY_PRESET` | `standard` |
+| `outbound.webhooks.retry_jitter_seconds` | `OUTBOUND_WEBHOOK_RETRY_JITTER` | `30` |
+| `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
+
+## Development
+
+```bash
+composer update
+composer test      # Pest
+composer lint      # Pint
+composer analyse   # PHPStan level max
+```
+
+Mutation targets (once the classes exist): `RemoteUrlGuard`, curl-IPv4 helpers,
+CONNECT_TO options, `PinnedHttpClient` redirect loop, Standard Webhooks
+signer/verifier, `RetrySchedule`. Run with `vendor/bin/pest --mutate` on the
+touched classes.
+
+Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
+clock and randomizer are fixed in tests.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
+
+## Security
+
+See [SECURITY.md](SECURITY.md). Use GitHub private vulnerability reporting; do
+not open a public issue for security findings.

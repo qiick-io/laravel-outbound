@@ -1,0 +1,74 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "qiick/laravel-outbound",
+    "description": "SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.",
+    "type": "library",
+    "keywords": [
+        "qiick",
+        "laravel",
+        "ssrf",
+        "outbound",
+        "webhooks",
+        "standard-webhooks"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Qiick",
+            "homepage": "https://qiick.io"
+        }
+    ],
+    "homepage": "https://github.com/qiick-io/laravel-outbound",
+    "support": {
+        "issues": "https://github.com/qiick-io/laravel-outbound/issues",
+        "source": "https://github.com/qiick-io/laravel-outbound"
+    },
+    "require": {
+        "php": "^8.3",
+        "ext-curl": "*",
+        "ext-intl": "*",
+        "guzzlehttp/guzzle": "^7.8 || ^8.0",
+        "illuminate/contracts": "^12.0 || ^13.0",
+        "illuminate/http": "^12.0 || ^13.0",
+        "illuminate/support": "^12.0 || ^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.3.1",
+        "laravel/pint": "^1.30.4 <1.31.0",
+        "nunomaduro/collision": "^8.5",
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "pestphp/pest": "^4.0",
+        "pestphp/pest-plugin-mutate": "^4.0",
+        "phpstan/phpstan": "^2.1.11"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Qiick\\Outbound\\Laravel\\OutboundServiceProvider"
+            ]
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Qiick\\Outbound\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Qiick\\Outbound\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint --test",
+        "analyse": "phpstan analyse --memory-limit=1G"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        },
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
