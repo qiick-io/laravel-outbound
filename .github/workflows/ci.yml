@@ -84,6 +84,42 @@ jobs:
       - name: Pest
         run: vendor/bin/pest
 
+  real-transport:
+    name: Real transport Guzzle ${{ matrix.guzzle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Guzzle 7 = lowest supported line; 8 = current stable (default install).
+        guzzle:
+          - '7.9.3'
+          - '8.5.2'
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          extensions: curl, intl
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: |
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer require --no-interaction --no-update "guzzlehttp/guzzle:${{ matrix.guzzle }}"
+          composer update --no-interaction --prefer-dist --with-all-dependencies
+          composer show guzzlehttp/guzzle | head -5
+
+      - name: Real-transport Pest
+        run: vendor/bin/pest --group=real-transport
+
   mutate:
     name: Mutation (per-class ≥95%)
     runs-on: ubuntu-latest

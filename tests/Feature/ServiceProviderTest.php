@@ -16,6 +16,9 @@ it('merges the package defaults into the outbound config', function (): void {
         'http' => [
             'timeout_seconds' => 5,
             'connect_timeout_seconds' => 3,
+            'max_timeout_seconds' => 60,
+            'max_connect_timeout_seconds' => 30,
+            'total_deadline_seconds' => 30,
             'max_response_bytes' => 1_048_576,
             'max_redirects' => 0,
         ],
