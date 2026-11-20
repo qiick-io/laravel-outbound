@@ -13,6 +13,7 @@ classes=(
   'Qiick\Outbound\Ssrf\RemoteUrlGuard'
   'Qiick\Outbound\Ssrf\AuthorizedDestination'
   'Qiick\Outbound\Http\PinnedHttpClient'
+  'Qiick\Outbound\Retry\RetrySchedule'
 )
 
 status=0
