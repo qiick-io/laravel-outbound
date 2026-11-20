@@ -32,6 +32,19 @@ return [
 
         'connect_timeout_seconds' => (int) env('OUTBOUND_CONNECT_TIMEOUT_SECONDS', 3),
 
+        /*
+         * Caps for per-call HttpRequestOptions. Values below 1s or above these
+         * caps are rejected before any request is sent.
+         */
+        'max_timeout_seconds' => (int) env('OUTBOUND_MAX_TIMEOUT_SECONDS', 60),
+
+        'max_connect_timeout_seconds' => (int) env('OUTBOUND_MAX_CONNECT_TIMEOUT_SECONDS', 30),
+
+        /*
+         * Wall-clock budget for the whole redirect chain (all hops).
+         */
+        'total_deadline_seconds' => (int) env('OUTBOUND_TOTAL_DEADLINE_SECONDS', 30),
+
         'max_response_bytes' => (int) env('OUTBOUND_MAX_RESPONSE_BYTES', 1_048_576),
 
         /*

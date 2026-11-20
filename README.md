@@ -86,6 +86,51 @@ $destination = $guard->authorize('https://example.test/hook');
 `assertBrowserUrlIsSafe()` checks scheme and credentials for URLs the server
 never connects to (browser redirects).
 
+### Pinned HTTP client
+
+```php
+use Qiick\Outbound\Http\HttpRequestOptions;
+use Qiick\Outbound\Http\OutboundRequest;
+use Qiick\Outbound\Http\PinnedHttpClient;
+
+$client = app(PinnedHttpClient::class);
+$response = $client->send(
+    'POST',
+    'https://example.test/hook',
+    function (OutboundRequest $request): void {
+        $request->asJson(['event' => 'created'])->accept('application/json');
+    },
+    new HttpRequestOptions(followRedirects: true, maxRedirects: 3),
+);
+```
+
+The configure callable receives a package-owned {@see OutboundRequest} only
+(headers, query on the authorised URL, raw/json/form/multipart body, Accept /
+Content-Type). It never sees Laravel's `PendingRequest`, so it cannot change
+the URI, timeouts, proxy, pin, redirects, verify, or stream. Transport settings
+are re-applied by wrapping the curl handler.
+
+Transport never auto-follows; when `followRedirects` is on, each `Location` is
+resolved, SSRF-checked, and re-pinned. Cross-origin redirects are off by
+default; when opted in, only 301/302/303 are allowed (body dropped) — cross-origin
+307/308 are always refused, and only Accept / Accept-Language / User-Agent /
+Content-Type (when a body is kept) are forwarded. Caller query values apply to
+the first hop only. `OutboundRequest` refuses Host / X-Host / X-Original-Host and routing headers (`X-Forwarded-*`, `Forwarded`, `X-Original-URL`, `X-Rewrite-URL`). The
+client uses a private HTTP factory so shared `Http::globalOptions(['handler'])`
+cannot bypass the pin. Environment proxies are disabled so they cannot bypass
+CONNECT_TO. Timeout caps and the total redirect deadline come from
+`outbound.http.*` config and cannot be raised per call.
+
+
+### Testing `PinnedHttpClient`
+
+`Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
+reach `PinnedHttpClient` when the service provider binds a private factory. Each
+transfer also strips a request-level `handler` from factory global options so a
+poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factory
+from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
+or use the `transferHandler` constructor seam for unit tests without a real client.
+
 ## Configuration
 
 | Config key | Env | Default |
@@ -94,6 +139,9 @@ never connects to (browser redirects).
 | `outbound.ssrf.https_only` | `OUTBOUND_HTTPS_ONLY` | `false` |
 | `outbound.http.timeout_seconds` | `OUTBOUND_TIMEOUT_SECONDS` | `5` |
 | `outbound.http.connect_timeout_seconds` | `OUTBOUND_CONNECT_TIMEOUT_SECONDS` | `3` |
+| `outbound.http.max_timeout_seconds` | `OUTBOUND_MAX_TIMEOUT_SECONDS` | `60` |
+| `outbound.http.max_connect_timeout_seconds` | `OUTBOUND_MAX_CONNECT_TIMEOUT_SECONDS` | `30` |
+| `outbound.http.total_deadline_seconds` | `OUTBOUND_TOTAL_DEADLINE_SECONDS` | `30` |
 | `outbound.http.max_response_bytes` | `OUTBOUND_MAX_RESPONSE_BYTES` | `1048576` |
 | `outbound.http.max_redirects` | `OUTBOUND_MAX_REDIRECTS` | `0` |
 | `outbound.webhooks.replay_tolerance_seconds` | `OUTBOUND_WEBHOOK_TOLERANCE_SECONDS` | `300` |
@@ -113,10 +161,9 @@ composer lint      # Pint
 composer analyse   # PHPStan level max
 ```
 
-Mutation targets (once the classes exist): `RemoteUrlGuard`, curl-IPv4 helpers,
-CONNECT_TO options, `PinnedHttpClient` redirect loop, Standard Webhooks
-signer/verifier, `RetrySchedule`. Run with `vendor/bin/pest --mutate` on the
-touched classes.
+Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
+must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`;
+more classes as they land). No method-level `@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
 clock and randomizer are fixed in tests.

@@ -7,8 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PinnedHttpClient** strips a request-level `handler` inherited from factory
+  globalOptions so a poisoned handler (Guzzle 7) cannot bypass CONNECT_TO;
+  streaming size limits rely on the progress callback when Content-Length is
+  absent. `OutboundRequest` also refuses `X-Host` / `X-Original-Host`. Testing
+  helper: `FakeOutboundHttpFactory`.
+
+- **PinnedHttpClient** uses a private `Http\Client\Factory` (not the shared
+  Http facade factory) so `Http::globalOptions(['handler' => …])` cannot replace
+  the enforcing curl wrap; any `handler` option is stripped. Caller `withQuery`
+  applies to the first hop only. Opted-in cross-origin hops forward only
+  Accept / Accept-Language / User-Agent / Content-Type (when a body is kept).
+  `OutboundRequest` refuses Host and routing headers (`X-Forwarded-*`,
+  `Forwarded`, `X-Original-URL`, `X-Rewrite-URL`). Mutation paths include
+  `tests/Feature/RealTransport`.
+
+- **Pre-1.0 API:** `PinnedHttpClient::send()` configure callable now receives
+  `OutboundRequest` only (not Laravel `PendingRequest`). Transport enforcement
+  wraps the curl handler; timeout caps / total deadline are config-owned via
+  `OutboundHttpLimits` and cannot be raised per call. Cross-origin 307/308 are
+  refused even when cross-origin redirects are opted in; bodies are dropped on
+  GET/HEAD hops and on cross-origin hops.
+
 ### Added
 
+- `PinnedHttpClient` + `HttpRequestOptions` + `OutboundRequest` +
+  `OutboundHttpLimits`: Laravel HTTP with SSRF authorize, CURLOPT_CONNECT_TO
+  pin, proxies disabled, redirects off by default, optional re-auth/re-pin
+  redirect loop, timeouts, and max response bytes.
+- `scripts/mutate-per-class.sh` — per-class pest mutate ≥95% (CI-enforced).
 - SSRF `RemoteUrlGuard` with `HostResolver`, `UrlGuardOptions`, `PortPolicy`,
   `AuthorizedDestination` (CURLOPT_CONNECT_TO only), `UnsafeUrl`,
   `DnsHostResolver`, and `FakeHostResolver`. Covers curl-style IPv4, metadata

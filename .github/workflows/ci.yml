@@ -84,10 +84,56 @@ jobs:
       - name: Pest
         run: vendor/bin/pest
 
-  mutate:
-    name: Mutation (RemoteUrlGuard)
+  real-transport:
+    name: Real transport Guzzle ${{ matrix.guzzle }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Lowest supported Guzzle 7 line (composer.json ^7.8 || ^8.0).
+          - guzzle: '7.8'
+            prefer: lowest
+          # Current stable Guzzle 8.
+          - guzzle: '8.5'
+            prefer: stable
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          extensions: curl, intl
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: |
+          # Packagist advisories block older Guzzle 7 installs; this job exists
+          # to exercise that line under real curl, so advisory blocking is off here only.
+          composer config audit.block-insecure false
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
+          if [ "${{ matrix.prefer }}" = "lowest" ]; then
+            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
+          else
+            composer update --no-interaction --prefer-dist --with-all-dependencies
+          fi
+          composer show guzzlehttp/guzzle | head -5
+
+      - name: Real-transport Pest
+        run: vendor/bin/pest --group=real-transport
+
+  mutate:
+    name: Mutation (per-class ≥95%)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         # actions/checkout@v4.2.2
@@ -108,8 +154,8 @@ jobs:
           composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
-      - name: Pest mutate
-        run: vendor/bin/pest --mutate --class='Qiick\Outbound\Ssrf\RemoteUrlGuard,Qiick\Outbound\Ssrf\AuthorizedDestination' --covered-only --min=95 tests/Unit/Ssrf
+      - name: Pest mutate per class
+        run: bash scripts/mutate-per-class.sh
 
   # The qiick standards pack (agent files, architecture test) must match app-ui.
   standards:

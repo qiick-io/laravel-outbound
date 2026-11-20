@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 
@@ -15,6 +16,9 @@ it('merges the package defaults into the outbound config', function (): void {
         'http' => [
             'timeout_seconds' => 5,
             'connect_timeout_seconds' => 3,
+            'max_timeout_seconds' => 60,
+            'max_connect_timeout_seconds' => 30,
+            'total_deadline_seconds' => 30,
             'max_response_bytes' => 1_048_576,
             'max_redirects' => 0,
         ],
@@ -39,8 +43,10 @@ it('lets an app publish the config file', function (): void {
     unlink(config_path('outbound.php'));
 });
 
-it('binds HostResolver and RemoteUrlGuard as singletons', function (): void {
+it('binds HostResolver, RemoteUrlGuard and PinnedHttpClient as singletons', function (): void {
     expect($this->app->make(HostResolver::class))->toBeInstanceOf(DnsHostResolver::class)
         ->and($this->app->make(RemoteUrlGuard::class))->toBeInstanceOf(RemoteUrlGuard::class)
-        ->and($this->app->make(RemoteUrlGuard::class))->toBe($this->app->make(RemoteUrlGuard::class));
+        ->and($this->app->make(RemoteUrlGuard::class))->toBe($this->app->make(RemoteUrlGuard::class))
+        ->and($this->app->make(PinnedHttpClient::class))->toBeInstanceOf(PinnedHttpClient::class)
+        ->and($this->app->make(PinnedHttpClient::class))->toBe($this->app->make(PinnedHttpClient::class));
 });
