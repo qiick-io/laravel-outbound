@@ -13,6 +13,8 @@ it('refuses Host and routing headers', function (string $name): void {
     'Host',
     'host',
     'HOST',
+    'X-Host',
+    'X-Original-Host',
     'Forwarded',
     'X-Forwarded-For',
     'X-Forwarded-Host',

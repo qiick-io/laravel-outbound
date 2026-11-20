@@ -24,6 +24,8 @@ final class OutboundRequest
     /** @var list<string> */
     private const REFUSED_HEADERS = [
         'Host',
+        'X-Host',
+        'X-Original-Host',
         'Forwarded',
         'X-Original-URL',
         'X-Rewrite-URL',

@@ -35,7 +35,7 @@ final class RealTransportServer
 
     public PinnedHttpClient $client;
 
-    public function __construct(?OutboundHttpLimits $limits = null)
+    public function __construct(?OutboundHttpLimits $limits = null, ?HttpFactory $factory = null)
     {
         $this->captureDir = sys_get_temp_dir().'/outbound-rt-'.bin2hex(random_bytes(8));
         mkdir($this->captureDir, 0700, true);
@@ -85,7 +85,7 @@ final class RealTransportServer
             ->with('evil.test', [$this->pinAddress]);
 
         $this->client = new PinnedHttpClient(
-            new HttpFactory,
+            $factory ?? new HttpFactory,
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
             $limits ?? new OutboundHttpLimits,
         );
@@ -343,6 +343,68 @@ it('applies withQuery to the first hop only and strips secret headers on cross-o
             ->and($second['x_api_key'] ?? '')->toBe('')
             ->and($second['authorization'] ?? '')->toBe('')
             ->and($second['accept'] ?? '')->toContain('application/json');
+    } finally {
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('still pins when constructed with a poisoned factory global handler', function (): void {
+    $portHolder = new class
+    {
+        public int $port = 0;
+    };
+
+    $poisoned = new HttpFactory;
+    $unchecked = HandlerStack::create(function (
+        RequestInterface $request,
+        array $options,
+    ) use ($portHolder) {
+        $url = 'http://127.0.0.1:'.$portHolder->port.'/unchecked';
+        $raw = @file_get_contents($url);
+
+        return Create::promiseFor(
+            new Response(200, [], $raw === false ? 'unchecked-fail' : $raw)
+        );
+    });
+    $poisoned->globalOptions(['handler' => $unchecked]);
+
+    $server = new RealTransportServer(factory: $poisoned);
+    $portHolder->port = $server->port;
+
+    try {
+        $response = $server->client->send(
+            'GET',
+            $server->url('app.test', '/ok'),
+            static function (OutboundRequest $request): void {},
+            realTransportOptions(),
+        );
+
+        expect($response->status())->toBe(200)
+            ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
+            ->and($server->capture('ok'))->not->toBeNull()
+            ->and($server->capture('unchecked'))->toBeNull();
+    } finally {
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('aborts an oversized stream without Content-Length via progress and bounds memory', function (): void {
+    $server = new RealTransportServer;
+    $limit = 256 * 1024;
+
+    try {
+        $before = memory_get_usage(true);
+
+        expect(fn () => $server->client->send(
+            'GET',
+            $server->url('app.test', '/stream-nolength'),
+            static function (OutboundRequest $request): void {},
+            realTransportOptions(['maxResponseBytes' => $limit]),
+        ))->toThrow(OutboundHttpException::class, 'Response exceeds max_response_bytes.');
+
+        $delta = memory_get_usage(true) - $before;
+        // ~32 MiB stream must not be fully buffered (limit is 256 KiB).
+        expect($delta)->toBeLessThan(8 * 1024 * 1024);
     } finally {
         $server->stop();
     }

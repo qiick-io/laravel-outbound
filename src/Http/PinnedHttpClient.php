@@ -174,37 +174,56 @@ final class PinnedHttpClient
     ): Response {
         $authorisedUrl = $this->urlWithQuery($destination->normalizedUrl, $snapshot['query']);
 
-        $pending = $this->http
-            ->withHeaders($snapshot['headers'])
-            ->timeout($timeoutSeconds)
-            ->connectTimeout($connectTimeoutSeconds)
-            ->withOptions($this->transportOptions($destination));
+        // Drop factory globalOptions (incl. a poisoned request-level `handler` on
+        // Guzzle 7) so setHandler's enforcing wrap is the transfer that runs.
+        return $this->http->withoutGlobalConfiguration(function () use (
+            $method,
+            $authorisedUrl,
+            $destination,
+            $snapshot,
+            $includeBody,
+            $timeoutSeconds,
+            $connectTimeoutSeconds,
+            $options,
+        ): Response {
+            $pending = $this->http
+                ->withHeaders($snapshot['headers'])
+                ->timeout($timeoutSeconds)
+                ->connectTimeout($connectTimeoutSeconds)
+                ->withOptions($this->transportOptions($destination));
 
-        $pending->setHandler($this->enforcingHandler($authorisedUrl, $destination, $options, $timeoutSeconds, $connectTimeoutSeconds));
+            $pending->setHandler($this->enforcingHandler(
+                $authorisedUrl,
+                $destination,
+                $options,
+                $timeoutSeconds,
+                $connectTimeoutSeconds,
+            ));
 
-        $sendOptions = [];
+            $sendOptions = [];
 
-        if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
-            [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
-        }
-
-        try {
-            return $pending->send($method, $authorisedUrl, $sendOptions);
-        } catch (OutboundHttpException $exception) {
-            throw $exception;
-        } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
-            for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
-                if ($previous instanceof OutboundHttpException) {
-                    throw $previous;
-                }
+            if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
+                [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
             }
 
-            throw new OutboundHttpException(
-                'Outbound request failed: connection error.',
-                0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
-                new RuntimeException('Underlying transport error.'),
-            );
-        }
+            try {
+                return $pending->send($method, $authorisedUrl, $sendOptions);
+            } catch (OutboundHttpException $exception) {
+                throw $exception;
+            } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
+                for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
+                    if ($previous instanceof OutboundHttpException) {
+                        throw $previous;
+                    }
+                }
+
+                throw new OutboundHttpException(
+                    'Outbound request failed: connection error.',
+                    0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+                    new RuntimeException('Underlying transport error.'),
+                );
+            }
+        });
     }
 
     /**
@@ -271,7 +290,7 @@ final class PinnedHttpClient
         // does not follow Locations past the authorised URI check. Handler
         // re-asserts the same flags; item removals here are equivalent under tests.
         return [ // @pest-mutate-ignore: RemoveArrayItem
-            'allow_redirects' => false, // @pest-mutate-ignore: FalseToTrue
+            'allow_redirects' => false,
             'proxy' => '', // @pest-mutate-ignore: EmptyStringToNotEmpty
             'stream' => false, // @pest-mutate-ignore: FalseToTrue
             'verify' => true, // @pest-mutate-ignore: TrueToFalse
@@ -297,7 +316,7 @@ final class PinnedHttpClient
                 }
             },
             'progress' => static function (int|float $downloadTotal, int|float $downloadedBytes) use ($max): void {
-                if ($downloadedBytes > $max || $downloadTotal > $max) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
+                if ($downloadedBytes > $max || $downloadTotal > $max) {
                     throw new OutboundHttpException('Response exceeds max_response_bytes.');
                 }
             },
@@ -346,8 +365,8 @@ final class PinnedHttpClient
 
             $request = $request->withHeader('Accept-Encoding', 'identity');
 
-            if ($options->maxResponseBytes !== null) { // @pest-mutate-ignore: NotIdenticalToIdentical,IfNegated
-                $requestOptions = [...$requestOptions, ...$this->sizeLimitOptions($options->maxResponseBytes)]; // @pest-mutate-ignore: RemoveArrayItem
+            if ($options->maxResponseBytes !== null) {
+                $requestOptions = [...$requestOptions, ...$this->sizeLimitOptions($options->maxResponseBytes)];
             }
 
             return $inner($request, $requestOptions);

@@ -101,6 +101,21 @@ if ($path === '/unchecked') {
     return true;
 }
 
+if ($path === '/stream-nolength') {
+    $record('stream-nolength');
+    // No Content-Length — progress callback must abort oversized downloads.
+    header('Content-Type: application/octet-stream');
+    header('Transfer-Encoding: chunked');
+    $chunk = str_repeat('x', 64 * 1024);
+    for ($i = 0; $i < 500; $i++) {
+        echo dechex(strlen($chunk)), "\r\n", $chunk, "\r\n";
+        flush();
+    }
+    echo "0\r\n\r\n";
+
+    return true;
+}
+
 if ($path === '/redirect-down') {
     $record('redirect-down');
     $port = $_SERVER['SERVER_PORT'] ?? '80';

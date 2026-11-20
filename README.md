@@ -107,11 +107,21 @@ resolved, SSRF-checked, and re-pinned. Cross-origin redirects are off by
 default; when opted in, only 301/302/303 are allowed (body dropped) — cross-origin
 307/308 are always refused, and only Accept / Accept-Language / User-Agent /
 Content-Type (when a body is kept) are forwarded. Caller query values apply to
-the first hop only. `OutboundRequest` refuses Host and routing headers. The
+the first hop only. `OutboundRequest` refuses Host / X-Host / X-Original-Host and routing headers (`X-Forwarded-*`, `Forwarded`, `X-Original-URL`, `X-Rewrite-URL`). The
 client uses a private HTTP factory so shared `Http::globalOptions(['handler'])`
 cannot bypass the pin. Environment proxies are disabled so they cannot bypass
 CONNECT_TO. Timeout caps and the total redirect deadline come from
 `outbound.http.*` config and cannot be raised per call.
+
+
+### Testing `PinnedHttpClient`
+
+`Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
+reach `PinnedHttpClient` — the service provider binds a private factory, and each
+transfer clears factory global options so a request-level `handler` cannot bypass
+the CONNECT_TO wrap. In tests, inject a factory from
+`Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`), or
+use the `transferHandler` constructor seam for unit tests without a real client.
 
 ## Configuration
 
