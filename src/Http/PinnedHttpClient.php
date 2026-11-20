@@ -18,6 +18,7 @@ use Psr\Http\Message\ResponseInterface;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
+use ReflectionObject;
 use RuntimeException;
 
 /**
@@ -174,56 +175,47 @@ final class PinnedHttpClient
     ): Response {
         $authorisedUrl = $this->urlWithQuery($destination->normalizedUrl, $snapshot['query']);
 
-        // Drop factory globalOptions (incl. a poisoned request-level `handler` on
-        // Guzzle 7) so setHandler's enforcing wrap is the transfer that runs.
-        return $this->http->withoutGlobalConfiguration(function () use (
-            $method,
+        $pending = $this->http
+            ->withHeaders($snapshot['headers'])
+            ->timeout($timeoutSeconds)
+            ->connectTimeout($connectTimeoutSeconds)
+            ->withOptions($this->transportOptions($destination));
+
+        // Guzzle 7 honours a request-level `handler` from factory globalOptions
+        // before our curl wrap runs — strip it so setHandler wins on both majors.
+        $this->stripRequestHandlerOption($pending);
+
+        $pending->setHandler($this->enforcingHandler(
             $authorisedUrl,
             $destination,
-            $snapshot,
-            $includeBody,
+            $options,
             $timeoutSeconds,
             $connectTimeoutSeconds,
-            $options,
-        ): Response {
-            $pending = $this->http
-                ->withHeaders($snapshot['headers'])
-                ->timeout($timeoutSeconds)
-                ->connectTimeout($connectTimeoutSeconds)
-                ->withOptions($this->transportOptions($destination));
+        ));
 
-            $pending->setHandler($this->enforcingHandler(
-                $authorisedUrl,
-                $destination,
-                $options,
-                $timeoutSeconds,
-                $connectTimeoutSeconds,
-            ));
+        $sendOptions = [];
 
-            $sendOptions = [];
+        if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
+            [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
+        }
 
-            if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
-                [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
-            }
-
-            try {
-                return $pending->send($method, $authorisedUrl, $sendOptions);
-            } catch (OutboundHttpException $exception) {
-                throw $exception;
-            } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
-                for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
-                    if ($previous instanceof OutboundHttpException) {
-                        throw $previous;
-                    }
+        try {
+            return $pending->send($method, $authorisedUrl, $sendOptions);
+        } catch (OutboundHttpException $exception) {
+            throw $exception;
+        } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
+            for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
+                if ($previous instanceof OutboundHttpException) {
+                    throw $previous;
                 }
-
-                throw new OutboundHttpException(
-                    'Outbound request failed: connection error.',
-                    0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
-                    new RuntimeException('Underlying transport error.'),
-                );
             }
-        });
+
+            throw new OutboundHttpException(
+                'Outbound request failed: connection error.',
+                0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+                new RuntimeException('Underlying transport error.'),
+            );
+        }
     }
 
     /**
@@ -327,6 +319,29 @@ final class PinnedHttpClient
      * Innermost curl-handler wrap: re-asserts URI, pin, proxy, redirects, stream,
      * verify, and timeouts on every transfer.
      */
+
+    /**
+     * Remove a poisoned request-level handler inherited from factory globalOptions.
+     */
+    private function stripRequestHandlerOption(PendingRequest $pending): void
+    {
+        $reflection = new ReflectionObject($pending);
+
+        if (! $reflection->hasProperty('options')) {
+            return;
+        }
+
+        $property = $reflection->getProperty('options');
+        $options = $property->getValue($pending);
+
+        if (! is_array($options) || ! array_key_exists('handler', $options)) {
+            return;
+        }
+
+        unset($options['handler']);
+        $property->setValue($pending, $options);
+    }
+
     private function enforcingHandler(
         string $authorisedUrl,
         AuthorizedDestination $destination,

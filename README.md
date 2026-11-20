@@ -117,11 +117,11 @@ CONNECT_TO. Timeout caps and the total redirect deadline come from
 ### Testing `PinnedHttpClient`
 
 `Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
-reach `PinnedHttpClient` — the service provider binds a private factory, and each
-transfer clears factory global options so a request-level `handler` cannot bypass
-the CONNECT_TO wrap. In tests, inject a factory from
-`Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`), or
-use the `transferHandler` constructor seam for unit tests without a real client.
+reach `PinnedHttpClient` when the service provider binds a private factory. Each
+transfer also strips a request-level `handler` from factory global options so a
+poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factory
+from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
+or use the `transferHandler` constructor seam for unit tests without a real client.
 
 ## Configuration
 

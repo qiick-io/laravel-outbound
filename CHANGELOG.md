@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **PinnedHttpClient** clears factory `globalOptions` per transfer so a poisoned
-  request-level `handler` (Guzzle 7) cannot bypass CONNECT_TO; streaming size
-  limits rely on the progress callback when Content-Length is absent.
-  `OutboundRequest` also refuses `X-Host` / `X-Original-Host`. Testing helper:
-  `FakeOutboundHttpFactory`.
+- **PinnedHttpClient** strips a request-level `handler` inherited from factory
+  globalOptions so a poisoned handler (Guzzle 7) cannot bypass CONNECT_TO;
+  streaming size limits rely on the progress callback when Content-Length is
+  absent. `OutboundRequest` also refuses `X-Host` / `X-Original-Host`. Testing
+  helper: `FakeOutboundHttpFactory`.
 
 - **PinnedHttpClient** uses a private `Http\Client\Factory` (not the shared
   Http facade factory) so `Http::globalOptions(['handler' => …])` cannot replace
