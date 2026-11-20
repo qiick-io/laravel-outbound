@@ -85,9 +85,9 @@ jobs:
         run: vendor/bin/pest
 
   mutate:
-    name: Mutation (RemoteUrlGuard)
+    name: Mutation (per-class ≥95%)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         # actions/checkout@v4.2.2
@@ -108,8 +108,8 @@ jobs:
           composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
-      - name: Pest mutate
-        run: vendor/bin/pest --mutate --class='Qiick\Outbound\Ssrf\RemoteUrlGuard,Qiick\Outbound\Ssrf\AuthorizedDestination' --covered-only --min=95 tests/Unit/Ssrf
+      - name: Pest mutate per class
+        run: bash scripts/mutate-per-class.sh
 
   # The qiick standards pack (agent files, architecture test) must match app-ui.
   standards:

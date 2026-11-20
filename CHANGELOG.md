@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PinnedHttpClient` + `HttpRequestOptions`: Laravel HTTP with SSRF authorize,
+  CURLOPT_CONNECT_TO pin, proxies disabled, redirects off by default, optional
+  re-auth/re-pin redirect loop, timeouts, and max response bytes.
+- `scripts/mutate-per-class.sh` — per-class pest mutate ≥95% (CI-enforced).
 - SSRF `RemoteUrlGuard` with `HostResolver`, `UrlGuardOptions`, `PortPolicy`,
   `AuthorizedDestination` (CURLOPT_CONNECT_TO only), `UnsafeUrl`,
   `DnsHostResolver`, and `FakeHostResolver`. Covers curl-style IPv4, metadata

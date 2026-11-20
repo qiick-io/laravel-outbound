@@ -78,6 +78,25 @@ $destination = $guard->authorize('https://example.test/hook');
 `assertBrowserUrlIsSafe()` checks scheme and credentials for URLs the server
 never connects to (browser redirects).
 
+### Pinned HTTP client
+
+```php
+use Qiick\Outbound\Http\HttpRequestOptions;
+use Qiick\Outbound\Http\PinnedHttpClient;
+
+$client = app(PinnedHttpClient::class);
+$response = $client->send(
+    'GET',
+    'https://example.test/hook',
+    fn ($request, $url, $method) => $request->get($url),
+    new HttpRequestOptions(followRedirects: true, maxRedirects: 3),
+);
+```
+
+Transport never auto-follows; when `followRedirects` is on, each `Location` is
+resolved, SSRF-checked, and re-pinned. Environment proxies are disabled so they
+cannot bypass CONNECT_TO.
+
 ## Configuration
 
 | Config key | Env | Default |
@@ -105,10 +124,9 @@ composer lint      # Pint
 composer analyse   # PHPStan level max
 ```
 
-Mutation targets (once the classes exist): `RemoteUrlGuard`, curl-IPv4 helpers,
-CONNECT_TO options, `PinnedHttpClient` redirect loop, Standard Webhooks
-signer/verifier, `RetrySchedule`. Run with `vendor/bin/pest --mutate` on the
-touched classes.
+Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
+must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`;
+more classes as they land). No method-level `@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
 clock and randomizer are fixed in tests.

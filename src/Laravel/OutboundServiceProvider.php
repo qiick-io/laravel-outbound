@@ -6,8 +6,10 @@ namespace Qiick\Outbound\Laravel;
 
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 
@@ -32,6 +34,13 @@ final class OutboundServiceProvider extends ServiceProvider
                 hostResolver: $resolver,
                 allowPrivateHosts: (bool) $config->get('outbound.ssrf.allow_private_hosts', false),
                 httpsOnly: (bool) $config->get('outbound.ssrf.https_only', false),
+            );
+        });
+
+        $this->app->singleton(PinnedHttpClient::class, function (Application $app): PinnedHttpClient {
+            return new PinnedHttpClient(
+                $app->make(HttpFactory::class),
+                $app->make(RemoteUrlGuard::class),
             );
         });
     }
