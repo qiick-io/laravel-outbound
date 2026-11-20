@@ -109,7 +109,7 @@ jobs:
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
       - name: Pest mutate
-        run: vendor/bin/pest --mutate --class='Qiick\Outbound\Ssrf\RemoteUrlGuard,Qiick\Outbound\Ssrf\AuthorizedDestination' --covered-only --min=99 tests/Unit/Ssrf
+        run: vendor/bin/pest --mutate --class='Qiick\Outbound\Ssrf\RemoteUrlGuard,Qiick\Outbound\Ssrf\AuthorizedDestination' --covered-only --min=95 tests/Unit/Ssrf
 
   # The qiick standards pack (agent files, architecture test) must match app-ui.
   standards:

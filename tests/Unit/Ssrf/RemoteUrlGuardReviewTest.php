@@ -38,6 +38,16 @@ it('refuses full-width private IPv4 with private hosts on (kills BooleanOr on ID
         ->toThrow(UnsafeUrl::class);
 });
 
+it('refuses IDN output that is IP-like via colon or a public IPv6 (kills BooleanOrToBooleanAnd)', function (string $host): void {
+    // A&&B||C would accept "a:b.example" (strpbrk only); (A||B)&&C would accept a
+    // public IPv6 string and pin it. Both must stay refused.
+    expect(fn () => ssrfGuardResolving()->authorize("https://{$host}/"))
+        ->toThrow(UnsafeUrl::class);
+})->with([
+    'full-width colon in a label' => "a\u{ff1a}b.example",
+    'full-width public IPv6' => "\u{ff12}\u{ff16}\u{ff10}\u{ff16}\u{ff1a}\u{ff14}\u{ff17}\u{ff10}\u{ff10}\u{ff1a}\u{ff1a}\u{ff11}",
+]);
+
 it('strips an ideographic full stop after IDN and still blocks localhost', function (): void {
     // U+FF61 survives parse_url (U+3002 is mangled by PHP's parser on some builds)
     // and IDN-maps to a trailing ASCII dot that normalizeHost must strip.
