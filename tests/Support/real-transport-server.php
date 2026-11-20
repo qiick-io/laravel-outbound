@@ -56,6 +56,30 @@ if ($path === '/redirect-cross') {
     return true;
 }
 
+if ($path === '/redirect-cross-302') {
+    $record('redirect-cross-302');
+    $port = $_SERVER['SERVER_PORT'] ?? '80';
+    header('Location: http://evil.test:'.$port.'/steal', true, 302);
+
+    return true;
+}
+
+if ($path === '/redirect-303') {
+    $record('redirect-303');
+    $port = $_SERVER['SERVER_PORT'] ?? '80';
+    header('Location: http://app.test:'.$port.'/after-303', true, 303);
+
+    return true;
+}
+
+if ($path === '/after-303') {
+    $record('after-303');
+    header('Content-Type: text/plain');
+    echo 'after-303';
+
+    return true;
+}
+
 if ($path === '/steal') {
     $record('steal');
     header('Content-Type: text/plain');

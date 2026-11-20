@@ -3,9 +3,10 @@
 declare(strict_types=1);
 
 use Illuminate\Http\Client\Factory as HttpFactory;
-use Illuminate\Http\Client\PendingRequest;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
+use Qiick\Outbound\Http\OutboundHttpLimits;
+use Qiick\Outbound\Http\OutboundRequest;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UrlGuardOptions;
@@ -29,7 +30,7 @@ final class RealTransportServer
 
     public PinnedHttpClient $client;
 
-    public function __construct()
+    public function __construct(?OutboundHttpLimits $limits = null)
     {
         $this->captureDir = sys_get_temp_dir().'/outbound-rt-'.bin2hex(random_bytes(8));
         mkdir($this->captureDir, 0700, true);
@@ -81,6 +82,7 @@ final class RealTransportServer
         $this->client = new PinnedHttpClient(
             app(HttpFactory::class),
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
+            $limits ?? new OutboundHttpLimits,
         );
     }
 
@@ -115,16 +117,6 @@ final class RealTransportServer
     }
 }
 
-function realTransportSender(): callable
-{
-    return function (PendingRequest $request, string $url, string $method) {
-        return match (strtoupper($method)) {
-            'POST' => $request->post($url),
-            default => $request->get($url),
-        };
-    };
-}
-
 function realTransportOptions(array $overrides = []): HttpRequestOptions
 {
     return new HttpRequestOptions(
@@ -134,7 +126,6 @@ function realTransportOptions(array $overrides = []): HttpRequestOptions
         maxRedirects: $overrides['maxRedirects'] ?? 0,
         maxResponseBytes: $overrides['maxResponseBytes'] ?? 1_048_576,
         headers: $overrides['headers'] ?? [],
-        totalDeadlineSeconds: $overrides['totalDeadlineSeconds'] ?? 10,
         allowCrossOriginRedirects: $overrides['allowCrossOriginRedirects'] ?? false,
         urlOptions: new UrlGuardOptions(httpsOnly: false),
     );
@@ -155,7 +146,7 @@ it('connects through real curl to the CONNECT_TO pin and ignores http_proxy', fu
         $response = $server->client->send(
             'GET',
             $server->url('app.test', '/ok'),
-            realTransportSender(),
+            static function (OutboundRequest $request): void {},
             realTransportOptions(),
         );
 
@@ -177,38 +168,87 @@ it('connects through real curl to the CONNECT_TO pin and ignores http_proxy', fu
     }
 })->group('real-transport');
 
-it('does not forward Authorization across a cross-origin 307 on the real wire', function (): void {
+it('refuses cross-origin 307 on the real wire even with the opt-in', function (): void {
     $server = new RealTransportServer;
 
     try {
-        $server->client->send(
+        expect(fn () => $server->client->send(
             'POST',
             $server->url('app.test', '/redirect-cross'),
-            function (PendingRequest $request, string $url, string $method) {
-                return $request->withBody('super-secret-body', 'text/plain')->send($method, $url);
+            function (OutboundRequest $request): void {
+                $request->withBody('super-secret-body', 'text/plain')
+                    ->withHeader('Authorization', 'Bearer real-leak');
             },
             realTransportOptions([
                 'followRedirects' => true,
                 'maxRedirects' => 2,
                 'allowCrossOriginRedirects' => true,
-                'headers' => [
-                    'Authorization' => 'Bearer real-leak',
-                    'Cookie' => 'session=1',
-                ],
+            ]),
+        ))->toThrow(OutboundHttpException::class, 'Cross-origin 307/308 redirect is not allowed.');
+
+        expect($server->capture('steal'))->toBeNull()
+            ->and($server->capture('redirect-cross')['body'] ?? null)->toBe('super-secret-body');
+    } finally {
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('drops body and Authorization on an opted-in cross-origin 302 on the real wire', function (): void {
+    $server = new RealTransportServer;
+
+    try {
+        $server->client->send(
+            'POST',
+            $server->url('app.test', '/redirect-cross-302'),
+            function (OutboundRequest $request): void {
+                $request->withBody('super-secret-body', 'text/plain')
+                    ->withHeader('Authorization', 'Bearer real-leak');
+            },
+            realTransportOptions([
+                'followRedirects' => true,
+                'maxRedirects' => 2,
+                'allowCrossOriginRedirects' => true,
             ]),
         );
 
-        $first = $server->capture('redirect-cross');
+        $first = $server->capture('redirect-cross-302');
         $second = $server->capture('steal');
 
         expect($first)->not->toBeNull()
             ->and($first['authorization'])->toContain('Bearer real-leak')
             ->and($first['body'])->toBe('super-secret-body')
-            ->and($first['host'])->toBe('app.test:'.$server->port)
             ->and($second)->not->toBeNull()
             ->and($second['authorization'])->toBe('')
-            ->and($second['cookie'])->toBe('')
-            ->and($second['host'])->toBe('evil.test:'.$server->port);
+            ->and($second['body'])->toBe('')
+            ->and($second['method'])->toBe('GET');
+    } finally {
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('drops body after same-origin 303 on the real wire', function (): void {
+    $server = new RealTransportServer;
+
+    try {
+        $server->client->send(
+            'POST',
+            $server->url('app.test', '/redirect-303'),
+            function (OutboundRequest $request): void {
+                $request->withBody('should-not-follow', 'text/plain');
+            },
+            realTransportOptions([
+                'followRedirects' => true,
+                'maxRedirects' => 2,
+            ]),
+        );
+
+        $first = $server->capture('redirect-303');
+        $second = $server->capture('after-303');
+
+        expect($first['body'] ?? null)->toBe('should-not-follow')
+            ->and($second)->not->toBeNull()
+            ->and($second['method'])->toBe('GET')
+            ->and($second['body'])->toBe('');
     } finally {
         $server->stop();
     }
@@ -221,7 +261,7 @@ it('rejects oversize Content-Length on the real wire without keeping the body', 
         expect(fn () => $server->client->send(
             'GET',
             $server->url('app.test', '/big?n=500000'),
-            realTransportSender(),
+            static function (OutboundRequest $request): void {},
             realTransportOptions(['maxResponseBytes' => 1024]),
         ))->toThrow(OutboundHttpException::class);
     } finally {

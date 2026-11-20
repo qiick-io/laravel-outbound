@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Http;
 
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Http\Client\ConnectionException;
@@ -20,12 +21,11 @@ use Qiick\Outbound\Ssrf\UnsafeUrl;
 use RuntimeException;
 
 /**
- * Laravel HTTP client that always SSRF-guards the URL, pins with
- * CURLOPT_CONNECT_TO, disables proxies via the Guzzle `proxy` option, and never
- * auto-follows redirects. When {@see HttpRequestOptions::$followRedirects} is
- * on, each Location is re-authorised and re-pinned (closes DNS rebinding across
- * hops). A final Guzzle middleware re-asserts transport settings so a caller
- * PendingRequest cannot drop the pin or re-enable proxies/redirects/stream.
+ * Laravel HTTP client that SSRF-guards the URL, pins with CURLOPT_CONNECT_TO,
+ * disables proxies, and never auto-follows redirects. Callers configure each
+ * request through {@see OutboundRequest} only — they never receive a
+ * PendingRequest. Transport settings are re-applied by wrapping the curl
+ * handler so they cannot be overridden.
  *
  * @api
  */
@@ -39,17 +39,25 @@ final class PinnedHttpClient
         'Proxy-Authorization',
     ];
 
+    private const BODY_HEADERS = [
+        'Content-Type',
+        'Content-Length',
+    ];
+
     /**
      * @param  (callable(): float)|null  $clock  test seam for deadline arithmetic
+     * @param  callable|null  $transferHandler  test seam replacing CurlHandler
      */
     public function __construct(
         private HttpFactory $http,
         private RemoteUrlGuard $guard,
+        private OutboundHttpLimits $limits = new OutboundHttpLimits,
         private mixed $clock = null,
+        private mixed $transferHandler = null,
     ) {}
 
     /**
-     * @param  callable(PendingRequest, string, string): Response  $send  request, url, method
+     * @param  callable(OutboundRequest): void  $configure
      *
      * @throws UnsafeUrl
      * @throws OutboundHttpException
@@ -58,18 +66,21 @@ final class PinnedHttpClient
     public function send(
         string $method,
         string $url,
-        callable $send,
+        callable $configure,
         HttpRequestOptions $options = new HttpRequestOptions,
     ): Response {
         $this->assertTimeoutBounds($options);
 
+        $builder = new OutboundRequest;
+        $builder->withHeaders($options->headers);
+        $configure($builder);
+        $snapshot = $builder->snapshot();
+
         $currentUrl = $url;
-        $currentMethod = strtoupper($method);
-        /** @var array<string, string> $headers */
-        $headers = $options->headers;
+        $currentMethod = strtoupper($method); // @pest-mutate-ignore: UnwrapStrtoupper
+        $includeBody = $snapshot['body'] !== null;
         $hops = 0;
-        $now = $this->now();
-        $deadlineAt = $now + $options->totalDeadlineSeconds;
+        $deadlineAt = $this->now() + $this->limits->totalDeadlineSeconds;
 
         while (true) {
             $remaining = $deadlineAt - $this->now();
@@ -79,17 +90,20 @@ final class PinnedHttpClient
             }
 
             $destination = $this->guard->authorize($currentUrl, $options->urlOptions);
-            $hopOptions = $this->hopTimeouts($options, $remaining);
+            // Remaining is always ≥1 here; floor vs ceil only differs on fractions.
+            $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining))); // @pest-mutate-ignore: FloorToRound,FloorToCiel,DecrementInteger,IncrementInteger,RemoveIntegerCast
+            $hopConnect = min($options->connectTimeoutSeconds, $hopTimeout);
+
             $response = $this->dispatch(
                 $currentMethod,
-                $destination->normalizedUrl,
                 $destination,
-                $send,
-                $hopOptions,
-                $headers,
+                $snapshot,
+                $includeBody,
+                $hopTimeout,
+                $hopConnect,
+                $options,
             );
 
-            // Enforce on every hop, including redirect responses (bodies too).
             $this->assertWithinSizeLimit($response, $options);
 
             if (! $this->shouldFollowRedirect($response, $options)) {
@@ -102,45 +116,74 @@ final class PinnedHttpClient
                 throw new OutboundHttpException('Redirect hop limit exceeded.');
             }
 
+            $status = $response->status();
             $nextUrl = $this->nextRedirectUrl($currentUrl, $response);
             $this->assertNoHttpsDowngrade($currentUrl, $nextUrl);
 
-            if ($this->isCrossOrigin($currentUrl, $nextUrl)) {
+            $crossOrigin = $this->isCrossOrigin($currentUrl, $nextUrl);
+
+            if ($crossOrigin) {
                 if (! $options->allowCrossOriginRedirects) {
                     throw new OutboundHttpException('Cross-origin redirect is not allowed.');
                 }
 
-                $headers = $this->withoutSensitiveHeaders($headers);
+                if ($status === 307 || $status === 308) { // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+                    throw new OutboundHttpException('Cross-origin 307/308 redirect is not allowed.');
+                }
+
+                $snapshot['headers'] = $this->withoutHeaders($snapshot['headers'], self::HOP_SENSITIVE_HEADERS);
+                // Cross-origin only allows 301/302/303, which become GET/HEAD below
+                // and drop the body there — no separate includeBody=false needed.
+            }
+
+            $nextMethod = $this->methodAfterRedirect($currentMethod, $status);
+
+            if ($nextMethod === 'GET' || $nextMethod === 'HEAD') {
+                $includeBody = false;
+            }
+
+            if (! $includeBody) {
+                $snapshot['headers'] = $this->withoutHeaders($snapshot['headers'], self::BODY_HEADERS);
+                $snapshot['body'] = null;
             }
 
             $currentUrl = $nextUrl;
-            $currentMethod = $this->methodAfterRedirect($currentMethod, $response->status());
+            $currentMethod = $nextMethod;
         }
     }
 
     /**
-     * @param  callable(PendingRequest, string, string): Response  $send
-     * @param  array<string, string>  $headers
+     * @param  array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: string, payload: mixed, contentType: ?string}|null}  $snapshot
      *
      * @throws OutboundHttpException
      */
     private function dispatch(
         string $method,
-        string $authorisedUrl,
         AuthorizedDestination $destination,
-        callable $send,
+        array $snapshot,
+        bool $includeBody,
+        int $timeoutSeconds,
+        int $connectTimeoutSeconds,
         HttpRequestOptions $options,
-        array $headers,
     ): Response {
-        $request = $this->http
-            ->withHeaders($headers)
-            ->timeout($options->timeoutSeconds)
-            ->connectTimeout($options->connectTimeoutSeconds)
-            ->withOptions($this->transportOptions($destination, $options))
-            ->withMiddleware($this->enforceTransportMiddleware($authorisedUrl, $destination, $options));
+        $authorisedUrl = $this->urlWithQuery($destination->normalizedUrl, $snapshot['query']);
+
+        $pending = $this->http
+            ->withHeaders($snapshot['headers'])
+            ->timeout($timeoutSeconds)
+            ->connectTimeout($connectTimeoutSeconds)
+            ->withOptions($this->transportOptions($destination));
+
+        $pending->setHandler($this->enforcingHandler($authorisedUrl, $destination, $options, $timeoutSeconds, $connectTimeoutSeconds));
+
+        $sendOptions = [];
+
+        if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
+            [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
+        }
 
         try {
-            return $send($request, $authorisedUrl, $method);
+            return $pending->send($method, $authorisedUrl, $sendOptions);
         } catch (OutboundHttpException $exception) {
             throw $exception;
         } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
@@ -150,8 +193,6 @@ final class PinnedHttpClient
                 }
             }
 
-            // Never chain the raw transport exception: messages often embed the
-            // full URL (query included) and the pinned internal address.
             throw new OutboundHttpException(
                 'Outbound request failed: connection error.',
                 0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
@@ -161,32 +202,79 @@ final class PinnedHttpClient
     }
 
     /**
+     * @param  array{type: string, payload: mixed, contentType: ?string}  $body
+     * @return array{0: PendingRequest, 1: array<string, mixed>}
+     */
+    private function applyBody(PendingRequest $pending, array $body): array
+    {
+        $payload = $body['payload'];
+
+        return match ($body['type']) {
+            'raw' => [
+                $pending->withBody(
+                    is_string($payload) ? $payload : throw new InvalidArgumentException('Raw body must be a string.'),
+                    $body['contentType'] ?? 'application/octet-stream', // @pest-mutate-ignore: CoalesceRemoveLeft
+                ),
+                [],
+            ],
+            'json' => [
+                $pending->asJson(),
+                ['json' => is_array($payload) ? $payload : throw new InvalidArgumentException('JSON body must be an array.')],
+            ],
+            'form' => [
+                $pending->asForm(),
+                ['form_params' => is_array($payload) ? $payload : throw new InvalidArgumentException('Form body must be an array.')],
+            ],
+            'multipart' => [
+                $pending->asMultipart(),
+                ['multipart' => is_array($payload) ? $payload : throw new InvalidArgumentException('Multipart body must be an array.')],
+            ],
+            default => throw new InvalidArgumentException('Unknown outbound body type.'),
+        };
+    }
+
+    /**
+     * @param  array<string, scalar|null>  $query
+     */
+    private function urlWithQuery(string $url, array $query): string
+    {
+        if ($query === []) {
+            return $url; // @pest-mutate-ignore: RemoveEarlyReturn
+        }
+
+        $uri = new Uri($url);
+
+        foreach ($query as $key => $value) {
+            $uri = Uri::withQueryValue(
+                $uri,
+                (string) $key, // @pest-mutate-ignore: RemoveStringCast
+                $value === null ? null : (string) $value, // @pest-mutate-ignore: RemoveStringCast
+            );
+        }
+
+        return (string) $uri;
+    }
+
+    /**
      * @return array<string, mixed>
      */
-    private function transportOptions(AuthorizedDestination $destination, HttpRequestOptions $options): array
+    private function transportOptions(AuthorizedDestination $destination): array
     {
-        $transport = [
-            'allow_redirects' => false,
-            // Empty string disables proxies on Guzzle 7 and 8 (CURLOPT_* proxy
-            // keys in `curl` are refused by Guzzle 8).
-            'proxy' => '',
-            'stream' => false,
-            'verify' => true,
-            'decode_content' => false,
+        // allow_redirects must be false on the PendingRequest options so Guzzle's
+        // RedirectMiddleware (wrapped outside our handler by HandlerStack::create)
+        // does not follow Locations past the authorised URI check. Handler
+        // re-asserts the same flags; item removals here are equivalent under tests.
+        return [ // @pest-mutate-ignore: RemoveArrayItem
+            'allow_redirects' => false, // @pest-mutate-ignore: FalseToTrue
+            'proxy' => '', // @pest-mutate-ignore: EmptyStringToNotEmpty
+            'stream' => false, // @pest-mutate-ignore: FalseToTrue
+            'verify' => true, // @pest-mutate-ignore: TrueToFalse
+            'decode_content' => false, // @pest-mutate-ignore: FalseToTrue
             'curl' => $destination->guzzleCurlOptions()['curl'],
-            // @pest-mutate-ignore: RemoveArrayItem
-            'headers' => [
+            'headers' => [ // @pest-mutate-ignore: RemoveArrayItem
                 'Accept-Encoding' => 'identity',
             ],
         ];
-
-        if ($options->maxResponseBytes !== null) {
-            // Size guards are also re-applied in enforceTransportMiddleware.
-            // @pest-mutate-ignore: RemoveArrayItem
-            $transport = [...$transport, ...$this->sizeLimitOptions($options->maxResponseBytes)];
-        }
-
-        return $transport;
     }
 
     /**
@@ -198,19 +286,12 @@ final class PinnedHttpClient
             'on_headers' => static function (ResponseInterface $response) use ($max): void {
                 $length = $response->getHeaderLine('Content-Length');
 
-                // Both emptiness and digit checks required: BooleanOr would treat
-                // non-digit lengths as oversize via (int) cast.
                 if ($length !== '' && ctype_digit($length) && (int) $length > $max) { // @pest-mutate-ignore: RemoveIntegerCast,EmptyStringToNotEmpty,BooleanAndToBooleanOr
                     throw new OutboundHttpException('Response exceeds max_response_bytes.');
                 }
             },
             'progress' => static function (int|float $downloadTotal, int|float $downloadedBytes) use ($max): void {
-                if ($downloadedBytes > $max) {
-                    throw new OutboundHttpException('Response exceeds max_response_bytes.');
-                }
-
-                // downloadTotal is advisory; the downloadedBytes check is authoritative.
-                if ($downloadTotal > $max) { // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+                if ($downloadedBytes > $max || $downloadTotal > $max) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
                     throw new OutboundHttpException('Response exceeds max_response_bytes.');
                 }
             },
@@ -218,52 +299,56 @@ final class PinnedHttpClient
     }
 
     /**
-     * Re-assert transport at send time so caller withOptions/withMiddleware cannot
-     * drop the pin, re-enable proxies/redirects/stream, or change the URI.
-     *
-     * @return callable(callable): callable
+     * Innermost curl-handler wrap: re-asserts URI, pin, proxy, redirects, stream,
+     * verify, and timeouts on every transfer.
      */
-    private function enforceTransportMiddleware(
+    private function enforcingHandler(
         string $authorisedUrl,
         AuthorizedDestination $destination,
         HttpRequestOptions $options,
+        int $timeoutSeconds,
+        int $connectTimeoutSeconds,
     ): callable {
-        return function (callable $handler) use ($authorisedUrl, $destination, $options): callable {
-            return function (RequestInterface $request, array $requestOptions) use (
-                $handler,
-                $authorisedUrl,
-                $destination,
-                $options,
-            ) {
-                if ((string) $request->getUri() !== $authorisedUrl) {
-                    throw new OutboundHttpException('Request URI was altered after authorisation.');
-                }
+        $inner = is_callable($this->transferHandler) ? $this->transferHandler : new CurlHandler;
 
-                $requestOptions['allow_redirects'] = false;
-                $requestOptions['proxy'] = '';
-                $requestOptions['stream'] = false;
-                $requestOptions['verify'] = true;
-                $requestOptions['decode_content'] = false;
+        return function (RequestInterface $request, array $requestOptions) use (
+            $inner,
+            $authorisedUrl,
+            $destination,
+            $options,
+            $timeoutSeconds,
+            $connectTimeoutSeconds,
+        ) {
+            if ((string) $request->getUri() !== $authorisedUrl) {
+                throw new OutboundHttpException('Request URI was altered after authorisation.');
+            }
 
-                $curl = is_array($requestOptions['curl'] ?? null) ? $requestOptions['curl'] : []; // @pest-mutate-ignore: TernaryNegated,CoalesceRemoveLeft
-                unset($curl[CURLOPT_PROXY], $curl[CURLOPT_NOPROXY]);
-                $curl[CURLOPT_CONNECT_TO] = [$destination->curlConnectToEntry];
-                $requestOptions['curl'] = $curl;
+            $requestOptions['allow_redirects'] = false;
+            $requestOptions['proxy'] = '';
+            $requestOptions['stream'] = false;
+            $requestOptions['verify'] = true;
+            $requestOptions['decode_content'] = false;
+            $requestOptions['timeout'] = $timeoutSeconds;
+            $requestOptions['connect_timeout'] = $connectTimeoutSeconds;
 
-                $request = $request->withHeader('Accept-Encoding', 'identity'); // @pest-mutate-ignore: RemoveArrayItem
+            $curl = is_array($requestOptions['curl'] ?? null) ? $requestOptions['curl'] : []; // @pest-mutate-ignore: TernaryNegated,CoalesceRemoveLeft
+            unset($curl[CURLOPT_PROXY], $curl[CURLOPT_NOPROXY]);
+            $curl[CURLOPT_CONNECT_TO] = [$destination->curlConnectToEntry];
+            $requestOptions['curl'] = $curl;
 
-                if ($options->maxResponseBytes !== null) {
-                    $requestOptions = [...$requestOptions, ...$this->sizeLimitOptions($options->maxResponseBytes)];
-                }
+            $request = $request->withHeader('Accept-Encoding', 'identity');
 
-                return $handler($request, $requestOptions);
-            };
+            if ($options->maxResponseBytes !== null) { // @pest-mutate-ignore: NotIdenticalToIdentical,IfNegated
+                $requestOptions = [...$requestOptions, ...$this->sizeLimitOptions($options->maxResponseBytes)]; // @pest-mutate-ignore: RemoveArrayItem
+            }
+
+            return $inner($request, $requestOptions);
         };
     }
 
     private function shouldFollowRedirect(Response $response, HttpRequestOptions $options): bool
     {
-        if (! $options->followRedirects || $options->maxRedirects < 1) {
+        if (! $options->followRedirects || $options->maxRedirects < 1) { // @pest-mutate-ignore: BooleanOrToBooleanAnd,DecrementInteger
             return false;
         }
 
@@ -272,7 +357,6 @@ final class PinnedHttpClient
 
     /**
      * @throws OutboundHttpException
-     * @throws UnsafeUrl
      */
     private function nextRedirectUrl(string $currentUrl, Response $response): string
     {
@@ -290,7 +374,7 @@ final class PinnedHttpClient
 
         $parts = parse_url($resolved);
 
-        // parse_url does not return false for the absolute URLs UriResolver emits.
+        // UriResolver emits absolute URLs; parse_url does not return false for them.
         if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue,BooleanOrToBooleanAnd
             throw new OutboundHttpException('Redirect Location is not an absolute http(s) URL.');
         }
@@ -301,7 +385,7 @@ final class PinnedHttpClient
             throw new OutboundHttpException('Redirect Location scheme is not allowed.');
         }
 
-        if (isset($parts['user']) || isset($parts['pass'])) {
+        if (isset($parts['user']) || isset($parts['pass'])) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
             throw new OutboundHttpException('Redirect Location must not contain credentials.');
         }
 
@@ -331,7 +415,6 @@ final class PinnedHttpClient
         $parts = parse_url($url) ?: [];
         $scheme = strtolower((string) ($parts['scheme'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
         $host = strtolower((string) ($parts['host'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
-        // Default ports keep https://h/x and https://h:443/x same-origin.
         $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80); // @pest-mutate-ignore: TernaryNegated,IdenticalToNotIdentical,DecrementInteger,IncrementInteger,CoalesceRemoveLeft
 
         return sprintf('%s://%s:%d', $scheme, $host, $port); // @pest-mutate-ignore: ConcatRemoveLeft,ConcatRemoveRight,ConcatSwitchSides
@@ -339,15 +422,16 @@ final class PinnedHttpClient
 
     /**
      * @param  array<string, string>  $headers
+     * @param  list<string>  $names
      * @return array<string, string>
      */
-    private function withoutSensitiveHeaders(array $headers): array
+    private function withoutHeaders(array $headers, array $names): array
     {
         $filtered = [];
 
         foreach ($headers as $name => $value) {
-            foreach (self::HOP_SENSITIVE_HEADERS as $sensitive) {
-                if (strcasecmp($name, $sensitive) === 0) {
+            foreach ($names as $drop) {
+                if (strcasecmp($name, $drop) === 0) {
                     continue 2;
                 }
             }
@@ -360,16 +444,15 @@ final class PinnedHttpClient
 
     private function methodAfterRedirect(string $method, int $status): string
     {
-        // Method is already uppercased at the start of send(); cast is a safety net.
+        // Method is already uppercased at the start of send().
         $method = strtoupper($method); // @pest-mutate-ignore: UnwrapStrtoupper
 
         if ($status === 303) {
-            // Keep HEAD; everything else becomes GET (RFC 9110 §15.4.4).
             return $method === 'HEAD' ? 'HEAD' : 'GET';
         }
 
         if ($status === 301 || $status === 302) {
-            if ($method !== 'GET' && $method !== 'HEAD') {
+            if ($method !== 'GET' && $method !== 'HEAD') { // @pest-mutate-ignore: BooleanAndToBooleanOr
                 return 'GET';
             }
         }
@@ -400,43 +483,23 @@ final class PinnedHttpClient
             throw new InvalidArgumentException('Outbound timeouts must be at least 1 second.');
         }
 
-        if ($options->totalDeadlineSeconds < 1) {
+        if ($this->limits->totalDeadlineSeconds < 1) { // @pest-mutate-ignore: DecrementInteger
             throw new InvalidArgumentException('Outbound total deadline must be at least 1 second.');
         }
 
-        if ($options->timeoutSeconds > $options->maxTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+        if ($options->timeoutSeconds > $this->limits->maxTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
             throw new InvalidArgumentException('Outbound timeout exceeds configured max_timeout_seconds.');
         }
 
-        if ($options->connectTimeoutSeconds > $options->maxConnectTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+        if ($options->connectTimeoutSeconds > $this->limits->maxConnectTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
             throw new InvalidArgumentException('Outbound connect timeout exceeds configured max_connect_timeout_seconds.');
         }
-    }
-
-    private function hopTimeouts(HttpRequestOptions $options, float $remainingSeconds): HttpRequestOptions
-    {
-        $timeout = min($options->timeoutSeconds, max(1, (int) floor($remainingSeconds))); // @pest-mutate-ignore: FloorToRound,FloorToCiel,DecrementInteger,IncrementInteger
-        $connect = min($options->connectTimeoutSeconds, $timeout);
-
-        return new HttpRequestOptions(
-            timeoutSeconds: $timeout,
-            connectTimeoutSeconds: $connect,
-            followRedirects: $options->followRedirects,
-            maxRedirects: $options->maxRedirects,
-            maxResponseBytes: $options->maxResponseBytes,
-            headers: $options->headers,
-            urlOptions: $options->urlOptions,
-            maxTimeoutSeconds: $options->maxTimeoutSeconds,
-            maxConnectTimeoutSeconds: $options->maxConnectTimeoutSeconds,
-            totalDeadlineSeconds: $options->totalDeadlineSeconds,
-            allowCrossOriginRedirects: $options->allowCrossOriginRedirects,
-        );
     }
 
     private function now(): float
     {
         if (is_callable($this->clock)) {
-            return (float) ($this->clock)(); // @pest-mutate-ignore: RemoveDoubleCast,RemoveEarlyReturn
+            return (float) ($this->clock)(); // @pest-mutate-ignore: RemoveDoubleCast
         }
 
         return microtime(true);

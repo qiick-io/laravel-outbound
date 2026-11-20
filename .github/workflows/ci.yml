@@ -91,12 +91,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Guzzle 7 = supported ^7 line; 8 = current stable (default install).
-        # Composer blocks older 7.x on Packagist advisories; this job pins the
-        # line under test and disables advisory blocking for that install only.
-        guzzle:
-          - '7.9'
-          - '8.5'
+        include:
+          # Lowest supported Guzzle 7 line (composer.json ^7.8 || ^8.0).
+          - guzzle: '7.8'
+            prefer: lowest
+          # Current stable Guzzle 8.
+          - guzzle: '8.5'
+            prefer: stable
     steps:
       - name: Checkout
         # actions/checkout@v4.2.2
@@ -113,11 +114,17 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Packagist advisories block older Guzzle 7 installs; this job exists
+          # to exercise that line under real curl, so advisory blocking is off here only.
           composer config audit.block-insecure false
           composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
           composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
           composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
-          composer update --no-interaction --prefer-dist --with-all-dependencies
+          if [ "${{ matrix.prefer }}" = "lowest" ]; then
+            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
+          else
+            composer update --no-interaction --prefer-dist --with-all-dependencies
+          fi
           composer show guzzlehttp/guzzle | head -5
 
       - name: Real-transport Pest

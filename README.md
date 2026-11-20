@@ -82,20 +82,32 @@ never connects to (browser redirects).
 
 ```php
 use Qiick\Outbound\Http\HttpRequestOptions;
+use Qiick\Outbound\Http\OutboundRequest;
 use Qiick\Outbound\Http\PinnedHttpClient;
 
 $client = app(PinnedHttpClient::class);
 $response = $client->send(
-    'GET',
+    'POST',
     'https://example.test/hook',
-    fn ($request, $url, $method) => $request->get($url),
+    function (OutboundRequest $request): void {
+        $request->asJson(['event' => 'created'])->accept('application/json');
+    },
     new HttpRequestOptions(followRedirects: true, maxRedirects: 3),
 );
 ```
 
+The configure callable receives a package-owned {@see OutboundRequest} only
+(headers, query on the authorised URL, raw/json/form/multipart body, Accept /
+Content-Type). It never sees Laravel's `PendingRequest`, so it cannot change
+the URI, timeouts, proxy, pin, redirects, verify, or stream. Transport settings
+are re-applied by wrapping the curl handler.
+
 Transport never auto-follows; when `followRedirects` is on, each `Location` is
-resolved, SSRF-checked, and re-pinned. Environment proxies are disabled so they
-cannot bypass CONNECT_TO.
+resolved, SSRF-checked, and re-pinned. Cross-origin redirects are off by
+default; when opted in, only 301/302/303 are allowed (body dropped) — cross-origin
+307/308 are always refused. Environment proxies are disabled so they cannot
+bypass CONNECT_TO. Timeout caps and the total redirect deadline come from
+`outbound.http.*` config and cannot be raised per call.
 
 ## Configuration
 
@@ -105,6 +117,9 @@ cannot bypass CONNECT_TO.
 | `outbound.ssrf.https_only` | `OUTBOUND_HTTPS_ONLY` | `false` |
 | `outbound.http.timeout_seconds` | `OUTBOUND_TIMEOUT_SECONDS` | `5` |
 | `outbound.http.connect_timeout_seconds` | `OUTBOUND_CONNECT_TIMEOUT_SECONDS` | `3` |
+| `outbound.http.max_timeout_seconds` | `OUTBOUND_MAX_TIMEOUT_SECONDS` | `60` |
+| `outbound.http.max_connect_timeout_seconds` | `OUTBOUND_MAX_CONNECT_TIMEOUT_SECONDS` | `30` |
+| `outbound.http.total_deadline_seconds` | `OUTBOUND_TOTAL_DEADLINE_SECONDS` | `30` |
 | `outbound.http.max_response_bytes` | `OUTBOUND_MAX_RESPONSE_BYTES` | `1048576` |
 | `outbound.http.max_redirects` | `OUTBOUND_MAX_REDIRECTS` | `0` |
 | `outbound.webhooks.replay_tolerance_seconds` | `OUTBOUND_WEBHOOK_TOLERANCE_SECONDS` | `300` |

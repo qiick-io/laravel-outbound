@@ -7,11 +7,11 @@ namespace Qiick\Outbound\Http;
 use Qiick\Outbound\Ssrf\UrlGuardOptions;
 
 /**
- * Per-call options for {@see PinnedHttpClient}. Defaults match `outbound.http`
- * and Externa / Signaculum / oidc delivery timeouts.
+ * Per-call options for {@see PinnedHttpClient}. Defaults match `outbound.http`.
  *
- * Timeouts must be ≥ 1 second and ≤ the configured caps. {@see $totalDeadlineSeconds}
- * bounds the whole redirect chain.
+ * Timeouts must be ≥ 1 second and ≤ the config-owned
+ * {@see OutboundHttpLimits} ceilings. The total redirect-chain deadline is
+ * never raisable from per-call options.
  *
  * @api
  */
@@ -28,13 +28,10 @@ final readonly class HttpRequestOptions
         public ?int $maxResponseBytes = 1_048_576,
         public array $headers = [],
         public UrlGuardOptions $urlOptions = new UrlGuardOptions,
-        public int $maxTimeoutSeconds = 60,
-        public int $maxConnectTimeoutSeconds = 30,
-        public int $totalDeadlineSeconds = 30,
         /**
-         * Cross-origin redirects are refused by default so a caller `$send`
-         * body cannot be replayed to another host. When true, sensitive hop
-         * headers are stripped and each Location is still re-authorised.
+         * Cross-origin redirects are refused by default. When true, only
+         * 301/302/303 are allowed across origins (body is dropped); 307/308
+         * cross-origin is always refused because they require resending the body.
          */
         public bool $allowCrossOriginRedirects = false,
     ) {}

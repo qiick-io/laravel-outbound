@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pre-1.0 API:** `PinnedHttpClient::send()` configure callable now receives
+  `OutboundRequest` only (not Laravel `PendingRequest`). Transport enforcement
+  wraps the curl handler; timeout caps / total deadline are config-owned via
+  `OutboundHttpLimits` and cannot be raised per call. Cross-origin 307/308 are
+  refused even when cross-origin redirects are opted in; bodies are dropped on
+  GET/HEAD hops and on cross-origin hops.
+
 ### Added
 
-- `PinnedHttpClient` + `HttpRequestOptions`: Laravel HTTP with SSRF authorize,
-  CURLOPT_CONNECT_TO pin, proxies disabled, redirects off by default, optional
-  re-auth/re-pin redirect loop, timeouts, and max response bytes.
+- `PinnedHttpClient` + `HttpRequestOptions` + `OutboundRequest` +
+  `OutboundHttpLimits`: Laravel HTTP with SSRF authorize, CURLOPT_CONNECT_TO
+  pin, proxies disabled, redirects off by default, optional re-auth/re-pin
+  redirect loop, timeouts, and max response bytes.
 - `scripts/mutate-per-class.sh` — per-class pest mutate ≥95% (CI-enforced).
 - SSRF `RemoteUrlGuard` with `HostResolver`, `UrlGuardOptions`, `PortPolicy`,
   `AuthorizedDestination` (CURLOPT_CONNECT_TO only), `UnsafeUrl`,
