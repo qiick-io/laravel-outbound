@@ -47,7 +47,6 @@ final class RemoteUrlGuard
         'fec0::/10', // site-local (deprecated RFC 3879); blocked when private off
         'ff00::/8',
         '2001:db8::/32',
-        '64:ff9b:1::/48', // local-use NAT64 (RFC 8215); blocked when private off
     ];
 
     /**
@@ -78,6 +77,7 @@ final class RemoteUrlGuard
      */
     private const array AlwaysBlockedTransitionNetworks = [
         '64:ff9b::/96', // NAT64 well-known prefix (RFC 6052)
+        '64:ff9b:1::/48', // local-use NAT64 (RFC 8215); always — embedded metadata via local gateway
         '2002::/16', // 6to4 (RFC 3056) — rejected outright
         '2001:0::/32', // Teredo (RFC 4380)
     ];
@@ -268,11 +268,11 @@ final class RemoteUrlGuard
             return $ipv4;
         }
 
-        // STD3 + nontransitional: full-width digits/punctuation must not mint
-        // ':' into a hostname that later parses as IPv6 (IDN bypass).
+        // Nontransitional UTS46: full-width digits/punctuation must not mint an
+        // IP-like hostname (closed below). Underscores stay allowed (curl/S3).
         $ascii = idn_to_ascii(
             $name,
-            IDNA_USE_STD3_RULES | IDNA_NONTRANSITIONAL_TO_ASCII,
+            IDNA_NONTRANSITIONAL_TO_ASCII,
             INTL_IDNA_VARIANT_UTS46,
         );
 
@@ -292,8 +292,7 @@ final class RemoteUrlGuard
         }
 
         // An IP must arrive as a URL IP literal, never through IDN mapping.
-        // STD3 already rejects most of these; the OR chain is defense in depth.
-        if (strpbrk($ascii, ':[]%@/\\?#') !== false || filter_var($ascii, FILTER_VALIDATE_IP) !== false || $this->readIpv4Address($ascii) !== null) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
+        if (strpbrk($ascii, ':[]%@/\\?#') !== false || filter_var($ascii, FILTER_VALIDATE_IP) !== false || $this->readIpv4Address($ascii) !== null) {
             throw new UnsafeUrl('URL is invalid.');
         }
 
@@ -412,11 +411,11 @@ final class RemoteUrlGuard
         // short forms that authorize() refuses after the spelling check anyway.
         $ipLong = $value * 256 ** $remainingBytes + $last; // @pest-mutate-ignore: PowerToMultiplication
 
-        return sprintf( // @pest-mutate-ignore: DecrementInteger
+        return sprintf(
             '%d.%d.%d.%d',
-            ($ipLong >> 24) & 0xFF, // @pest-mutate-ignore: DecrementInteger
-            ($ipLong >> 16) & 0xFF, // @pest-mutate-ignore: DecrementInteger
-            ($ipLong >> 8) & 0xFF, // @pest-mutate-ignore: DecrementInteger
+            ($ipLong >> 24) & 0xFF,
+            ($ipLong >> 16) & 0xFF,
+            ($ipLong >> 8) & 0xFF,
             $ipLong & 0xFF,
         );
     }
@@ -424,10 +423,10 @@ final class RemoteUrlGuard
     private function readIpv4Number(string $part): ?int
     {
         [$digits, $base] = match (true) {
-            // substr offset / base integers: authorize() only sees dotted-decimal vs refuse-as-name
+            // substr offset / hex+octal bases: authorize() only sees dotted-decimal vs refuse-as-name
             preg_match('/^0x[0-9a-f]+$/', $part) === 1 => [substr($part, 2), 16], // @pest-mutate-ignore: UnwrapSubstr,DecrementInteger,IncrementInteger
             preg_match('/^0[0-7]*$/', $part) === 1 => [$part, 8], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
-            preg_match('/^[1-9][0-9]*$/', $part) === 1 => [$part, 10], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+            preg_match('/^[1-9][0-9]*$/', $part) === 1 => [$part, 10],
             default => [null, 0], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
         };
 

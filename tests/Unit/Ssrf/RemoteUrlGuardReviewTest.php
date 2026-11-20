@@ -11,7 +11,7 @@ use Qiick\Outbound\Testing\FakeHostResolver;
 
 /**
  * Adversarial-review fixes for #2: IDN bypass, expanded metadata, per-call
- * options, DnsHostResolver, curl options shape, IPv4 boundary mutants.
+ * options, DnsHostResolver seam, curl options shape, IPv4/IPv6 mutants.
  */
 it('refuses full-width IPv6 metadata that IDN would otherwise mint into a pin', function (): void {
     // Full-width digits + full-width colon (U+FF1A): under IDNA_DEFAULT this
@@ -29,6 +29,14 @@ it('refuses full-width and mixed ASCII/full-width IPv4 metadata spellings', func
     'full-width dotted metadata' => "\u{ff11}\u{ff16}\u{ff19}.\u{ff12}\u{ff15}\u{ff14}.\u{ff11}\u{ff16}\u{ff19}.\u{ff12}\u{ff15}\u{ff14}",
     'mixed full-width last octet' => "169.254.169.\u{ff12}\u{ff15}\u{ff14}",
 ]);
+
+it('refuses full-width private IPv4 with private hosts on (kills BooleanOr on IDN→IP refuse)', function (): void {
+    // １０.０.０.１ → 10.0.0.1 via IDN; must not be pinned even when private is allowed.
+    $host = "\u{ff11}\u{ff10}.\u{ff10}.\u{ff10}.\u{ff11}";
+
+    expect(fn () => ssrfGuardThatMustNotResolve(allowPrivate: true)->authorize("http://{$host}/"))
+        ->toThrow(UnsafeUrl::class);
+});
 
 it('strips an ideographic full stop after IDN and still blocks localhost', function (): void {
     // U+FF61 survives parse_url (U+3002 is mangled by PHP's parser on some builds)
@@ -65,19 +73,37 @@ it('blocks the expanded always-on cloud metadata addresses with private on', fun
     'azure-wireserver' => 'http://168.63.129.16/',
 ]);
 
-it('blocks site-local and local-use NAT64 when private is off', function (string $url): void {
-    expect(fn () => ssrfGuardThatMustNotResolve()->authorize($url))
+it('blocks site-local when private is off', function (): void {
+    expect(fn () => ssrfGuardThatMustNotResolve()->authorize('http://[fec0::1]/'))
         ->toThrow(UnsafeUrl::class);
-})->with([
-    'site-local' => 'http://[fec0::1]/',
-    'local-use-nat64' => 'http://[64:ff9b:1::93.184.216.34]/',
-]);
+});
 
-it('DnsHostResolver implements HostResolver and returns no answers for .invalid', function (): void {
-    $resolver = new DnsHostResolver;
+it('blocks local-use NAT64 even with private hosts on', function (): void {
+    expect(fn () => ssrfGuardThatMustNotResolve(allowPrivate: true)->authorize('http://[64:ff9b:1::93.184.216.34]/'))
+        ->toThrow(UnsafeUrl::class);
+});
+
+it('DnsHostResolver uses the DNS seam and never needs the network', function (): void {
+    $resolver = new DnsHostResolver(
+        dnsGetRecord: fn (string $host, int $type): array => [
+            ['ip' => '93.184.216.34'],
+            ['ipv6' => '2606:2800:220:1:248:1893:25c8:1946'],
+        ],
+        getHostByNameL: fn (string $host): never => throw new RuntimeException('fallback must not run'),
+    );
 
     expect($resolver)->toBeInstanceOf(HostResolver::class)
-        ->and($resolver->resolve('qiick-outbound-does-not-exist.invalid'))->toBe([]);
+        ->and($resolver->resolve('example.test'))->toBe([
+            '93.184.216.34',
+            '2606:2800:220:1:248:1893:25c8:1946',
+        ]);
+
+    $empty = new DnsHostResolver(
+        dnsGetRecord: fn (): array => [],
+        getHostByNameL: fn (): array => [],
+    );
+
+    expect($empty->resolve('qiick-outbound-does-not-exist.invalid'))->toBe([]);
 });
 
 it('guzzleCurlOptions disables redirects and uses CONNECT_TO only', function (): void {
@@ -125,10 +151,16 @@ it('refuses a lone bracket as a broken IPv6 literal, not a DNS name', function (
     'opening only' => 'http://[foo/',
 ]);
 
-it('refuses underscores under STD3 IDNA (kills BitwiseOrToBitwiseAnd on IDNA flags)', function (): void {
-    // STD3|NONTRANSITIONAL rejects; flags&0 (DEFAULT) would accept foo_bar.example.
-    expect(fn () => ssrfGuardResolving()->authorize('https://foo_bar.example/'))
-        ->toThrow(UnsafeUrl::class);
+it('accepts underscore hosts that curl and S3 use', function (): void {
+    $guard = new RemoteUrlGuard(
+        new FakeHostResolver(answers: [
+            'foo_bar.example' => ['93.184.216.34'],
+            'my_bucket.s3.amazonaws.com' => ['93.184.216.34'],
+        ]),
+    );
+
+    expect($guard->authorize('https://foo_bar.example/')->pinnedAddress)->toBe('93.184.216.34')
+        ->and($guard->authorize('https://my_bucket.s3.amazonaws.com/')->host)->toBe('my_bucket.s3.amazonaws.com');
 });
 
 it('pins a dotted-decimal address with a 255 octet when private is on', function (): void {
@@ -137,6 +169,17 @@ it('pins a dotted-decimal address with a 255 octet when private is on', function
         ->toBe('255.0.0.1')
         ->and(ssrfGuardThatMustNotResolve(allowPrivate: true)->authorize('https://10.0.0.1/')->pinnedAddress)
         ->toBe('10.0.0.1');
+});
+
+it('pins a public IPv4 with odd octets (kills bitshift DecrementInteger in sprintf)', function (): void {
+    expect(ssrfGuardThatMustNotResolve()->authorize('https://93.185.217.35/')->pinnedAddress)
+        ->toBe('93.185.217.35');
+});
+
+it('pins a public IPv6 whose low 32 bits look private (kills addressForms early-return removal)', function (): void {
+    // 2606:4700::a00:5 embeds 10.0.0.5 in the low 32 bits but is not v4-mapped/compatible.
+    expect(ssrfGuardThatMustNotResolve()->authorize('https://[2606:4700::a00:5]/')->pinnedAddress)
+        ->toBe('2606:4700::a00:5');
 });
 
 it('lowercases IDN output so mixed-case punycode still matches the allowlist', function (): void {
