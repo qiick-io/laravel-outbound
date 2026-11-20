@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/header-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/header-light.svg">
+    <img alt="laravel-outbound: Safe outbound HTTP and webhooks for Laravel" src=".github/assets/header-light.svg" width="100%">
+  </picture>
+</p>
+
 # qiick/laravel-outbound
 
 > **In development. Not released and not on Packagist yet: do not depend on it.**
