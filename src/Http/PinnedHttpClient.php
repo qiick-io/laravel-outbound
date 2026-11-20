@@ -339,7 +339,13 @@ final class PinnedHttpClient
         $property = $reflection->getProperty('options');
         $options = $property->getValue($pending);
 
-        if (! is_array($options) || ! array_key_exists('handler', $options)) {
+        if (! is_array($options)) {
+            throw new OutboundHttpException(
+                'PendingRequest options property is not an array; refusing to send without handler isolation.',
+            );
+        }
+
+        if (! array_key_exists('handler', $options)) {
             return;
         }
 

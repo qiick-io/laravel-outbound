@@ -998,3 +998,17 @@ it('fails closed when PendingRequest has no options property to strip', function
     expect(fn () => $method->invoke($client, $stub))
         ->toThrow(OutboundHttpException::class, 'PendingRequest options property is missing');
 });
+
+it('fails closed when PendingRequest options property is not an array', function (): void {
+    $client = pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]));
+
+    $method = new ReflectionMethod(PinnedHttpClient::class, 'stripRequestHandlerOption');
+
+    $stub = new class
+    {
+        public mixed $options = 'poison';
+    };
+
+    expect(fn () => $method->invoke($client, $stub))
+        ->toThrow(OutboundHttpException::class, 'PendingRequest options property is not an array');
+});
