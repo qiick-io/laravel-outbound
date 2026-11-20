@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standard Webhooks `WebhookSecret`, `WebhookMessage`, `SignedWebhook`,
+  `StandardWebhookSigner`, and `StandardWebhookVerifier`: exact raw-body `v1`
+  HMAC over `id.timestamp.body`, `whsec_` secrets (24–64 bytes), multi-secret
+  space-separated signatures, bidirectional replay tolerance, payload/signature
+  caps, `hash_equals`, legacy raw-secret parsing off by default, and
+  `#[\SensitiveParameter]` + redaction. Official vectors from
+  standard-webhooks `@ 3d65b182`. Bound from config via the service provider.
+
 - `PinnedHttpClient` + `HttpRequestOptions` + `OutboundRequest` +
   `OutboundHttpLimits`: Laravel HTTP with SSRF authorize, CURLOPT_CONNECT_TO
   pin, proxies disabled, redirects off by default, optional re-auth/re-pin

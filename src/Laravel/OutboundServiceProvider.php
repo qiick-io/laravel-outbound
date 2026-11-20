@@ -13,6 +13,8 @@ use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 
 /**
  * Auto-discovered Laravel service provider for qiick/laravel-outbound.
@@ -55,6 +57,26 @@ final class OutboundServiceProvider extends ServiceProvider
                 new HttpFactory,
                 $app->make(RemoteUrlGuard::class),
                 $app->make(OutboundHttpLimits::class),
+            );
+        });
+
+        $this->app->singleton(StandardWebhookSigner::class, function (Application $app): StandardWebhookSigner {
+            $config = $app->make(ConfigRepository::class);
+
+            return new StandardWebhookSigner(
+                maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes', 1_048_576),
+                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets', 4),
+            );
+        });
+
+        $this->app->singleton(StandardWebhookVerifier::class, function (Application $app): StandardWebhookVerifier {
+            $config = $app->make(ConfigRepository::class);
+
+            return new StandardWebhookVerifier(
+                replayToleranceSeconds: self::configInt($config, 'outbound.webhooks.replay_tolerance_seconds', 300),
+                maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes', 1_048_576),
+                maxSignatures: self::configInt($config, 'outbound.webhooks.max_signatures', 8),
+                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets', 4),
             );
         });
     }

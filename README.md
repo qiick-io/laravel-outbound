@@ -131,6 +131,40 @@ poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factor
 from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
 or use the `transferHandler` constructor seam for unit tests without a real client.
 
+
+### Standard Webhooks
+
+```php
+use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookSecret;
+
+$secret = WebhookSecret::parse('whsec_…'); // 24–64 raw bytes after base64
+$signer = app(StandardWebhookSigner::class);
+$signed = $signer->sign($msgId, $unixSeconds, $rawBody, [$secret]);
+
+$verifier = app(StandardWebhookVerifier::class);
+$verifier->verify(
+    $rawBody,
+    $signed->headers['webhook-id'],
+    $signed->headers['webhook-timestamp'],
+    $signed->headers['webhook-signature'],
+    [$secret],
+    new DateTimeImmutable('now'),
+);
+```
+
+Signing uses exact raw body bytes (`msg_id.timestamp.body`). Multi-secret
+rotation emits space-separated `v1,<base64>` signatures. Verification fails
+closed on non-integer timestamps, replay outside tolerance (both directions),
+oversize payloads, too many signatures/secrets, and uses `hash_equals`.
+`WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
+`outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
+`#[\SensitiveParameter]` and are redacted in `__debugInfo` / string casts.
+
+Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
+`@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).
+
 ## Configuration
 
 | Config key | Env | Default |
@@ -162,7 +196,7 @@ composer analyse   # PHPStan level max
 ```
 
 Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
-must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`;
+must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`, `WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`;
 more classes as they land). No method-level `@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;

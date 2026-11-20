@@ -13,6 +13,9 @@ classes=(
   'Qiick\Outbound\Ssrf\RemoteUrlGuard'
   'Qiick\Outbound\Ssrf\AuthorizedDestination'
   'Qiick\Outbound\Http\PinnedHttpClient'
+  'Qiick\Outbound\Webhooks\WebhookSecret'
+  'Qiick\Outbound\Webhooks\StandardWebhookSigner'
+  'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
 )
 
 status=0
