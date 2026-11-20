@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Webhooks;
 
 use DateTimeImmutable;
+use Throwable;
 
 /**
  * Symmetric Standard Webhooks `v1` verifier over exact raw body bytes.
@@ -14,8 +15,9 @@ use DateTimeImmutable;
  * signature tokens, or no `hash_equals` match among `v1` candidates.
  *
  * Timestamp tolerance is not id-dedupe: pass a {@see SeenWebhookIdStore} (or
- * dedupe in the product) so the same webhook-id cannot be accepted twice
- * inside the tolerance window.
+ * dedupe in the product). After a signature match the verifier atomically
+ * {@see SeenWebhookIdStore::claim()}s `(scope, webhook-id)` until
+ * `timestamp + tolerance` (covers sender clock skew up to 2× tolerance).
  *
  * @api
  */
@@ -31,6 +33,7 @@ final class StandardWebhookVerifier
 
     /**
      * @param  list<WebhookSecret>  $secrets
+     * @param  non-empty-string  $dedupeScope  Endpoint / tenant / secret id for claim keys
      *
      * @throws WebhookException when verification fails
      */
@@ -42,6 +45,7 @@ final class StandardWebhookVerifier
         string $webhookSignatureHeader,
         array $secrets,
         DateTimeImmutable $now,
+        string $dedupeScope = 'default',
     ): void {
         if ($webhookId === '') {
             throw new WebhookException('Webhook id must not be empty.');
@@ -49,6 +53,10 @@ final class StandardWebhookVerifier
 
         if (preg_match('/[\x00-\x1F\x7F]/', $webhookId) === 1) {
             throw new WebhookException('Webhook id must not contain control characters.');
+        }
+
+        if ($dedupeScope === '') {
+            throw new WebhookException('Webhook dedupe scope must not be empty.');
         }
 
         if (strlen($rawBody) > $this->maxPayloadBytes) {
@@ -68,10 +76,6 @@ final class StandardWebhookVerifier
             if (! $secret instanceof WebhookSecret) {
                 throw new WebhookException('Webhook secrets must be WebhookSecret instances.');
             }
-        }
-
-        if ($this->seenIds?->has($webhookId) === true) {
-            throw new WebhookException('Webhook id has already been processed.');
         }
 
         $timestamp = $this->parseTimestamp($webhookTimestamp);
@@ -105,7 +109,24 @@ final class StandardWebhookVerifier
             throw new WebhookException('No matching webhook signature found.');
         }
 
-        $this->seenIds?->remember($webhookId, $this->replayToleranceSeconds);
+        if ($this->seenIds === null) {
+            return;
+        }
+
+        // Hold until timestamp + tolerance (≤ 2× tolerance when the sender clock is ahead).
+        $ttl = max(1, $timestamp + $this->replayToleranceSeconds - $nowUnix);
+
+        try {
+            $claimed = $this->seenIds->claim($dedupeScope, $webhookId, $ttl);
+        } catch (WebhookException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            throw new WebhookException('Webhook id dedupe store failed.', 0, $e);
+        }
+
+        if (! $claimed) {
+            throw new WebhookException('Webhook id has already been processed.');
+        }
     }
 
     /**

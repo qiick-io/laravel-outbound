@@ -330,7 +330,7 @@ it('refuses a malformed base64 token even when a later signature is valid', func
     ))->toThrow(WebhookException::class, 'Webhook signature header is malformed.');
 });
 
-it('refuses a repeated webhook-id via the seen-id store after a successful verify', function (): void {
+it('refuses a repeated webhook-id via atomic claim after a successful verify', function (): void {
     $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
     $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
     $seen = new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP);
@@ -343,6 +343,7 @@ it('refuses a repeated webhook-id via the seen-id store after a successful verif
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'endpoint-a',
     );
 
     expect(fn () => $verifier->verify(
@@ -352,10 +353,128 @@ it('refuses a repeated webhook-id via the seen-id store after a successful verif
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'endpoint-a',
     ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
 });
 
-it('does not remember a webhook-id when signature verification fails', function (): void {
+it('keeps a claimed id until timestamp + tolerance under sender clock skew', function (): void {
+    // Sender clock is 250s ahead; TTL must be timestamp+tolerance-now (= 550), not merely tolerance (300).
+    $tolerance = 300;
+    $nowUnix = 1_700_000_000;
+    $timestamp = $nowUnix + 250;
+    $secret = WebhookSecret::generate(24);
+    $signed = (new StandardWebhookSigner)->sign('msg_skew', $timestamp, '{"s":1}', [$secret]);
+
+    $clock = new class($nowUnix)
+    {
+        public function __construct(public int $now) {}
+    };
+    $seen = new FakeSeenWebhookIdStore(fn (): int => $clock->now);
+    $verifier = swVerifier(tolerance: $tolerance, seenIds: $seen);
+
+    $verifier->verify(
+        $signed->rawBody,
+        'msg_skew',
+        (string) $timestamp,
+        $signed->headers['webhook-signature'],
+        [$secret],
+        new DateTimeImmutable('@'.$nowUnix),
+        'tenant-1',
+    );
+
+    // Advance past `tolerance` but still within timestamp+tolerance from original now.
+    $clock->now = $nowUnix + 400;
+
+    expect(fn () => $verifier->verify(
+        $signed->rawBody,
+        'msg_skew',
+        (string) $timestamp,
+        $signed->headers['webhook-signature'],
+        [$secret],
+        new DateTimeImmutable('@'.($nowUnix + 400)),
+        'tenant-1',
+    ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
+});
+
+it('claims with TTL equal to timestamp + tolerance - now (min 1)', function (): void {
+    $tolerance = 300;
+    $nowUnix = 1_700_000_000;
+    $timestampAhead = $nowUnix + 250; // TTL = 550
+    $timestampEdge = $nowUnix - $tolerance; // TTL = max(1, 0) = 1
+
+    $recorded = [];
+    $store = new class($recorded) implements SeenWebhookIdStore
+    {
+        /** @param list<int> $ttls */
+        public function __construct(private array &$ttls) {}
+
+        public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
+        {
+            $this->ttls[] = $ttlSeconds;
+
+            return true;
+        }
+    };
+
+    $secret = WebhookSecret::generate(24);
+    $verifier = swVerifier(tolerance: $tolerance, seenIds: $store);
+
+    $ahead = (new StandardWebhookSigner)->sign('msg_a', $timestampAhead, '{}', [$secret]);
+    $verifier->verify($ahead->rawBody, 'msg_a', (string) $timestampAhead, $ahead->headers['webhook-signature'], [$secret], new DateTimeImmutable('@'.$nowUnix), 's');
+
+    $edge = (new StandardWebhookSigner)->sign('msg_e', $timestampEdge, '{}', [$secret]);
+    $verifier->verify($edge->rawBody, 'msg_e', (string) $timestampEdge, $edge->headers['webhook-signature'], [$secret], new DateTimeImmutable('@'.$nowUnix), 's');
+
+    expect($recorded)->toBe([550, 1]);
+});
+
+it('isolates claims by dedupe scope', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+    $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
+    $seen = new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP);
+    $verifier = swVerifier(seenIds: $seen);
+
+    $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+        'tenant-a',
+    );
+
+    $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+        'tenant-b',
+    );
+
+    expect(true)->toBeTrue();
+});
+
+it('fails closed when the seen-id store cannot record a claim', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+    $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
+    $seen = (new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP))->failNextWrite();
+    $verifier = swVerifier(seenIds: $seen);
+
+    expect(fn () => $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+        'endpoint-a',
+    ))->toThrow(WebhookException::class, 'Webhook id dedupe store failed.');
+});
+
+it('does not claim a webhook-id when signature verification fails', function (): void {
     $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
     $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
     $seen = new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP);
@@ -368,6 +487,7 @@ it('does not remember a webhook-id when signature verification fails', function 
         'v1,'.base64_encode(str_repeat('z', 32)),
         [$secret],
         $now,
+        'endpoint-a',
     ))->toThrow(WebhookException::class);
 
     $verifier->verify(
@@ -377,9 +497,18 @@ it('does not remember a webhook-id when signature verification fails', function 
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'endpoint-a',
     );
 
     expect(true)->toBeTrue();
+});
+
+it('refuses an empty dedupe scope', function (): void {
+    $secret = WebhookSecret::generate(24);
+    $now = new DateTimeImmutable('@1');
+
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), [$secret], $now, ''))
+        ->toThrow(WebhookException::class, 'Webhook dedupe scope must not be empty.');
 });
 
 it('refuses webhook ids with control characters', function (): void {

@@ -5,16 +5,20 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Testing;
 
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\WebhookException;
+use RuntimeException;
 
 /**
- * In-memory {@see SeenWebhookIdStore} for tests.
+ * In-memory {@see SeenWebhookIdStore} for tests (atomic claim semantics).
  *
  * @api
  */
 final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
 {
-    /** @var array<string, int> webhookId => expiresAt unix */
+    /** @var array<string, int> hashed key => expiresAt unix */
     private array $entries = [];
+
+    private bool $failNextWrite = false;
 
     /**
      * @param  (callable(): int)|null  $clock  Unix-seconds clock; defaults to time()
@@ -23,24 +27,31 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
         private readonly mixed $clock = null,
     ) {}
 
-    public function has(string $webhookId): bool
+    public function failNextWrite(): self
     {
-        if (! array_key_exists($webhookId, $this->entries)) {
-            return false;
-        }
+        $this->failNextWrite = true;
 
-        if ($this->entries[$webhookId] <= $this->now()) {
-            unset($this->entries[$webhookId]);
-
-            return false;
-        }
-
-        return true;
+        return $this;
     }
 
-    public function remember(string $webhookId, int $ttlSeconds): void
+    public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
     {
-        $this->entries[$webhookId] = $this->now() + max(1, $ttlSeconds);
+        if ($this->failNextWrite) {
+            $this->failNextWrite = false;
+
+            throw new WebhookException('Webhook id dedupe store failed.', 0, new RuntimeException('forced cache write failure'));
+        }
+
+        $key = hash('sha256', $scope."\0".$webhookId);
+        $now = $this->now();
+
+        if (array_key_exists($key, $this->entries) && $this->entries[$key] > $now) {
+            return false;
+        }
+
+        $this->entries[$key] = $now + max(1, $ttlSeconds);
+
+        return true;
     }
 
     private function now(): int

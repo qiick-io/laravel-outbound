@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StandardWebhookSigner`, and `StandardWebhookVerifier`: exact raw-body `v1`
   HMAC over `id.timestamp.body`, `whsec_` secrets (24–64 bytes), multi-secret
   space-separated signatures, bidirectional timestamp tolerance, optional
-  `SeenWebhookIdStore` / cache-backed dedupe, payload/signature caps,
+  atomic scoped `SeenWebhookIdStore::claim()` (cache `add`, TTL through
+  `timestamp + tolerance`, fail closed on store errors), payload/signature caps,
   full-candidate `hash_equals` (no early return), legacy raw-secret parsing
   off by default, and `#[\SensitiveParameter]` + redaction. `WebhookSecret`
   refuses serialize/unserialize/var_export. Official vectors from

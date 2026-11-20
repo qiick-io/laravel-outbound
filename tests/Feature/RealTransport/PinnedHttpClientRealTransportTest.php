@@ -64,21 +64,7 @@ final class RealTransportServer
         }
 
         $this->process = $process;
-
-        $deadline = microtime(true) + 5;
-
-        while (microtime(true) < $deadline) {
-            $errno = 0;
-            $errstr = '';
-            $fp = @fsockopen($this->pinAddress, $this->port, $errno, $errstr, 0.2);
-
-            if (is_resource($fp)) {
-                fclose($fp);
-                break;
-            }
-
-            usleep(50_000);
-        }
+        $this->waitUntilAcceptingConnections();
 
         $resolver = (new FakeHostResolver)
             ->with('app.test', [$this->pinAddress])
@@ -89,6 +75,54 @@ final class RealTransportServer
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
             $limits ?? new OutboundHttpLimits,
         );
+    }
+
+    private function waitUntilAcceptingConnections(): void
+    {
+        $deadline = microtime(true) + 10;
+        $lastError = 'timeout';
+
+        while (microtime(true) < $deadline) {
+            $status = proc_get_status($this->process);
+            if (is_array($status) && ($status['running'] ?? false) !== true) {
+                $err = @file_get_contents($this->captureDir.'/server.err') ?: '';
+                throw new RuntimeException('php -S exited before accepting connections: '.$err);
+            }
+
+            $errno = 0;
+            $errstr = '';
+            $fp = @fsockopen($this->pinAddress, $this->port, $errno, $errstr, 0.25);
+
+            if (is_resource($fp)) {
+                fclose($fp);
+
+                // TCP accept is not enough — wait until the router answers HTTP.
+                $probe = @file_get_contents(
+                    'http://'.$this->pinAddress.':'.$this->port.'/ok',
+                    false,
+                    stream_context_create([
+                        'http' => [
+                            'method' => 'GET',
+                            'timeout' => 0.5,
+                            'header' => "Host: app.test\r\n",
+                            'ignore_errors' => true,
+                        ],
+                    ]),
+                );
+
+                if (is_string($probe) && str_contains($probe, 'pinned-ok:')) {
+                    return;
+                }
+
+                $lastError = 'port open but /ok not ready';
+            } else {
+                $lastError = $errstr !== '' ? $errstr : 'errno '.$errno;
+            }
+
+            usleep(50_000);
+        }
+
+        throw new RuntimeException('php -S did not accept connections on '.$this->pinAddress.':'.$this->port.' ('.$lastError.')');
     }
 
     public function stop(): void

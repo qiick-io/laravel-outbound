@@ -15,7 +15,8 @@ namespace Qiick\Outbound\Webhooks;
  * expose the raw key. Persist a reference (e.g. a secret id) and re-parse, or
  * call {@see serialized()} only when writing the canonical `whsec_` string to a
  * secrets store. {@see __serialize()}, {@see __unserialize()}, and
- * {@see __set_state()} always throw.
+ * {@see __set_state()} always throw. Note: `var_export()` dumps and `(array)`
+ * casts cannot be intercepted by magic methods — never dump this object.
  *
  * @api
  */

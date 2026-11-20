@@ -152,6 +152,7 @@ $verifier->verify(
     $signed->headers['webhook-signature'],
     [$secret],
     new DateTimeImmutable('now'),
+    dedupeScope: 'orders-webhook', // endpoint / tenant / secret id
 );
 ```
 
@@ -160,16 +161,18 @@ rotation emits space-separated `v1,<base64>` signatures. Verification fails
 closed on non-integer timestamps, skew outside the tolerance window (both
 directions), oversize payloads, too many signatures/secrets, and uses
 `hash_equals` against every candidate (no early return). Timestamp tolerance
-alone is **not** replay protection: consumers must dedupe on `webhook-id` for
-the tolerance window. The service provider binds a cache-backed
-`SeenWebhookIdStore` into the verifier by default; pass `null` (or your own
-store) when constructing manually.
+alone is **not** replay protection: after a signature match the verifier
+atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance`
+(covers sender skew up to 2× tolerance). Cache write failures fail closed.
+The service provider binds a cache-backed `SeenWebhookIdStore` by default.
 
 `WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
 `outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
 `#[\SensitiveParameter]` and are redacted in `__debugInfo` / string casts.
 Do **not** `serialize` / `var_export` / `(array)` a `WebhookSecret` — persist a
 reference (secret id) or the canonical `whsec_` string from `serialized()`.
+(`var_export` / `(array)` dumps cannot be prevented by magic methods.)
+
 
 Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
 `@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).
