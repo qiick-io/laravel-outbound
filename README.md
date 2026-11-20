@@ -131,6 +131,41 @@ poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factor
 from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
 or use the `transferHandler` constructor seam for unit tests without a real client.
 
+### Retry schedule and delivery records
+
+```php
+use Qiick\Outbound\Delivery\DeliveryAttempt;
+use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Retry\RetrySchedule;
+use Qiick\Outbound\Retry\SystemRandomizer;
+
+$delays = match (config('outbound.webhooks.retry_preset')) {
+    'short' => RetrySchedule::shortDelays(),
+    default => RetrySchedule::standardDelays(),
+};
+$wait = RetrySchedule::withJitter(
+    $delays[0],
+    (int) config('outbound.webhooks.retry_jitter_seconds'),
+    new SystemRandomizer,
+);
+
+$attempt = new DeliveryAttempt(
+    eventId: $msgId,
+    eventType: 'order.created',
+    attempt: 1,
+    status: DeliveryStatus::Failed,
+    httpStatus: 503,
+    errorMessage: 'upstream unavailable',
+    at: new DateTimeImmutable,
+    nextAttemptAt: new DateTimeImmutable('+'.$wait.' seconds'),
+);
+```
+
+Prefer `standard` delays; bound `short` (`[10, 30, 60]`) to a migration window.
+Products still enforce per-endpoint concurrency, timeouts, circuit-break /
+auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
+auto-disable.
+
 ## Configuration
 
 | Config key | Env | Default |
@@ -162,8 +197,9 @@ composer analyse   # PHPStan level max
 ```
 
 Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
-must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`;
-more classes as they land). No method-level `@pest-mutate-ignore`.
+must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`,
+`RetrySchedule`; more classes as they land). No method-level
+`@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
 clock and randomizer are fixed in tests.

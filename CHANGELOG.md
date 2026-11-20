@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RetrySchedule` + `Randomizer` / `SystemRandomizer`, plus `DeliveryStatus` and
+  `DeliveryAttempt`: Standard Webhooks example delays, short migration delays,
+  symmetric jitter floored at zero, and an immutable delivery attempt record.
+  Products own concurrency caps and auto-disable.
+
 - `PinnedHttpClient` + `HttpRequestOptions` + `OutboundRequest` +
   `OutboundHttpLimits`: Laravel HTTP with SSRF authorize, CURLOPT_CONNECT_TO
   pin, proxies disabled, redirects off by default, optional re-auth/re-pin
