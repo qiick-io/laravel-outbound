@@ -45,8 +45,9 @@ user-supplied fetch target) must not reach:
 - Transition prefixes that re-embed IPv4 (NAT64, 6to4, Teredo)
 - DNS-rebinding races (pin the checked address with `CURLOPT_CONNECT_TO` on
   every hop; redirects never use transport auto-follow)
-- Signature forgery or replay on inbound Standard Webhooks (exact raw body,
-  integer timestamps, tolerance window, `hash_equals`)
+- Signature forgery on inbound Standard Webhooks (exact raw body, integer
+  timestamps, tolerance window, `hash_equals`); consumers must also dedupe
+  `webhook-id` within the tolerance window
 
 Products that adopt this package must still enforce per-endpoint concurrency
 caps, timeouts, circuit-break / auto-disable after repeated failures, and
@@ -143,7 +144,7 @@ $secret = WebhookSecret::parse('whsec_…'); // 24–64 raw bytes after base64
 $signer = app(StandardWebhookSigner::class);
 $signed = $signer->sign($msgId, $unixSeconds, $rawBody, [$secret]);
 
-$verifier = app(StandardWebhookVerifier::class);
+$verifier = app(StandardWebhookVerifier::class); // cache-backed webhook-id dedupe
 $verifier->verify(
     $rawBody,
     $signed->headers['webhook-id'],
@@ -156,11 +157,19 @@ $verifier->verify(
 
 Signing uses exact raw body bytes (`msg_id.timestamp.body`). Multi-secret
 rotation emits space-separated `v1,<base64>` signatures. Verification fails
-closed on non-integer timestamps, replay outside tolerance (both directions),
-oversize payloads, too many signatures/secrets, and uses `hash_equals`.
+closed on non-integer timestamps, skew outside the tolerance window (both
+directions), oversize payloads, too many signatures/secrets, and uses
+`hash_equals` against every candidate (no early return). Timestamp tolerance
+alone is **not** replay protection: consumers must dedupe on `webhook-id` for
+the tolerance window. The service provider binds a cache-backed
+`SeenWebhookIdStore` into the verifier by default; pass `null` (or your own
+store) when constructing manually.
+
 `WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
 `outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
 `#[\SensitiveParameter]` and are redacted in `__debugInfo` / string casts.
+Do **not** `serialize` / `var_export` / `(array)` a `WebhookSecret` — persist a
+reference (secret id) or the canonical `whsec_` string from `serialized()`.
 
 Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
 `@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).

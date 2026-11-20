@@ -103,3 +103,22 @@ it('exposes only redacted keys in debug info', function (): void {
         ->and($info['key'])->toBe('[REDACTED]')
         ->and(count($info))->toBe(3);
 });
+
+it('refuses serialize, unserialize, and var_export reconstruction', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+
+    expect(fn () => serialize($secret))
+        ->toThrow(WebhookException::class, 'WebhookSecret must not be serialized')
+        ->and(fn () => $secret->__unserialize(['key' => 'x']))
+        ->toThrow(WebhookException::class, 'WebhookSecret must not be unserialized')
+        ->and(fn () => WebhookSecret::__set_state(['key' => 'x']))
+        ->toThrow(WebhookException::class, 'WebhookSecret must not be reconstructed via var_export');
+});
+
+it('refuses unserializing a forged payload that would bypass length checks', function (): void {
+    // Object payload that would call __unserialize with a 1-byte key (bypass length).
+    $forged = 'O:'.strlen(WebhookSecret::class).':"'.WebhookSecret::class.'":1:{s:3:"key";s:1:"x";}';
+
+    expect(fn () => unserialize($forged))
+        ->toThrow(WebhookException::class, 'WebhookSecret must not be unserialized');
+});

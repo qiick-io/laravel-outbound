@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Laravel;
 
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
@@ -13,6 +14,8 @@ use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 
@@ -60,6 +63,10 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
+            return new CacheSeenWebhookIdStore($app->make(CacheRepository::class));
+        });
+
         $this->app->singleton(StandardWebhookSigner::class, function (Application $app): StandardWebhookSigner {
             $config = $app->make(ConfigRepository::class);
 
@@ -77,6 +84,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes', 1_048_576),
                 maxSignatures: self::configInt($config, 'outbound.webhooks.max_signatures', 8),
                 maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets', 4),
+                seenIds: $app->make(SeenWebhookIdStore::class),
             );
         });
     }

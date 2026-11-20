@@ -11,6 +11,12 @@ namespace Qiick\Outbound\Webhooks;
  * messages. Prefer {@see parse()}; {@see parseAllowingLegacyRaw()} is for
  * migration only when `outbound.webhooks.allow_raw_legacy_secret` is true.
  *
+ * Do not serialize this object: PHP `serialize` / `var_export` / `(array)` can
+ * expose the raw key. Persist a reference (e.g. a secret id) and re-parse, or
+ * call {@see serialized()} only when writing the canonical `whsec_` string to a
+ * secrets store. {@see __serialize()}, {@see __unserialize()}, and
+ * {@see __set_state()} always throw.
+ *
  * @api
  */
 final class WebhookSecret
@@ -119,6 +125,38 @@ final class WebhookSecret
     public function __toString(): string
     {
         return '[REDACTED]';
+    }
+
+    /**
+     * @return never
+     *
+     * @throws WebhookException always — persist a secret id / {@see serialized()}, never this object
+     */
+    public function __serialize(): array
+    {
+        throw new WebhookException('WebhookSecret must not be serialized; persist a reference or the whsec_ string.');
+    }
+
+    /**
+     * @param  array<mixed>  $data
+     * @return never
+     *
+     * @throws WebhookException always
+     */
+    public function __unserialize(array $data): void
+    {
+        throw new WebhookException('WebhookSecret must not be unserialized; re-parse a whsec_ string instead.');
+    }
+
+    /**
+     * @param  array<mixed>  $properties
+     * @return never
+     *
+     * @throws WebhookException always
+     */
+    public static function __set_state(array $properties): self
+    {
+        throw new WebhookException('WebhookSecret must not be reconstructed via var_export; re-parse a whsec_ string instead.');
     }
 
     /**

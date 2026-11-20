@@ -62,14 +62,27 @@ it('refuses payloads larger than maxPayloadBytes before HMAC', function (): void
         ->toThrow(WebhookException::class);
 });
 
-it('refuses an empty message id and a negative timestamp', function (): void {
+it('refuses an empty message id and non-positive timestamps', function (): void {
     $secret = WebhookSecret::generate(24);
 
     expect(fn () => (new StandardWebhookSigner)->sign('', 1, '{}', [$secret]))
         ->toThrow(WebhookException::class)
         ->and(fn () => (new StandardWebhookSigner)->sign('msg_1', -1, '{}', [$secret]))
-        ->toThrow(WebhookException::class);
+        ->toThrow(WebhookException::class)
+        ->and(fn () => (new StandardWebhookSigner)->sign('msg_1', 0, '{}', [$secret]))
+        ->toThrow(WebhookException::class, 'Webhook timestamp must be a positive unix second.');
 });
+
+it('refuses message ids with CR, LF, or other control characters', function (string $msgId): void {
+    $secret = WebhookSecret::generate(24);
+
+    expect(fn () => (new StandardWebhookSigner)->sign($msgId, 1, '{}', [$secret]))
+        ->toThrow(WebhookException::class, 'Webhook id must not contain control characters.');
+})->with([
+    "msg\n1",
+    "msg\r1",
+    "msg\0id",
+]);
 
 it('signs the exact raw bytes — whitespace changes the signature', function (): void {
     $signer = new StandardWebhookSigner;
@@ -81,14 +94,14 @@ it('signs the exact raw bytes — whitespace changes the signature', function ()
     expect($a->headers['webhook-signature'])->not->toBe($b->headers['webhook-signature']);
 });
 
-it('allows timestamp 0, exact maxSecrets, and exact maxPayloadBytes', function (): void {
+it('allows exact maxSecrets and exact maxPayloadBytes', function (): void {
     $secrets = [WebhookSecret::generate(24), WebhookSecret::generate(24)];
     $signer = new StandardWebhookSigner(maxPayloadBytes: 10, maxSecrets: 2);
     $body = str_repeat('x', 10);
 
-    $signed = $signer->sign('msg_0', 0, $body, $secrets);
+    $signed = $signer->sign('msg_0', 1, $body, $secrets);
 
-    expect($signed->headers['webhook-timestamp'])->toBe('0')
+    expect($signed->headers['webhook-timestamp'])->toBe('1')
         ->and($signed->headers['webhook-signature'])->toContain(' ');
 });
 

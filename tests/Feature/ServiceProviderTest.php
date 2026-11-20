@@ -6,6 +6,8 @@ use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 
@@ -54,5 +56,7 @@ it('binds HostResolver, RemoteUrlGuard, PinnedHttpClient and webhook signer/veri
         ->and($this->app->make(StandardWebhookSigner::class))->toBeInstanceOf(StandardWebhookSigner::class)
         ->and($this->app->make(StandardWebhookSigner::class))->toBe($this->app->make(StandardWebhookSigner::class))
         ->and($this->app->make(StandardWebhookVerifier::class))->toBeInstanceOf(StandardWebhookVerifier::class)
-        ->and($this->app->make(StandardWebhookVerifier::class))->toBe($this->app->make(StandardWebhookVerifier::class));
+        ->and($this->app->make(StandardWebhookVerifier::class))->toBe($this->app->make(StandardWebhookVerifier::class))
+        ->and($this->app->make(SeenWebhookIdStore::class))->toBeInstanceOf(CacheSeenWebhookIdStore::class)
+        ->and($this->app->make(SeenWebhookIdStore::class))->toBe($this->app->make(SeenWebhookIdStore::class));
 });

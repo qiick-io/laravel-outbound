@@ -13,6 +13,10 @@ use DateTimeImmutable;
  * directions), oversize payload, empty/oversized secret lists, too many
  * signature tokens, or no `hash_equals` match among `v1` candidates.
  *
+ * Timestamp tolerance is not id-dedupe: pass a {@see SeenWebhookIdStore} (or
+ * dedupe in the product) so the same webhook-id cannot be accepted twice
+ * inside the tolerance window.
+ *
  * @api
  */
 final class StandardWebhookVerifier
@@ -22,6 +26,7 @@ final class StandardWebhookVerifier
         private readonly int $maxPayloadBytes = 1_048_576,
         private readonly int $maxSignatures = 8,
         private readonly int $maxSecrets = 4,
+        private readonly ?SeenWebhookIdStore $seenIds = null,
     ) {}
 
     /**
@@ -30,6 +35,7 @@ final class StandardWebhookVerifier
      * @throws WebhookException when verification fails
      */
     public function verify(
+        #[\SensitiveParameter]
         string $rawBody,
         string $webhookId,
         string $webhookTimestamp,
@@ -39,6 +45,10 @@ final class StandardWebhookVerifier
     ): void {
         if ($webhookId === '') {
             throw new WebhookException('Webhook id must not be empty.');
+        }
+
+        if (preg_match('/[\x00-\x1F\x7F]/', $webhookId) === 1) {
+            throw new WebhookException('Webhook id must not contain control characters.');
         }
 
         if (strlen($rawBody) > $this->maxPayloadBytes) {
@@ -58,7 +68,10 @@ final class StandardWebhookVerifier
             if (! $secret instanceof WebhookSecret) {
                 throw new WebhookException('Webhook secrets must be WebhookSecret instances.');
             }
+        }
 
+        if ($this->seenIds?->has($webhookId) === true) {
+            throw new WebhookException('Webhook id has already been processed.');
         }
 
         $timestamp = $this->parseTimestamp($webhookTimestamp);
@@ -74,16 +87,25 @@ final class StandardWebhookVerifier
             throw new WebhookException('No matching webhook signature found.');
         }
 
-        foreach ($candidates as $candidate) {
-            foreach ($secrets as $secret) {
-                $expected = self::signV1($webhookId, (string) $timestamp, $rawBody, $secret->signingKey());
+        $expectedSignatures = [];
+        foreach ($secrets as $secret) {
+            $expectedSignatures[] = self::signV1($webhookId, (string) $timestamp, $rawBody, $secret->signingKey());
+        }
+
+        $matched = false;
+        foreach ($expectedSignatures as $expected) {
+            foreach ($candidates as $candidate) {
                 if (hash_equals($expected, $candidate)) {
-                    return;
+                    $matched = true;
                 }
             }
         }
 
-        throw new WebhookException('No matching webhook signature found.');
+        if (! $matched) {
+            throw new WebhookException('No matching webhook signature found.');
+        }
+
+        $this->seenIds?->remember($webhookId, $this->replayToleranceSeconds);
     }
 
     /**
@@ -130,9 +152,7 @@ final class StandardWebhookVerifier
                 continue;
             }
 
-            // Strict base64 flag: non-strict accept of whitespace-padded alphabet is
-            // not distinguishable from malformed rejects in our token grammar.
-            if ($signature === '' || base64_decode($signature, true) === false) { // @pest-mutate-ignore: TrueToFalse
+            if ($signature === '' || base64_decode($signature, true) === false) {
                 throw new WebhookException('Webhook signature header is malformed.');
             }
 
@@ -162,6 +182,7 @@ final class StandardWebhookVerifier
     private static function signV1(
         string $msgId,
         string $timestamp,
+        #[\SensitiveParameter]
         string $rawBody,
         #[\SensitiveParameter]
         string $key,

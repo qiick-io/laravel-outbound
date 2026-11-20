@@ -2,15 +2,22 @@
 
 declare(strict_types=1);
 
+use Qiick\Outbound\Testing\FakeSeenWebhookIdStore;
 use Qiick\Outbound\Tests\Fixtures\StandardWebhooks\OfficialVectors;
+use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\WebhookException;
 use Qiick\Outbound\Webhooks\WebhookSecret;
 
-function swVerifier(int $tolerance = 300, int $maxPayload = 1_048_576, int $maxSigs = 8, int $maxSecrets = 4): StandardWebhookVerifier
-{
-    return new StandardWebhookVerifier($tolerance, $maxPayload, $maxSigs, $maxSecrets);
+function swVerifier(
+    int $tolerance = 300,
+    int $maxPayload = 1_048_576,
+    int $maxSigs = 8,
+    int $maxSecrets = 4,
+    ?SeenWebhookIdStore $seenIds = null,
+): StandardWebhookVerifier {
+    return new StandardWebhookVerifier($tolerance, $maxPayload, $maxSigs, $maxSecrets, $seenIds);
 }
 
 it('verifies the official sign vector at the vector timestamp', function (): void {
@@ -306,4 +313,79 @@ it('refuses an empty webhook id', function (): void {
 
     expect(fn () => swVerifier()->verify('{}', '', '1', 'v1,'.base64_encode('x'), [$secret], $now))
         ->toThrow(WebhookException::class, 'Webhook id must not be empty.');
+});
+
+it('refuses a malformed base64 token even when a later signature is valid', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+    $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
+    $header = 'v1,@@@ '.OfficialVectors::SIGN_EXPECTED;
+
+    expect(fn () => swVerifier()->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        $header,
+        [$secret],
+        $now,
+    ))->toThrow(WebhookException::class, 'Webhook signature header is malformed.');
+});
+
+it('refuses a repeated webhook-id via the seen-id store after a successful verify', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+    $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
+    $seen = new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP);
+    $verifier = swVerifier(seenIds: $seen);
+
+    $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+    );
+
+    expect(fn () => $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+    ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
+});
+
+it('does not remember a webhook-id when signature verification fails', function (): void {
+    $secret = WebhookSecret::parse(OfficialVectors::SIGN_SECRET);
+    $now = new DateTimeImmutable('@'.OfficialVectors::SIGN_TIMESTAMP);
+    $seen = new FakeSeenWebhookIdStore(static fn (): int => OfficialVectors::SIGN_TIMESTAMP);
+    $verifier = swVerifier(seenIds: $seen);
+
+    expect(fn () => $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        'v1,'.base64_encode(str_repeat('z', 32)),
+        [$secret],
+        $now,
+    ))->toThrow(WebhookException::class);
+
+    $verifier->verify(
+        OfficialVectors::SIGN_PAYLOAD,
+        OfficialVectors::SIGN_MSG_ID,
+        (string) OfficialVectors::SIGN_TIMESTAMP,
+        OfficialVectors::SIGN_EXPECTED,
+        [$secret],
+        $now,
+    );
+
+    expect(true)->toBeTrue();
+});
+
+it('refuses webhook ids with control characters', function (): void {
+    $secret = WebhookSecret::generate(24);
+    $now = new DateTimeImmutable('@1');
+
+    expect(fn () => swVerifier()->verify('{}', "msg\nid", '1', 'v1,'.base64_encode('x'), [$secret], $now))
+        ->toThrow(WebhookException::class, 'Webhook id must not contain control characters.');
 });

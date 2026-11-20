@@ -22,3 +22,15 @@ it('encodes a compact envelope without embedding the webhook id', function (): v
             'data' => ['id' => '1f81eb52-5198-4599-803e-771906343485'],
         ]);
 });
+
+it('encodes empty data as a JSON object not an array', function (): void {
+    $message = new WebhookMessage(
+        id: 'msg_empty',
+        type: 'ping',
+        timestamp: new DateTimeImmutable('2022-11-03T20:26:10+00:00'),
+        data: [],
+    );
+
+    expect($message->toPayloadJson())->toContain('"data":{}')
+        ->and($message->toPayloadJson())->not->toContain('"data":[]');
+});

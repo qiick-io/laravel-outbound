@@ -38,7 +38,8 @@ final readonly class WebhookMessage
         $payload = [
             'type' => $this->type,
             'timestamp' => $this->timestamp->format(DateTimeInterface::ATOM),
-            'data' => $this->data,
+            // Empty data must be `{}`, not `[]` (Standard Webhooks envelope).
+            'data' => $this->data === [] ? new \stdClass : $this->data,
         ];
 
         try {

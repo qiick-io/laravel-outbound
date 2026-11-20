@@ -28,6 +28,7 @@ final class StandardWebhookSigner
     public function sign(
         string $msgId,
         int $timestampUnix,
+        #[\SensitiveParameter]
         string $rawBody,
         array $secrets,
     ): SignedWebhook {
@@ -35,8 +36,12 @@ final class StandardWebhookSigner
             throw new WebhookException('Webhook id must not be empty.');
         }
 
-        if ($timestampUnix < 0) {
-            throw new WebhookException('Webhook timestamp must be a non-negative unix second.');
+        if (preg_match('/[\x00-\x1F\x7F]/', $msgId) === 1) {
+            throw new WebhookException('Webhook id must not contain control characters.');
+        }
+
+        if ($timestampUnix <= 0) {
+            throw new WebhookException('Webhook timestamp must be a positive unix second.');
         }
 
         $secretCount = count($secrets);
@@ -79,6 +84,7 @@ final class StandardWebhookSigner
     private static function signV1(
         string $msgId,
         string $timestamp,
+        #[\SensitiveParameter]
         string $rawBody,
         #[\SensitiveParameter]
         string $key,
