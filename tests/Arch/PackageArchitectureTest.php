@@ -10,3 +10,7 @@ declare(strict_types=1);
 arch('the Laravel namespace only holds the service provider')
     ->expect('Qiick\Outbound\Laravel')
     ->toHaveSuffix('ServiceProvider');
+
+arch('test doubles shipped for apps start with Fake')
+    ->expect('Qiick\Outbound\Testing')
+    ->toHavePrefix('Fake');

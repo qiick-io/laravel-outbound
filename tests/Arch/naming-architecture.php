@@ -11,7 +11,12 @@ declare(strict_types=1);
 return [
     'namespace' => 'Qiick\Outbound',
 
-    'ignoring' => [],
+    'ignoring' => [
+        'Contracts' => [
+            // Binding design API name (laravel-outbound-design.md §3.1).
+            'Qiick\Outbound\Contracts\HostResolver',
+        ],
+    ],
 
     'suffixes' => [],
 

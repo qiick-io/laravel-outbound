@@ -60,6 +60,24 @@ php artisan vendor:publish --tag=outbound-config
 
 The service provider is auto-discovered.
 
+
+## Public API (so far)
+
+### SSRF
+
+```php
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Ssrf\UrlGuardOptions;
+use Qiick\Outbound\Testing\FakeHostResolver;
+
+$guard = new RemoteUrlGuard(new FakeHostResolver(['example.test' => ['93.184.216.34']]));
+$destination = $guard->authorize('https://example.test/hook');
+// $destination->guzzleCurlOptions() → CURLOPT_CONNECT_TO pin only
+```
+
+`assertBrowserUrlIsSafe()` checks scheme and credentials for URLs the server
+never connects to (browser redirects).
+
 ## Configuration
 
 | Config key | Env | Default |
