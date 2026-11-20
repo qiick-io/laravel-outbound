@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SSRF `RemoteUrlGuard` with `HostResolver`, `UrlGuardOptions`, `PortPolicy`,
+  `AuthorizedDestination` (CURLOPT_CONNECT_TO only), `UnsafeUrl`,
+  `DnsHostResolver`, and `FakeHostResolver`. Covers curl-style IPv4, metadata
+  (EC2/GCP/Alibaba/Oracle), NAT64/6to4/Teredo, IDN punycode, zone ids,
+  resolve-all, allowlist and port policy hooks.
 - Package skeleton: auto-discovered `OutboundServiceProvider`, publishable
   `config/outbound.php` (tag `outbound-config`) with the `OUTBOUND_*` env keys
   from the approved design, Pest + Testbench, Pint, PHPStan at level max,

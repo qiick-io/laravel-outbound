@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Ssrf\DnsHostResolver;
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+
 it('merges the package defaults into the outbound config', function (): void {
     expect(config('outbound'))->toMatchArray([
         'ssrf' => [
@@ -33,4 +37,10 @@ it('lets an app publish the config file', function (): void {
     expect(config_path('outbound.php'))->toBeFile();
 
     unlink(config_path('outbound.php'));
+});
+
+it('binds HostResolver and RemoteUrlGuard as singletons', function (): void {
+    expect($this->app->make(HostResolver::class))->toBeInstanceOf(DnsHostResolver::class)
+        ->and($this->app->make(RemoteUrlGuard::class))->toBeInstanceOf(RemoteUrlGuard::class)
+        ->and($this->app->make(RemoteUrlGuard::class))->toBe($this->app->make(RemoteUrlGuard::class));
 });
