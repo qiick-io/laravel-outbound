@@ -7,8 +7,12 @@ namespace Qiick\Outbound\Tests\Fixtures\StandardWebhooks;
 /**
  * Official Standard Webhooks test vectors.
  *
+ * These values are public fixtures from the Standard Webhooks repository — they
+ * are never real secrets and must not be treated as credentials. Any other test
+ * secret in this package is built at runtime (e.g. WebhookSecret::generate()).
+ *
  * Source files (standard-webhooks/standard-webhooks @ 3d65b1824b6697f05a5a4584e7062bd23512fc8e):
- * - libraries/php/tests/WebhookTest.php (testSignFunctionWorks)
+ * - libraries/php/tests/WebhookTest.php (testSignFunctionWorks, line ~181)
  * - libraries/php/tests/TestPayload.php (DEFAULT_MSG_ID / DEFAULT_SECRET / DEFAULT_PAYLOAD)
  *
  * @see https://github.com/standard-webhooks/standard-webhooks/blob/3d65b1824b6697f05a5a4584e7062bd23512fc8e/libraries/php/tests/WebhookTest.php
