@@ -139,15 +139,32 @@ final class RealTransportServer
         @rmdir($this->captureDir);
     }
 
-    public function capture(string $name): ?array
+    /**
+     * Read a hop capture. When $timeoutSeconds > 0, poll until the atomically
+     * published file appears (bounded — no test/CI retries).
+     */
+    public function capture(string $name, float $timeoutSeconds = 2.0): ?array
     {
         $path = $this->captureDir.'/'.$name.'.json';
+        $deadline = microtime(true) + max(0.0, $timeoutSeconds);
 
-        if (! is_file($path)) {
-            return null;
-        }
+        do {
+            if (is_file($path)) {
+                $raw = @file_get_contents($path);
 
-        return json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+                if (is_string($raw) && $raw !== '') {
+                    return json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                }
+            }
+
+            if ($timeoutSeconds <= 0.0 || microtime(true) >= $deadline) {
+                break;
+            }
+
+            usleep(20_000);
+        } while (microtime(true) < $deadline);
+
+        return null;
     }
 
     public function url(string $host, string $path): string
@@ -225,7 +242,7 @@ it('refuses cross-origin 307 on the real wire even with the opt-in', function ()
             ]),
         ))->toThrow(OutboundHttpException::class, 'Cross-origin 307/308 redirect is not allowed.');
 
-        expect($server->capture('steal'))->toBeNull()
+        expect($server->capture('steal', 0.0))->toBeNull()
             ->and($server->capture('redirect-cross')['body'] ?? null)->toBe('super-secret-body');
     } finally {
         $server->stop();
@@ -338,7 +355,7 @@ it('still pins when the shared Http factory has a global handler (Guzzle bypass 
         expect($response->status())->toBe(200)
             ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
             ->and($server->capture('ok'))->not->toBeNull()
-            ->and($server->capture('unchecked'))->toBeNull();
+            ->and($server->capture('unchecked', 0.0))->toBeNull();
     } finally {
         Http::globalOptions([]);
         $server->stop();
@@ -418,7 +435,7 @@ it('still pins when constructed with a poisoned factory global handler', functio
         expect($response->status())->toBe(200)
             ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
             ->and($server->capture('ok'))->not->toBeNull()
-            ->and($server->capture('unchecked'))->toBeNull();
+            ->and($server->capture('unchecked', 0.0))->toBeNull();
     } finally {
         $server->stop();
     }

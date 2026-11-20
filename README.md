@@ -56,7 +56,7 @@ ship auto-disable.
 
 ## Requirements
 
-- PHP ^8.3 with `ext-curl` and `ext-intl`
+- PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
 - guzzlehttp/guzzle ^7.8 or ^8.0
 
