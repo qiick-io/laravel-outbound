@@ -396,11 +396,11 @@ it('keeps a claimed id until timestamp + tolerance under sender clock skew', fun
     ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
 });
 
-it('claims with TTL equal to timestamp + tolerance - now (min 1)', function (): void {
+it('claims with TTL equal to timestamp + tolerance - now + 1', function (): void {
     $tolerance = 300;
     $nowUnix = 1_700_000_000;
-    $timestampAhead = $nowUnix + 250; // TTL = 550
-    $timestampEdge = $nowUnix - $tolerance; // TTL = max(1, 0) = 1
+    $timestampAhead = $nowUnix + 250; // TTL = 551
+    $timestampEdge = $nowUnix - $tolerance; // TTL = 1
 
     $recorded = [];
     $store = new class($recorded) implements SeenWebhookIdStore
@@ -425,7 +425,47 @@ it('claims with TTL equal to timestamp + tolerance - now (min 1)', function (): 
     $edge = (new StandardWebhookSigner)->sign('msg_e', $timestampEdge, '{}', [$secret]);
     $verifier->verify($edge->rawBody, 'msg_e', (string) $timestampEdge, $edge->headers['webhook-signature'], [$secret], new DateTimeImmutable('@'.$nowUnix), 's');
 
-    expect($recorded)->toBe([550, 1]);
+    expect($recorded)->toBe([551, 1]);
+});
+
+it('refuses a replay on the exact second the timestamp window still accepts', function (): void {
+    // Probe-confirmed off-by-one: sender +200s, replay at now+500 still passes
+    // delta<=tolerance; without TTL+1 the claim expires that same second.
+    $tolerance = 300;
+    $t0 = 1_700_000_000;
+    $timestamp = $t0 + 200;
+    $secret = WebhookSecret::generate(24);
+    $signed = (new StandardWebhookSigner)->sign('msg_boundary', $timestamp, '{"b":1}', [$secret]);
+
+    $clock = new class($t0)
+    {
+        public function __construct(public int $now) {}
+    };
+    $seen = new FakeSeenWebhookIdStore(fn (): int => $clock->now);
+    $verifier = swVerifier(tolerance: $tolerance, seenIds: $seen);
+
+    $verifier->verify(
+        $signed->rawBody,
+        'msg_boundary',
+        (string) $timestamp,
+        $signed->headers['webhook-signature'],
+        [$secret],
+        new DateTimeImmutable('@'.$t0),
+        'endpoint-boundary',
+    );
+
+    $clock->now = $t0 + 500; // delta to timestamp = 300 — still accepted by skew check
+
+    expect(abs(($t0 + 500) - $timestamp))->toBe($tolerance)
+        ->and(fn () => $verifier->verify(
+            $signed->rawBody,
+            'msg_boundary',
+            (string) $timestamp,
+            $signed->headers['webhook-signature'],
+            [$secret],
+            new DateTimeImmutable('@'.($t0 + 500)),
+            'endpoint-boundary',
+        ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
 });
 
 it('isolates claims by dedupe scope', function (): void {

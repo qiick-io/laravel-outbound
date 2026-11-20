@@ -16,6 +16,8 @@ classes=(
   'Qiick\Outbound\Webhooks\WebhookSecret'
   'Qiick\Outbound\Webhooks\StandardWebhookSigner'
   'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
+  'Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore'
+  'Qiick\Outbound\Retry\RetrySchedule'
 )
 
 status=0

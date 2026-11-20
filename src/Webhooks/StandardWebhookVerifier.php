@@ -17,7 +17,8 @@ use Throwable;
  * Timestamp tolerance is not id-dedupe: pass a {@see SeenWebhookIdStore} (or
  * dedupe in the product). After a signature match the verifier atomically
  * {@see SeenWebhookIdStore::claim()}s `(scope, webhook-id)` until
- * `timestamp + tolerance` (covers sender clock skew up to 2× tolerance).
+ * `timestamp + tolerance + 1` (holds through the last second the timestamp
+ * check would still accept, including sender clock skew).
  *
  * @api
  */
@@ -33,7 +34,9 @@ final class StandardWebhookVerifier
 
     /**
      * @param  list<WebhookSecret>  $secrets
-     * @param  non-empty-string  $dedupeScope  Endpoint / tenant / secret id for claim keys
+     * @param  non-empty-string  $dedupeScope  MUST identify the verifying secret or
+     *                                         endpoint — sharing the default across
+     *                                         tenants collides claims on the same id
      *
      * @throws WebhookException when verification fails
      */
@@ -113,8 +116,9 @@ final class StandardWebhookVerifier
             return;
         }
 
-        // Hold until timestamp + tolerance (≤ 2× tolerance when the sender clock is ahead).
-        $ttl = max(1, $timestamp + $this->replayToleranceSeconds - $nowUnix);
+        // Hold through the last second the timestamp check still accepts (off-by-one safe).
+        // After delta <= tolerance, this is always >= 1 (no need to floor).
+        $ttl = $timestamp + $this->replayToleranceSeconds - $nowUnix + 1;
 
         try {
             $claimed = $this->seenIds->claim($dedupeScope, $webhookId, $ttl);

@@ -152,7 +152,8 @@ $verifier->verify(
     $signed->headers['webhook-signature'],
     [$secret],
     new DateTimeImmutable('now'),
-    dedupeScope: 'orders-webhook', // endpoint / tenant / secret id
+    // Scope MUST identify the secret or endpoint — never share 'default' across tenants.
+    dedupeScope: 'orders-webhook',
 );
 ```
 
@@ -162,9 +163,11 @@ closed on non-integer timestamps, skew outside the tolerance window (both
 directions), oversize payloads, too many signatures/secrets, and uses
 `hash_equals` against every candidate (no early return). Timestamp tolerance
 alone is **not** replay protection: after a signature match the verifier
-atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance`
-(covers sender skew up to 2× tolerance). Cache write failures fail closed.
-The service provider binds a cache-backed `SeenWebhookIdStore` by default.
+atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance + 1`
+(covers sender skew; holds through the last accepted second). Cache drivers
+must provide atomic `add` (Redis/Memcached/database); the array store is for
+tests only. Cache write failures fail closed. The service provider binds a
+cache-backed `SeenWebhookIdStore` by default.
 
 `WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
 `outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
@@ -173,9 +176,48 @@ Do **not** `serialize` / `var_export` / `(array)` a `WebhookSecret` — persist 
 reference (secret id) or the canonical `whsec_` string from `serialized()`.
 (`var_export` / `(array)` dumps cannot be prevented by magic methods.)
 
-
 Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
 `@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).
+
+### Retry schedule and delivery records
+
+```php
+use Qiick\Outbound\Delivery\DeliveryAttempt;
+use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Retry\RetrySchedule;
+use Qiick\Outbound\Retry\SystemRandomizer;
+
+$delays = match (config('outbound.webhooks.retry_preset')) {
+    'short' => RetrySchedule::shortDelays(),
+    default => RetrySchedule::standardDelays(),
+};
+// Each delay is measured from the previous attempt, not from the first send.
+$wait = RetrySchedule::withJitter(
+    $delays[0],
+    (int) config('outbound.webhooks.retry_jitter_seconds'),
+    new SystemRandomizer,
+);
+
+$attempt = new DeliveryAttempt(
+    eventId: $msgId,
+    eventType: 'order.created',
+    attempt: 1,
+    status: DeliveryStatus::Failed,
+    httpStatus: 503,
+    errorMessage: 'upstream unavailable',
+    at: new DateTimeImmutable,
+    nextAttemptAt: new DateTimeImmutable('+'.$wait.' seconds'),
+);
+```
+
+Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
+**75.6 hours** end-to-end); each entry is the wait **from the previous attempt**.
+Bound `short` (`[10, 30, 60]`) to a migration window. Jitter is capped
+(configured and ±floor(delay/2)) so a positive delay is never immediate.
+`DeliveryAttempt` strips control characters and caps `errorMessage` length.
+Products still enforce per-endpoint concurrency, timeouts, circuit-break /
+auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
+auto-disable.
 
 ## Configuration
 
@@ -208,8 +250,10 @@ composer analyse   # PHPStan level max
 ```
 
 Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
-must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`, `WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`;
-more classes as they land). No method-level `@pest-mutate-ignore`.
+must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`,
+`WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`,
+`CacheSeenWebhookIdStore`, `RetrySchedule`). No method-level
+`@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
 clock and randomizer are fixed in tests.

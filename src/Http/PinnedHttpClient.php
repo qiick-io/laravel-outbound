@@ -322,19 +322,30 @@ final class PinnedHttpClient
 
     /**
      * Remove a poisoned request-level handler inherited from factory globalOptions.
+     *
+     * Fail closed if Laravel renames/removes PendingRequest::$options — silent
+     * skip would re-open the Guzzle 7 handler bypass.
      */
-    private function stripRequestHandlerOption(PendingRequest $pending): void
+    private function stripRequestHandlerOption(object $pending): void
     {
         $reflection = new ReflectionObject($pending);
 
         if (! $reflection->hasProperty('options')) {
-            return;
+            throw new OutboundHttpException(
+                'PendingRequest options property is missing; refusing to send without handler isolation.',
+            );
         }
 
         $property = $reflection->getProperty('options');
         $options = $property->getValue($pending);
 
-        if (! is_array($options) || ! array_key_exists('handler', $options)) {
+        if (! is_array($options)) {
+            throw new OutboundHttpException(
+                'PendingRequest options property is not an array; refusing to send without handler isolation.',
+            );
+        }
+
+        if (! array_key_exists('handler', $options)) {
             return;
         }
 

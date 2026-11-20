@@ -64,7 +64,11 @@ final class OutboundServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
-            return new CacheSeenWebhookIdStore($app->make(CacheRepository::class));
+            // ArrayStore is atomic but process-local — allow only in the testing env.
+            return new CacheSeenWebhookIdStore(
+                $app->make(CacheRepository::class),
+                allowArrayStore: $app->environment('testing'),
+            );
         });
 
         $this->app->singleton(StandardWebhookSigner::class, function (Application $app): StandardWebhookSigner {
