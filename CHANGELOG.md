@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PinnedHttpClient` fails closed if `PendingRequest::$options` is missing
+  (future Laravel rename), instead of silently skipping handler isolation.
+
 - **PinnedHttpClient** strips a request-level `handler` inherited from factory
   globalOptions so a poisoned handler (Guzzle 7) cannot bypass CONNECT_TO;
   streaming size limits rely on the progress callback when Content-Length is
