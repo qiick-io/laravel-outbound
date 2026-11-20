@@ -260,7 +260,7 @@ it('refuses cross-origin redirects unless explicitly opted in', function (): voi
     ))->toThrow(OutboundHttpException::class, 'Cross-origin redirect is not allowed.');
 });
 
-it('refuses cross-origin 307/308 even when cross-origin redirects are opted in', function (): void {
+it('refuses cross-origin 307 even when cross-origin redirects are opted in', function (): void {
     Http::fake([
         'https://app.test/start' => Http::response('', 307, ['Location' => 'https://evil.test/x']),
     ]);
@@ -278,7 +278,25 @@ it('refuses cross-origin 307/308 even when cross-origin redirects are opted in',
     ))->toThrow(OutboundHttpException::class, 'Cross-origin 307/308 redirect is not allowed.');
 });
 
-it('drops body and auth headers on an opted-in cross-origin 302', function (): void {
+it('refuses cross-origin 308 even when cross-origin redirects are opted in', function (): void {
+    Http::fake([
+        'https://app.test/start' => Http::response('', 308, ['Location' => 'https://evil.test/x']),
+    ]);
+
+    expect(fn () => pinnedClient(new FakeHostResolver(answers: [
+        'app.test' => ['93.184.216.34'],
+        'evil.test' => ['93.184.216.35'],
+    ]))->send(
+        'POST',
+        'https://app.test/start',
+        function (OutboundRequest $request): void {
+            $request->withBody('secret', 'text/plain');
+        },
+        new HttpRequestOptions(followRedirects: true, maxRedirects: 2, allowCrossOriginRedirects: true),
+    ))->toThrow(OutboundHttpException::class, 'Cross-origin 307/308 redirect is not allowed.');
+});
+
+it('drops body and non-allowlisted headers on an opted-in cross-origin 302', function (): void {
     $resolver = (new FakeHostResolver)
         ->queue('app.test', [['93.184.216.34']])
         ->queue('evil.test', [['93.184.216.35']]);
@@ -294,7 +312,10 @@ it('drops body and auth headers on an opted-in cross-origin 302', function (): v
         function (OutboundRequest $request): void {
             $request->withBody('secret-body', 'text/plain')
                 ->withHeader('Authorization', 'Bearer leak-me')
-                ->withHeader('X-Custom', 'keep');
+                ->withHeader('X-Api-Key', 'secret-key')
+                ->withHeader('X-Custom', 'keep')
+                ->accept('application/json')
+                ->withHeader('User-Agent', 'outbound-test');
         },
         new HttpRequestOptions(followRedirects: true, maxRedirects: 2, allowCrossOriginRedirects: true),
     );
@@ -302,15 +323,19 @@ it('drops body and auth headers on an opted-in cross-origin 302', function (): v
     Http::assertSent(function ($request): bool {
         return $request->url() === 'https://app.test/start'
             && $request->body() === 'secret-body'
-            && $request->hasHeader('Authorization');
+            && $request->hasHeader('Authorization')
+            && $request->hasHeader('X-Api-Key');
     });
 
     Http::assertSent(function ($request): bool {
         return $request->url() === 'https://evil.test/steal'
             && $request->body() === ''
             && ! $request->hasHeader('Authorization')
+            && ! $request->hasHeader('X-Api-Key')
+            && ! $request->hasHeader('X-Custom')
             && ! $request->hasHeader('Content-Type')
-            && $request->hasHeader('X-Custom');
+            && $request->hasHeader('Accept')
+            && $request->hasHeader('User-Agent');
     });
 });
 
@@ -739,4 +764,223 @@ it('shortens hop timeouts to the remaining config deadline budget', function ():
 
     expect($seen['timeout'])->toBe(3)
         ->and($seen['connect_timeout'])->toBe(3);
+});
+
+it('does not follow redirects when followRedirects is false even if maxRedirects > 0', function (): void {
+    Http::fake([
+        'https://example.test/start' => Http::response('', 302, ['Location' => 'https://example.test/next']),
+        'https://example.test/next' => Http::response('followed', 200),
+    ]);
+
+    $response = pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send(
+        'GET',
+        'https://example.test/start',
+        noopConfigure(),
+        new HttpRequestOptions(followRedirects: false, maxRedirects: 5),
+    );
+
+    expect($response->status())->toBe(302);
+    Http::assertSentCount(1);
+});
+
+it('does not follow when maxRedirects is 0 even if followRedirects is true', function (): void {
+    Http::fake([
+        'https://example.test/start' => Http::response('', 302, ['Location' => 'https://example.test/next']),
+        'https://example.test/next' => Http::response('followed', 200),
+    ]);
+
+    $response = pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send(
+        'GET',
+        'https://example.test/start',
+        noopConfigure(),
+        new HttpRequestOptions(followRedirects: true, maxRedirects: 0),
+    );
+
+    expect($response->status())->toBe(302);
+    Http::assertSentCount(1);
+});
+
+it('applies withQuery to the first hop only across redirects', function (): void {
+    Http::fake([
+        'https://example.test/start*' => Http::response('', 302, ['Location' => 'https://example.test/next']),
+        'https://example.test/next' => Http::response('ok', 200),
+    ]);
+
+    pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send(
+        'GET',
+        'https://example.test/start',
+        function (OutboundRequest $request): void {
+            $request->withQuery(['token' => 'QSECRET']);
+        },
+        new HttpRequestOptions(followRedirects: true, maxRedirects: 2),
+    );
+
+    Http::assertSent(fn ($request): bool => str_contains($request->url(), 'token=QSECRET')
+        && str_starts_with($request->url(), 'https://example.test/start'));
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://example.test/next'
+        && ! str_contains($request->url(), 'QSECRET'));
+});
+
+it('refuses HTTPS→HTTP downgrade when the source scheme is uppercase', function (): void {
+    Http::fake([
+        'HTTPS://example.test/start' => Http::response('', 302, ['Location' => 'http://example.test/next']),
+        'https://example.test/start' => Http::response('', 302, ['Location' => 'http://example.test/next']),
+    ]);
+
+    expect(fn () => pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send(
+        'GET',
+        'HTTPS://example.test/start',
+        noopConfigure(),
+        new HttpRequestOptions(followRedirects: true, maxRedirects: 2),
+    ))->toThrow(OutboundHttpException::class, 'HTTPS to HTTP redirect downgrade is not allowed.');
+});
+
+it('treats default http port 80 as same-origin', function (): void {
+    Http::fake([
+        'http://app.test/a' => Http::response('', 302, ['Location' => 'http://app.test:80/b']),
+        'http://app.test/b' => Http::response('same', 200),
+    ]);
+
+    $response = pinnedClient(
+        new FakeHostResolver(answers: ['app.test' => ['93.184.216.34']]),
+        allowPrivate: true,
+    )->send(
+        'GET',
+        'http://app.test/a',
+        noopConfigure(),
+        new HttpRequestOptions(
+            followRedirects: true,
+            maxRedirects: 2,
+            urlOptions: new UrlGuardOptions(httpsOnly: false, allowPrivateHosts: true),
+        ),
+    );
+
+    expect($response->body())->toBe('same');
+});
+
+it('keeps HEAD after 301 and 302 redirects', function (int $status): void {
+    Http::fake([
+        'https://example.test/a' => Http::response('', $status, ['Location' => 'https://example.test/b']),
+        'https://example.test/b' => Http::response('', 200),
+    ]);
+
+    pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send(
+        'HEAD',
+        'https://example.test/a',
+        noopConfigure(),
+        new HttpRequestOptions(followRedirects: true, maxRedirects: 2),
+    );
+
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://example.test/a' && $request->method() === 'HEAD');
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://example.test/b' && $request->method() === 'HEAD');
+})->with([301, 302]);
+
+it('allows timeouts of exactly 1s and exactly the config cap', function (): void {
+    Http::fake(['https://example.test/' => Http::response('ok', 200)]);
+
+    $client = pinnedClient(
+        new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]),
+        limits: new OutboundHttpLimits(maxTimeoutSeconds: 60, maxConnectTimeoutSeconds: 30),
+    );
+
+    $client->send(
+        'GET',
+        'https://example.test/',
+        noopConfigure(),
+        new HttpRequestOptions(timeoutSeconds: 1, connectTimeoutSeconds: 1),
+    );
+
+    $client->send(
+        'GET',
+        'https://example.test/',
+        noopConfigure(),
+        new HttpRequestOptions(timeoutSeconds: 60, connectTimeoutSeconds: 30),
+    );
+
+    expect(true)->toBeTrue();
+});
+
+it('allows a hop when remaining deadline is exactly 1.0 second', function (): void {
+    $seen = null;
+    $ticks = [100.0, 100.0];
+
+    $handler = function (RequestInterface $request, array $options) use (&$seen) {
+        $seen = $options;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200, [], 'ok'));
+    };
+
+    pinnedClient(
+        new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]),
+        clock: static function () use (&$ticks): float {
+            return array_shift($ticks) ?? 100.0;
+        },
+        limits: new OutboundHttpLimits(totalDeadlineSeconds: 1),
+        transferHandler: $handler,
+    )->send(
+        'GET',
+        'https://example.test/',
+        noopConfigure(),
+        new HttpRequestOptions(timeoutSeconds: 5, connectTimeoutSeconds: 1),
+    );
+
+    expect($seen['timeout'])->toBe(1);
+});
+
+it('floors fractional remaining deadline for hop timeouts', function (): void {
+    $seen = null;
+    $ticks = [10.0, 10.3];
+
+    $handler = function (RequestInterface $request, array $options) use (&$seen) {
+        $seen = $options;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200, [], 'ok'));
+    };
+
+    pinnedClient(
+        new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]),
+        clock: static function () use (&$ticks): float {
+            return array_shift($ticks) ?? 10.3;
+        },
+        limits: new OutboundHttpLimits(totalDeadlineSeconds: 3),
+        transferHandler: $handler,
+    )->send(
+        'GET',
+        'https://example.test/',
+        noopConfigure(),
+        new HttpRequestOptions(timeoutSeconds: 5, connectTimeoutSeconds: 4),
+    );
+
+    // remaining = 13.0 - 10.3 = 2.7 → floor 2 (ceil would be 3)
+    expect($seen['timeout'])->toBe(2)
+        ->and($seen['connect_timeout'])->toBe(2);
+});
+
+it('ignores non-digit Content-Length and strips a leaked handler option', function (): void {
+    $seenOptions = null;
+
+    $handler = function (RequestInterface $request, array $options) use (&$seenOptions) {
+        $seenOptions = $options;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200, ['Content-Length' => 'abc'], 'ok'));
+    };
+
+    pinnedClient(
+        new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]),
+        transferHandler: $handler,
+    )->send(
+        'GET',
+        'https://example.test/',
+        noopConfigure(),
+        new HttpRequestOptions(maxResponseBytes: 10),
+    );
+
+    expect($seenOptions)->not->toHaveKey('handler');
+
+    $onHeaders = $seenOptions['on_headers'];
+    // non-digit Content-Length must not trip the size guard
+    $onHeaders(new Psr7Response(200, ['Content-Length' => 'abc'], ''));
+    $onHeaders(new Psr7Response(200, ['Content-Length' => ''], ''));
+    expect(fn () => $onHeaders(new Psr7Response(200, ['Content-Length' => '11'], '')))
+        ->toThrow(OutboundHttpException::class);
 });

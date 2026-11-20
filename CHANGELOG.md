@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PinnedHttpClient** uses a private `Http\Client\Factory` (not the shared
+  Http facade factory) so `Http::globalOptions(['handler' => …])` cannot replace
+  the enforcing curl wrap; any `handler` option is stripped. Caller `withQuery`
+  applies to the first hop only. Opted-in cross-origin hops forward only
+  Accept / Accept-Language / User-Agent / Content-Type (when a body is kept).
+  `OutboundRequest` refuses Host and routing headers (`X-Forwarded-*`,
+  `Forwarded`, `X-Original-URL`, `X-Rewrite-URL`). Mutation paths include
+  `tests/Feature/RealTransport`.
+
 - **Pre-1.0 API:** `PinnedHttpClient::send()` configure callable now receives
   `OutboundRequest` only (not Laravel `PendingRequest`). Transport enforcement
   wraps the curl handler; timeout caps / total deadline are config-owned via

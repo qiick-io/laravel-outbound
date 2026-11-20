@@ -2,7 +2,12 @@
 
 declare(strict_types=1);
 
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\RequestInterface;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
@@ -80,7 +85,7 @@ final class RealTransportServer
             ->with('evil.test', [$this->pinAddress]);
 
         $this->client = new PinnedHttpClient(
-            app(HttpFactory::class),
+            new HttpFactory,
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
             $limits ?? new OutboundHttpLimits,
         );
@@ -264,6 +269,80 @@ it('rejects oversize Content-Length on the real wire without keeping the body', 
             static function (OutboundRequest $request): void {},
             realTransportOptions(['maxResponseBytes' => 1024]),
         ))->toThrow(OutboundHttpException::class);
+    } finally {
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('still pins when the shared Http factory has a global handler (Guzzle bypass attempt)', function (): void {
+    $server = new RealTransportServer;
+
+    // Poison the SHARED factory — PinnedHttpClient must use a private one.
+    $unchecked = HandlerStack::create(function (
+        RequestInterface $request,
+        array $options,
+    ) use ($server) {
+        // Deliberately connect without CONNECT_TO to a different capture path
+        // if this handler were used. Hitting /unchecked proves the bypass.
+        $url = 'http://127.0.0.1:'.$server->port.'/unchecked';
+        $raw = file_get_contents($url);
+
+        return Create::promiseFor(
+            new Response(200, [], $raw === false ? 'unchecked-fail' : $raw)
+        );
+    });
+    Http::globalOptions(['handler' => $unchecked]);
+
+    try {
+        $response = $server->client->send(
+            'GET',
+            $server->url('app.test', '/ok'),
+            static function (OutboundRequest $request): void {},
+            realTransportOptions(),
+        );
+
+        expect($response->status())->toBe(200)
+            ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
+            ->and($server->capture('ok'))->not->toBeNull()
+            ->and($server->capture('unchecked'))->toBeNull();
+    } finally {
+        Http::globalOptions([]);
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('applies withQuery to the first hop only and strips secret headers on cross-origin 302', function (): void {
+    $server = new RealTransportServer;
+
+    try {
+        $server->client->send(
+            'POST',
+            $server->url('app.test', '/redirect-cross-302'),
+            function (OutboundRequest $request): void {
+                $request->withBody('secret-body', 'text/plain')
+                    ->withQuery(['token' => 'QSECRET'])
+                    ->withHeader('X-Api-Key', 'secret-key')
+                    ->withHeader('Authorization', 'Bearer real-leak')
+                    ->accept('application/json');
+            },
+            realTransportOptions([
+                'followRedirects' => true,
+                'maxRedirects' => 2,
+                'allowCrossOriginRedirects' => true,
+            ]),
+        );
+
+        $first = $server->capture('redirect-cross-302');
+        $second = $server->capture('steal');
+
+        expect($first)->not->toBeNull()
+            ->and($first['query'] ?? '')->toContain('token=QSECRET')
+            ->and($first['x_api_key'] ?? '')->toBe('secret-key')
+            ->and($second)->not->toBeNull()
+            ->and($second['query'] ?? '')->not->toContain('QSECRET')
+            ->and($second['x_api_key'] ?? '')->toBe('')
+            ->and($second['authorization'] ?? '')->toBe('')
+            ->and($second['accept'] ?? '')->toContain('application/json');
     } finally {
         $server->stop();
     }

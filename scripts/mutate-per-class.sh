@@ -7,7 +7,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 min="${MUTATE_MIN:-95}"
-paths="${MUTATE_PATHS:-tests/Unit}"
+paths="${MUTATE_PATHS:-tests/Unit tests/Feature/RealTransport}"
 
 classes=(
   'Qiick\Outbound\Ssrf\RemoteUrlGuard'

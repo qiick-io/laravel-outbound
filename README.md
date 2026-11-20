@@ -105,8 +105,12 @@ are re-applied by wrapping the curl handler.
 Transport never auto-follows; when `followRedirects` is on, each `Location` is
 resolved, SSRF-checked, and re-pinned. Cross-origin redirects are off by
 default; when opted in, only 301/302/303 are allowed (body dropped) — cross-origin
-307/308 are always refused. Environment proxies are disabled so they cannot
-bypass CONNECT_TO. Timeout caps and the total redirect deadline come from
+307/308 are always refused, and only Accept / Accept-Language / User-Agent /
+Content-Type (when a body is kept) are forwarded. Caller query values apply to
+the first hop only. `OutboundRequest` refuses Host and routing headers. The
+client uses a private HTTP factory so shared `Http::globalOptions(['handler'])`
+cannot bypass the pin. Environment proxies are disabled so they cannot bypass
+CONNECT_TO. Timeout caps and the total redirect deadline come from
 `outbound.http.*` config and cannot be raised per call.
 
 ## Configuration

@@ -48,9 +48,11 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
+        // Private Factory — never the shared Http facade factory, so
+        // Http::globalOptions(['handler' => ...]) cannot replace our curl wrap.
         $this->app->singleton(PinnedHttpClient::class, function (Application $app): PinnedHttpClient {
             return new PinnedHttpClient(
-                $app->make(HttpFactory::class),
+                new HttpFactory,
                 $app->make(RemoteUrlGuard::class),
                 $app->make(OutboundHttpLimits::class),
             );

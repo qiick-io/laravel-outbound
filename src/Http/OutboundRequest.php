@@ -14,10 +14,21 @@ use InvalidArgumentException;
  * multipart). They never receive a Laravel PendingRequest, so they cannot change
  * the URI, timeouts, proxy, pin, redirects, verify, stream, or middleware.
  *
+ * Host and hop/routing headers are refused — the Host header must stay the
+ * authorised URL host while CONNECT_TO pins the checked address.
+ *
  * @api
  */
 final class OutboundRequest
 {
+    /** @var list<string> */
+    private const REFUSED_HEADERS = [
+        'Host',
+        'Forwarded',
+        'X-Original-URL',
+        'X-Rewrite-URL',
+    ];
+
     /** @var array<string, string> */
     private array $headers = [];
 
@@ -51,6 +62,7 @@ final class OutboundRequest
 
     public function withHeader(string $name, string $value): self
     {
+        $this->assertHeaderAllowed($name);
         $this->headers[$name] = $value;
 
         return $this;
@@ -170,6 +182,19 @@ final class OutboundRequest
             'multipart' => $request->asMultipart(self::stringKeyedArray($body['payload'], 'Multipart')),
             default => throw new InvalidArgumentException('Unknown outbound body type.'),
         };
+    }
+
+    private function assertHeaderAllowed(string $name): void
+    {
+        foreach (self::REFUSED_HEADERS as $refused) {
+            if (strcasecmp($name, $refused) === 0) {
+                throw new InvalidArgumentException('Outbound request must not set Host or routing headers.');
+            }
+        }
+
+        if (str_starts_with(strtolower($name), 'x-forwarded-')) {
+            throw new InvalidArgumentException('Outbound request must not set Host or routing headers.');
+        }
     }
 
     private static function stringPayload(mixed $payload, string $label): string

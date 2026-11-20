@@ -24,8 +24,10 @@ use RuntimeException;
  * Laravel HTTP client that SSRF-guards the URL, pins with CURLOPT_CONNECT_TO,
  * disables proxies, and never auto-follows redirects. Callers configure each
  * request through {@see OutboundRequest} only — they never receive a
- * PendingRequest. Transport settings are re-applied by wrapping the curl
- * handler so they cannot be overridden.
+ * PendingRequest. The client uses the injected HttpFactory only (apps should
+ * bind a private Factory, not the shared Http facade factory). Transport
+ * settings are re-applied by wrapping the curl handler; any caller/global
+ * `handler` option is stripped.
  *
  * @api
  */
@@ -33,10 +35,12 @@ final class PinnedHttpClient
 {
     private const FOLLOW_STATUSES = [301, 302, 303, 307, 308];
 
-    private const HOP_SENSITIVE_HEADERS = [
-        'Authorization',
-        'Cookie',
-        'Proxy-Authorization',
+    /** Headers forwarded on an opted-in cross-origin hop (body usually dropped). */
+    private const CROSS_ORIGIN_SAFE_HEADERS = [
+        'Accept',
+        'Accept-Language',
+        'User-Agent',
+        'Content-Type',
     ];
 
     private const BODY_HEADERS = [
@@ -85,13 +89,12 @@ final class PinnedHttpClient
         while (true) {
             $remaining = $deadlineAt - $this->now();
 
-            if ($remaining < 1.0) { // @pest-mutate-ignore: SmallerToSmallerOrEqual,IncrementFloat
+            if ($remaining < 1.0) {
                 throw new OutboundHttpException('Outbound request total deadline exceeded.');
             }
 
             $destination = $this->guard->authorize($currentUrl, $options->urlOptions);
-            // Remaining is always ≥1 here; floor vs ceil only differs on fractions.
-            $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining))); // @pest-mutate-ignore: FloorToRound,FloorToCiel,DecrementInteger,IncrementInteger,RemoveIntegerCast
+            $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining)));
             $hopConnect = min($options->connectTimeoutSeconds, $hopTimeout);
 
             $response = $this->dispatch(
@@ -103,6 +106,9 @@ final class PinnedHttpClient
                 $hopConnect,
                 $options,
             );
+            // Caller query values apply to the first hop only — never rewrite
+            // subsequent redirect Locations / authorised URLs.
+            $snapshot['query'] = [];
 
             $this->assertWithinSizeLimit($response, $options);
 
@@ -127,13 +133,13 @@ final class PinnedHttpClient
                     throw new OutboundHttpException('Cross-origin redirect is not allowed.');
                 }
 
-                if ($status === 307 || $status === 308) { // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+                if ($status === 307 || $status === 308) {
                     throw new OutboundHttpException('Cross-origin 307/308 redirect is not allowed.');
                 }
 
-                $snapshot['headers'] = $this->withoutHeaders($snapshot['headers'], self::HOP_SENSITIVE_HEADERS);
+                $snapshot['headers'] = $this->onlyHeaders($snapshot['headers'], self::CROSS_ORIGIN_SAFE_HEADERS);
                 // Cross-origin only allows 301/302/303, which become GET/HEAD below
-                // and drop the body there — no separate includeBody=false needed.
+                // and drop the body there — Content-Type is then stripped with BODY_HEADERS.
             }
 
             $nextMethod = $this->methodAfterRedirect($currentMethod, $status);
@@ -286,7 +292,7 @@ final class PinnedHttpClient
             'on_headers' => static function (ResponseInterface $response) use ($max): void {
                 $length = $response->getHeaderLine('Content-Length');
 
-                if ($length !== '' && ctype_digit($length) && (int) $length > $max) { // @pest-mutate-ignore: RemoveIntegerCast,EmptyStringToNotEmpty,BooleanAndToBooleanOr
+                if ($length !== '' && ctype_digit($length) && (int) $length > $max) {
                     throw new OutboundHttpException('Response exceeds max_response_bytes.');
                 }
             },
@@ -323,6 +329,8 @@ final class PinnedHttpClient
                 throw new OutboundHttpException('Request URI was altered after authorisation.');
             }
 
+            unset($requestOptions['handler']);
+
             $requestOptions['allow_redirects'] = false;
             $requestOptions['proxy'] = '';
             $requestOptions['stream'] = false;
@@ -348,7 +356,7 @@ final class PinnedHttpClient
 
     private function shouldFollowRedirect(Response $response, HttpRequestOptions $options): bool
     {
-        if (! $options->followRedirects || $options->maxRedirects < 1) { // @pest-mutate-ignore: BooleanOrToBooleanAnd,DecrementInteger
+        if (! $options->followRedirects || $options->maxRedirects < 1) {
             return false;
         }
 
@@ -397,8 +405,8 @@ final class PinnedHttpClient
      */
     private function assertNoHttpsDowngrade(string $fromUrl, string $toUrl): void
     {
-        $fromScheme = strtolower((string) (parse_url($fromUrl, PHP_URL_SCHEME) ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty
-        $toScheme = strtolower((string) (parse_url($toUrl, PHP_URL_SCHEME) ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty
+        $fromScheme = strtolower((string) (parse_url($fromUrl, PHP_URL_SCHEME) ?? ''));
+        $toScheme = strtolower((string) (parse_url($toUrl, PHP_URL_SCHEME) ?? ''));
 
         if ($fromScheme === 'https' && $toScheme === 'http') {
             throw new OutboundHttpException('HTTPS to HTTP redirect downgrade is not allowed.');
@@ -415,7 +423,7 @@ final class PinnedHttpClient
         $parts = parse_url($url) ?: [];
         $scheme = strtolower((string) ($parts['scheme'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
         $host = strtolower((string) ($parts['host'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
-        $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80); // @pest-mutate-ignore: TernaryNegated,IdenticalToNotIdentical,DecrementInteger,IncrementInteger,CoalesceRemoveLeft
+        $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
 
         return sprintf('%s://%s:%d', $scheme, $host, $port); // @pest-mutate-ignore: ConcatRemoveLeft,ConcatRemoveRight,ConcatSwitchSides
     }
@@ -442,6 +450,28 @@ final class PinnedHttpClient
         return $filtered;
     }
 
+    /**
+     * @param  array<string, string>  $headers
+     * @param  list<string>  $names
+     * @return array<string, string>
+     */
+    private function onlyHeaders(array $headers, array $names): array
+    {
+        $filtered = [];
+
+        foreach ($headers as $name => $value) {
+            foreach ($names as $keep) {
+                if (strcasecmp($name, $keep) === 0) {
+                    $filtered[$name] = $value;
+
+                    continue 2;
+                }
+            }
+        }
+
+        return $filtered;
+    }
+
     private function methodAfterRedirect(string $method, int $status): string
     {
         // Method is already uppercased at the start of send().
@@ -452,7 +482,7 @@ final class PinnedHttpClient
         }
 
         if ($status === 301 || $status === 302) {
-            if ($method !== 'GET' && $method !== 'HEAD') { // @pest-mutate-ignore: BooleanAndToBooleanOr
+            if ($method !== 'GET' && $method !== 'HEAD') {
                 return 'GET';
             }
         }
@@ -479,19 +509,19 @@ final class PinnedHttpClient
      */
     private function assertTimeoutBounds(HttpRequestOptions $options): void
     {
-        if ($options->timeoutSeconds < 1 || $options->connectTimeoutSeconds < 1) { // @pest-mutate-ignore: SmallerToSmallerOrEqual,DecrementInteger,IncrementInteger
+        if ($options->timeoutSeconds < 1 || $options->connectTimeoutSeconds < 1) {
             throw new InvalidArgumentException('Outbound timeouts must be at least 1 second.');
         }
 
-        if ($this->limits->totalDeadlineSeconds < 1) { // @pest-mutate-ignore: DecrementInteger
+        if ($this->limits->totalDeadlineSeconds < 1) {
             throw new InvalidArgumentException('Outbound total deadline must be at least 1 second.');
         }
 
-        if ($options->timeoutSeconds > $this->limits->maxTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+        if ($options->timeoutSeconds > $this->limits->maxTimeoutSeconds) {
             throw new InvalidArgumentException('Outbound timeout exceeds configured max_timeout_seconds.');
         }
 
-        if ($options->connectTimeoutSeconds > $this->limits->maxConnectTimeoutSeconds) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+        if ($options->connectTimeoutSeconds > $this->limits->maxConnectTimeoutSeconds) {
             throw new InvalidArgumentException('Outbound connect timeout exceeds configured max_connect_timeout_seconds.');
         }
     }

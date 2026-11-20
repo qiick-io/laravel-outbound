@@ -12,16 +12,21 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $body = file_get_contents('php://input') ?: '';
 $host = $_SERVER['HTTP_HOST'] ?? '';
 
-$record = static function (string $name) use ($captureDir, $method, $path, $body, $host): void {
+$query = $_SERVER['QUERY_STRING'] ?? '';
+$record = static function (string $name) use ($captureDir, $method, $path, $body, $host, $query): void {
     file_put_contents($captureDir.'/'.$name.'.json', json_encode([
         'method' => $method,
         'path' => $path,
+        'query' => $query,
         'host' => $host,
         'server_addr' => $_SERVER['SERVER_ADDR'] ?? '',
         'server_port' => (string) ($_SERVER['SERVER_PORT'] ?? ''),
         'authorization' => $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? ''),
         'cookie' => $_SERVER['HTTP_COOKIE'] ?? '',
         'proxy_authorization' => $_SERVER['HTTP_PROXY_AUTHORIZATION'] ?? '',
+        'x_api_key' => $_SERVER['HTTP_X_API_KEY'] ?? '',
+        'accept' => $_SERVER['HTTP_ACCEPT'] ?? '',
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
         'body' => $body,
         'content_length' => $_SERVER['CONTENT_LENGTH'] ?? '',
     ], JSON_THROW_ON_ERROR));
@@ -84,6 +89,14 @@ if ($path === '/steal') {
     $record('steal');
     header('Content-Type: text/plain');
     echo 'stolen';
+
+    return true;
+}
+
+if ($path === '/unchecked') {
+    $record('unchecked');
+    header('Content-Type: text/plain');
+    echo 'unchecked-ok';
 
     return true;
 }
