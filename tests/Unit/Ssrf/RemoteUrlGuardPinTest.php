@@ -173,10 +173,13 @@ it('pins every destination it authorises to exactly one checked address', functi
     $destination = ssrfGuardResolving($allowPrivate, $addresses)->authorize($url);
     $formatted = str_contains($pinnedAddress, ':') ? '['.$pinnedAddress.']' : $pinnedAddress;
 
+    $options = $destination->guzzleCurlOptions();
+
     expect($destination->pinnedAddress)->toBe($pinnedAddress)
         ->and($destination->curlConnectToEntry)->toBe(sprintf('::%s:%d', $formatted, $destination->port))
-        ->and($destination->guzzleCurlOptions()['curl'])->toHaveKey(CURLOPT_CONNECT_TO)
-        ->and($destination->guzzleCurlOptions()['curl'])->not->toHaveKey(CURLOPT_RESOLVE);
+        ->and($options['allow_redirects'])->toBeFalse()
+        ->and($options['curl'])->toHaveKey(CURLOPT_CONNECT_TO)
+        ->and($options['curl'])->not->toHaveKey(CURLOPT_RESOLVE);
 })->with([
     'a public hostname' => ['https://idp.example.com/token', ['93.184.216.34'], false, '93.184.216.34'],
     'a hostname with a port' => ['https://idp.example.com:8443/token', ['93.184.216.34'], false, '93.184.216.34'],
@@ -215,6 +218,16 @@ it('checks every record of a hostname, and pins one of them, ipv4 first', functi
         ->toBe('93.184.216.34')
         ->and(fn () => ssrfGuardResolving(false, [...$addresses, '10.0.0.5'])->authorize('https://many.example.com/token'))
         ->toThrow(UnsafeUrl::class);
+});
+
+it('pins default scheme ports as :443 and :80 in CONNECT_TO', function (): void {
+    $https = ssrfGuardResolving()->authorize('https://idp.example.com/token');
+    $http = ssrfGuardResolving(allowPrivate: true)->authorize('http://idp.example.com/token');
+
+    expect($https->port)->toBe(443)
+        ->and($https->curlConnectToEntry)->toBe('::93.184.216.34:443')
+        ->and($http->port)->toBe(80)
+        ->and($http->curlConnectToEntry)->toBe('::93.184.216.34:80');
 });
 
 it('resolves once per authorize and returns CONNECT_TO for the checked address', function (): void {

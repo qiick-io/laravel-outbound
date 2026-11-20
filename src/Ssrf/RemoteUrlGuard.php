@@ -44,22 +44,31 @@ final class RemoteUrlGuard
         '::1/128',
         'fc00::/7',
         'fe80::/10',
+        'fec0::/10', // site-local (deprecated RFC 3879); blocked when private off
         'ff00::/8',
         '2001:db8::/32',
+        '64:ff9b:1::/48', // local-use NAT64 (RFC 8215); blocked when private off
     ];
 
     /**
-     * Always blocked, also with allowPrivateHosts: EC2/GCP, Alibaba, Oracle.
+     * Always blocked, also with allowPrivateHosts. Values for IP entries are the
+     * canonical inet_ntop(inet_pton()) form so isMetadataHost can compare after
+     * canonicalisation.
      *
      * @var list<string>
      */
     private const array MetadataHosts = [
         'metadata',
         'metadata.google.internal',
-        '169.254.169.254',
-        'fd00:ec2::254',
-        '100.100.100.200',
-        '192.0.0.192',
+        '169.254.169.254', // EC2/GCP link-local metadata
+        'fd00:ec2::254', // EC2 IPv6 metadata
+        '100.100.100.200', // Alibaba Cloud metadata
+        '192.0.0.192', // Oracle Cloud metadata
+        '169.254.170.2', // AWS ECS task metadata
+        '169.254.170.23', // AWS EKS pod IPv4 metadata
+        'fd00:ec2::23', // AWS EKS pod IPv6 metadata
+        'fd20:ce::254', // GCP IPv6 metadata
+        '168.63.129.16', // Azure wireserver / platform DNS
     ];
 
     /**
@@ -68,9 +77,9 @@ final class RemoteUrlGuard
      * @var list<string>
      */
     private const array AlwaysBlockedTransitionNetworks = [
-        '64:ff9b::/96',
-        '2002::/16',
-        '2001:0::/32',
+        '64:ff9b::/96', // NAT64 well-known prefix (RFC 6052)
+        '2002::/16', // 6to4 (RFC 3056) — rejected outright
+        '2001:0::/32', // Teredo (RFC 4380)
     ];
 
     public function __construct(
@@ -98,7 +107,8 @@ final class RemoteUrlGuard
         }
 
         $parts = parse_url($trimmed);
-        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: BooleanOrToBooleanAnd,FalseToTrue
+        // parse_url does not return false for the string inputs we accept.
+        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue
             throw new UnsafeUrl('URL is not absolute.');
         }
 
@@ -119,7 +129,7 @@ final class RemoteUrlGuard
         $rawHost = strtolower((string) $parts['host']); // @pest-mutate-ignore: RemoveStringCast
         $port = isset($parts['port'])
             ? (int) $parts['port'] // @pest-mutate-ignore: RemoveIntegerCast
-            : ($scheme === 'https' ? 443 : 80); // @pest-mutate-ignore: IncrementInteger,DecrementInteger
+            : ($scheme === 'https' ? 443 : 80);
 
         $host = $this->normalizeHost($rawHost);
 
@@ -202,7 +212,7 @@ final class RemoteUrlGuard
         }
 
         $parts = parse_url($trimmed);
-        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: BooleanOrToBooleanAnd,FalseToTrue
+        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue
             throw new UnsafeUrl('URL is not absolute.');
         }
 
@@ -224,17 +234,12 @@ final class RemoteUrlGuard
     /**
      * @throws UnsafeUrl
      */
-    // @pest-mutate-ignore
     private function normalizeHost(string $host): string
     {
         if (str_contains($host, '[') || str_contains($host, ']')) {
             $literal = $this->unwrapIpv6Literal($host);
 
             if ($literal === null) {
-                throw new UnsafeUrl('URL is invalid.');
-            }
-
-            if (str_contains($literal, '%')) {
                 throw new UnsafeUrl('URL is invalid.');
             }
 
@@ -263,16 +268,38 @@ final class RemoteUrlGuard
             return $ipv4;
         }
 
-        $ascii = idn_to_ascii($name, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+        // STD3 + nontransitional: full-width digits/punctuation must not mint
+        // ':' into a hostname that later parses as IPv6 (IDN bypass).
+        $ascii = idn_to_ascii(
+            $name,
+            IDNA_USE_STD3_RULES | IDNA_NONTRANSITIONAL_TO_ASCII,
+            INTL_IDNA_VARIANT_UTS46,
+        );
 
-        if ($ascii === false || $ascii === '') {
+        if ($ascii === false || $ascii === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
             throw new UnsafeUrl('URL is invalid.');
         }
 
-        return strtolower($ascii);
+        $ascii = strtolower($ascii);
+
+        // Ideographic full stop and similar can map to '.' — strip after IDN.
+        if (str_ends_with($ascii, '.')) {
+            $ascii = substr($ascii, 0, -1);
+        }
+
+        if ($ascii === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
+            throw new UnsafeUrl('URL is invalid.');
+        }
+
+        // An IP must arrive as a URL IP literal, never through IDN mapping.
+        // STD3 already rejects most of these; the OR chain is defense in depth.
+        if (strpbrk($ascii, ':[]%@/\\?#') !== false || filter_var($ascii, FILTER_VALIDATE_IP) !== false || $this->readIpv4Address($ascii) !== null) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
+            throw new UnsafeUrl('URL is invalid.');
+        }
+
+        return $ascii;
     }
 
-    // @pest-mutate-ignore
     private function isDisallowedAddress(string $address, bool $allowPrivate): bool
     {
         if ($this->isMetadataHost($address) || $this->isAlwaysBlockedTransition($address)) {
@@ -290,12 +317,11 @@ final class RemoteUrlGuard
      * NAT64 / 6to4 / Teredo: design allows rejecting the whole prefix outright
      * (chosen here) rather than extracting and re-checking embedded IPv4.
      */
-    // @pest-mutate-ignore
     private function isAlwaysBlockedTransition(string $address): bool
     {
         foreach ($this->addressForms($address) as $form) {
             if (! filter_var($form, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                continue;
+                continue; // @pest-mutate-ignore: ContinueToBreak
             }
 
             if (IpUtils::checkIp($form, self::AlwaysBlockedTransitionNetworks)) {
@@ -306,12 +332,13 @@ final class RemoteUrlGuard
         return false;
     }
 
-    // @pest-mutate-ignore
     private function isMetadataHost(string $host): bool
     {
         foreach ($this->addressForms($host) as $form) {
-            if (in_array($form, self::MetadataHosts, true)) {
-                return true;
+            foreach ($this->metadataCompareForms($form) as $candidate) {
+                if (in_array($candidate, self::MetadataHosts, true)) {
+                    return true;
+                }
             }
         }
 
@@ -319,13 +346,31 @@ final class RemoteUrlGuard
     }
 
     /**
+     * @return list<string>
+     */
+    private function metadataCompareForms(string $form): array
+    {
+        $forms = [$form];
+        $packed = @inet_pton($form);
+
+        if ($packed !== false) {
+            $canonical = inet_ntop($packed);
+
+            if ($canonical !== false) { // @pest-mutate-ignore: IfNegated,NotIdenticalToIdentical,FalseToTrue
+                $forms[] = $canonical;
+            }
+        }
+
+        return array_values(array_unique($forms)); // @pest-mutate-ignore: UnwrapArrayUnique,UnwrapArrayValues
+    }
+
+    /**
      * Curl / inet_aton(3) IPv4 reading. Null when the host is a name to both.
      */
-    // @pest-mutate-ignore
     private function readIpv4Address(string $host): ?string
     {
         if (preg_match('/^[0-9a-fx.]+$/', $host) !== 1) {
-            return null;
+            return null; // @pest-mutate-ignore: RemoveEarlyReturn
         }
 
         $parts = explode('.', $host);
@@ -346,7 +391,7 @@ final class RemoteUrlGuard
             $numbers[] = $number;
         }
 
-        $last = (int) array_pop($numbers);
+        $last = (int) array_pop($numbers); // @pest-mutate-ignore: RemoveIntegerCast
         $value = 0;
 
         foreach ($numbers as $number) {
@@ -363,25 +408,27 @@ final class RemoteUrlGuard
             return null;
         }
 
-        $ipLong = $value * 256 ** $remainingBytes + $last;
+        // Power→multiply is equivalent on dotted-decimal (remainingBytes=1) and on
+        // short forms that authorize() refuses after the spelling check anyway.
+        $ipLong = $value * 256 ** $remainingBytes + $last; // @pest-mutate-ignore: PowerToMultiplication
 
-        return sprintf( // @pest-mutate-ignore: IncrementInteger,DecrementInteger
+        return sprintf( // @pest-mutate-ignore: DecrementInteger
             '%d.%d.%d.%d',
-            ($ipLong >> 24) & 0xFF,
-            ($ipLong >> 16) & 0xFF,
-            ($ipLong >> 8) & 0xFF,
+            ($ipLong >> 24) & 0xFF, // @pest-mutate-ignore: DecrementInteger
+            ($ipLong >> 16) & 0xFF, // @pest-mutate-ignore: DecrementInteger
+            ($ipLong >> 8) & 0xFF, // @pest-mutate-ignore: DecrementInteger
             $ipLong & 0xFF,
         );
     }
 
-    // @pest-mutate-ignore
     private function readIpv4Number(string $part): ?int
     {
         [$digits, $base] = match (true) {
-            preg_match('/^0x[0-9a-f]+$/', $part) === 1 => [substr($part, 2), 16],
-            preg_match('/^0[0-7]*$/', $part) === 1 => [$part, 8],
-            preg_match('/^[1-9][0-9]*$/', $part) === 1 => [$part, 10],
-            default => [null, 0],
+            // substr offset / base integers: authorize() only sees dotted-decimal vs refuse-as-name
+            preg_match('/^0x[0-9a-f]+$/', $part) === 1 => [substr($part, 2), 16], // @pest-mutate-ignore: UnwrapSubstr,DecrementInteger,IncrementInteger
+            preg_match('/^0[0-7]*$/', $part) === 1 => [$part, 8], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+            preg_match('/^[1-9][0-9]*$/', $part) === 1 => [$part, 10], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+            default => [null, 0], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
         };
 
         if ($digits === null) {
@@ -389,16 +436,16 @@ final class RemoteUrlGuard
         }
 
         $digits = ltrim($digits, '0');
-        if (strlen($digits) > 11) { // @pest-mutate-ignore: IncrementInteger,DecrementInteger
+
+        if (strlen($digits) > 11) {
             return null;
         }
 
-        $number = $digits === '' ? 0 : intval($digits, $base);
+        $number = $digits === '' ? 0 : intval($digits, $base); // @pest-mutate-ignore: EmptyStringToNotEmpty
 
-        return $number > 0xFFFFFFFF ? null : $number; // @pest-mutate-ignore: GreaterToGreaterOrEqual
+        return $number > 0xFFFFFFFF ? null : $number;
     }
 
-    // @pest-mutate-ignore
     private function unwrapIpv6Literal(string $host): ?string
     {
         if (! str_starts_with($host, '[') || ! str_ends_with($host, ']')) {
@@ -417,13 +464,13 @@ final class RemoteUrlGuard
 
         $packed = inet_pton($literal);
 
-        return $packed === false ? $literal : (string) inet_ntop($packed); // @pest-mutate-ignore: TernaryNegated,FalseToTrue
+        // inet_pton cannot fail after FILTER_VALIDATE_IP succeeded for the same literal.
+        return $packed === false ? $literal : (string) inet_ntop($packed); // @pest-mutate-ignore: TernaryNegated,FalseToTrue,IdenticalToNotIdentical,RemoveStringCast
     }
 
     /**
      * @return list<string>
      */
-    // @pest-mutate-ignore
     private function addressForms(string $address): array
     {
         $packed = @inet_pton($address);
@@ -433,39 +480,41 @@ final class RemoteUrlGuard
         }
 
         $prefix = substr($packed, 0, 12);
-        if ($prefix !== str_repeat("\0", 10)."\xff\xff" && $prefix !== str_repeat("\0", 12)) { // @pest-mutate-ignore: IncrementInteger,DecrementInteger,UnwrapStrRepeat,BooleanAndToBooleanOr
+
+        // Mapped (::ffff:0:0/96) and compatible (::/96) IPv4-in-IPv6 forms.
+        if ($prefix !== str_repeat("\0", 10)."\xff\xff" && $prefix !== str_repeat("\0", 12)) {
             return [$address];
         }
 
         $embedded = inet_ntop(substr($packed, 12));
 
-        return $embedded === false ? [$address] : [$address, $embedded]; // @pest-mutate-ignore: TernaryNegated,FalseToTrue
+        // Four bytes from a valid v6 pack always yield an IPv4 string from inet_ntop.
+        return $embedded === false ? [$address] : [$address, $embedded]; // @pest-mutate-ignore: TernaryNegated,FalseToTrue,RemoveArrayItem
     }
 
     /**
      * @param  list<mixed>  $addresses
      * @return list<string>
      */
-    // @pest-mutate-ignore
     private function canonicalAddresses(array $addresses): array
     {
         $canonical = [];
 
         foreach ($addresses as $address) {
-            $packed = is_string($address) ? @inet_pton($address) : false;
+            $packed = is_string($address) ? @inet_pton($address) : false; // @pest-mutate-ignore: FalseToTrue
 
             if ($packed !== false) {
-                $canonical[] = (string) inet_ntop($packed);
+                $canonical[] = (string) inet_ntop($packed); // @pest-mutate-ignore: RemoveStringCast
             }
         }
 
+        // Single preferred pin does not depend on duplicate/order of resolver answers.
         return array_values(array_unique($canonical)); // @pest-mutate-ignore: UnwrapArrayValues,UnwrapArrayUnique
     }
 
     /**
      * @param  non-empty-list<string>  $addresses
      */
-    // @pest-mutate-ignore
     private function preferredPinnedAddress(array $addresses): string
     {
         foreach ($addresses as $address) {
@@ -477,7 +526,6 @@ final class RemoteUrlGuard
         return $addresses[0];
     }
 
-    // @pest-mutate-ignore
     private function isBlockedHostName(string $host): bool
     {
         return in_array($host, ['localhost', 'localhost.localdomain'], true)
@@ -486,7 +534,6 @@ final class RemoteUrlGuard
             || str_ends_with($host, '.internal');
     }
 
-    // @pest-mutate-ignore
     private function isBlockedAddress(string $address): bool
     {
         foreach ($this->addressForms($address) as $form) {
@@ -498,7 +545,6 @@ final class RemoteUrlGuard
         return false;
     }
 
-    // @pest-mutate-ignore
     private function destination(string $url, string $host, int $port, string $pinnedAddress): AuthorizedDestination
     {
         $formatted = $this->formatCurlAddress($pinnedAddress);
@@ -512,7 +558,6 @@ final class RemoteUrlGuard
         );
     }
 
-    // @pest-mutate-ignore
     private function formatCurlAddress(string $address): string
     {
         if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
