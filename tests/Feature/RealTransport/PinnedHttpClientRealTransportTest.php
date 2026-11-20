@@ -315,7 +315,7 @@ it('applies withQuery to the first hop only and strips secret headers on cross-o
     $server = new RealTransportServer;
 
     try {
-        $server->client->send(
+        $response = $server->client->send(
             'POST',
             $server->url('app.test', '/redirect-cross-302'),
             function (OutboundRequest $request): void {
@@ -331,6 +331,8 @@ it('applies withQuery to the first hop only and strips secret headers on cross-o
                 'allowCrossOriginRedirects' => true,
             ]),
         );
+
+        expect($response->status())->toBe(200);
 
         $first = $server->capture('redirect-cross-302');
         $second = $server->capture('steal');
