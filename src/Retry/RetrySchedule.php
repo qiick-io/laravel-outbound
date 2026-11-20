@@ -7,7 +7,8 @@ namespace Qiick\Outbound\Retry;
 /**
  * Pure retry delay tables and jitter for outbound webhook delivery.
  *
- * Prefer {@see standardDelays()} (Standard Webhooks example). Bound
+ * Prefer {@see standardDelays()} (Standard Webhooks example: 5s, 5m, 30m, 2h,
+ * 5h, 10h, 14h, 20h, 24h — about 75.6 hours end-to-end). Bound
  * {@see shortDelays()} to a migration window only. Products own concurrency
  * caps, circuit-break / auto-disable, and honouring Retry-After / 410 / 429.
  *
@@ -15,6 +16,11 @@ namespace Qiick\Outbound\Retry;
  */
 final class RetrySchedule
 {
+    /**
+     * Hard cap so delay + jitter never overflows PHP integers.
+     */
+    public const int MAX_DELAY_SECONDS = 2_592_000; // 30 days
+
     /**
      * Standard Webhooks example delays (seconds).
      *
@@ -36,7 +42,9 @@ final class RetrySchedule
     }
 
     /**
-     * Apply symmetric jitter: delay + random in [-jitter, +jitter], floored at 0.
+     * Apply symmetric jitter capped to ±min(jitter, floor(delay/2)) so a
+     * positive delay never becomes an immediate retry. The randomizer offset
+     * is clamped to that amplitude; the result is capped at {@see MAX_DELAY_SECONDS}.
      *
      * @throws \InvalidArgumentException when delay or jitter is negative
      */
@@ -50,14 +58,28 @@ final class RetrySchedule
             throw new \InvalidArgumentException('Retry jitter must not be negative.');
         }
 
-        if ($jitterSeconds === 0) {
+        $delaySeconds = min($delaySeconds, self::MAX_DELAY_SECONDS);
+
+        // Amplitude ≤ floor(delay/2) keeps wait ≥ ceil(delay/2) for delay > 0.
+        $amplitude = min($jitterSeconds, intdiv($delaySeconds, 2));
+        if ($amplitude === 0) {
             return $delaySeconds;
         }
 
-        $offset = $random->intBetween(-$jitterSeconds, $jitterSeconds);
-        $withJitter = $delaySeconds + $offset;
+        $offset = $random->intBetween(-$amplitude, $amplitude);
+        // Boundary == amplitude is a no-op clamp (same value either way).
+        if ($offset < -$amplitude) { // @pest-mutate-ignore: SmallerToSmallerOrEqual
+            $offset = -$amplitude;
+        } elseif ($offset > $amplitude) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+            $offset = $amplitude;
+        }
 
-        // Floor at zero: `< 0` vs `<= 0` and ±1 on the literal are equivalent.
-        return $withJitter < 0 ? 0 : $withJitter; // @pest-mutate-ignore: SmallerToSmallerOrEqual,DecrementInteger,IncrementInteger
+        $withJitter = $delaySeconds + $offset;
+        // Equality with the cap returns the same value either branch.
+        if ($withJitter > self::MAX_DELAY_SECONDS) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
+            return self::MAX_DELAY_SECONDS;
+        }
+
+        return $withJitter;
     }
 }

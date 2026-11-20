@@ -161,10 +161,13 @@ $attempt = new DeliveryAttempt(
 );
 ```
 
-Prefer `standard` delays; bound `short` (`[10, 30, 60]`) to a migration window.
-Products still enforce per-endpoint concurrency, timeouts, circuit-break /
-auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
-auto-disable.
+Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
+**75.6 hours** end-to-end); bound `short` (`[10, 30, 60]`) to a migration
+window. Jitter is capped to ±floor(delay/2) so a positive delay is never
+immediate. `$errorMessage` on `DeliveryAttempt` must be sanitised by the
+caller (no URLs/tokens). Products still enforce per-endpoint concurrency,
+timeouts, circuit-break / auto-disable, and honour `Retry-After` / 410 / 429 —
+the package does not ship auto-disable.
 
 ## Configuration
 

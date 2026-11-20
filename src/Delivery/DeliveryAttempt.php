@@ -9,6 +9,10 @@ use DateTimeImmutable;
 /**
  * Immutable record of one outbound delivery attempt (product-owned storage).
  *
+ * `$errorMessage` must be sanitised by the caller before construction: strip
+ * URLs, tokens, signing secrets, and other credentials — this value object
+ * stores the string as given.
+ *
  * @api
  */
 final readonly class DeliveryAttempt
@@ -17,8 +21,10 @@ final readonly class DeliveryAttempt
      * @param  non-empty-string  $eventId
      * @param  non-empty-string  $eventType
      * @param  positive-int  $attempt  1-based attempt number
+     * @param  int<100, 599>|null  $httpStatus
      *
-     * @throws \InvalidArgumentException on empty ids or non-positive attempt
+     * @throws \InvalidArgumentException on empty ids, non-positive attempt,
+     *                                   out-of-range http status, or nextAttemptAt before at
      */
     public function __construct(
         public string $eventId,
@@ -40,6 +46,14 @@ final readonly class DeliveryAttempt
 
         if ($attempt < 1) {
             throw new \InvalidArgumentException('Delivery attempt number must be at least 1.');
+        }
+
+        if ($httpStatus !== null && ($httpStatus < 100 || $httpStatus > 599)) {
+            throw new \InvalidArgumentException('Delivery attempt http status must be between 100 and 599.');
+        }
+
+        if ($nextAttemptAt !== null && $nextAttemptAt < $at) {
+            throw new \InvalidArgumentException('Delivery attempt nextAttemptAt must not be before at.');
         }
     }
 }

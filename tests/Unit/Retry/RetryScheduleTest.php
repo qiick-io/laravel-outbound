@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Qiick\Outbound\Retry\Randomizer;
 use Qiick\Outbound\Retry\RetrySchedule;
 use Qiick\Outbound\Retry\SystemRandomizer;
 use Qiick\Outbound\Tests\Support\FixedRandomizer;
@@ -26,22 +27,68 @@ it('allows a zero base delay', function (): void {
     expect(RetrySchedule::withJitter(0, 0, new FixedRandomizer([1])))->toBe(0);
 });
 
-it('adds a positive jitter offset from the randomizer', function (): void {
+it('adds a positive jitter offset within the delay/2 amplitude', function (): void {
+    // amplitude = min(30, floor(100/2)) = 30
     $random = new FixedRandomizer([12]);
 
     expect(RetrySchedule::withJitter(100, 30, $random))->toBe(112);
 });
 
-it('adds a negative jitter offset from the randomizer', function (): void {
+it('adds a negative jitter offset within the delay/2 amplitude', function (): void {
     $random = new FixedRandomizer([-25]);
 
     expect(RetrySchedule::withJitter(100, 30, $random))->toBe(75);
 });
 
-it('floors jittered delays at zero', function (): void {
-    $random = new FixedRandomizer([-30]);
+it('never makes the first standard delay immediate when jitter exceeds delay/2', function (): void {
+    // delay=5, configured jitter=30 → amplitude=2; worst case wait is 3, never 0
+    $seen = new class implements Randomizer
+    {
+        public int $min = 0;
 
-    expect(RetrySchedule::withJitter(5, 30, $random))->toBe(0);
+        public int $max = 0;
+
+        public function intBetween(int $min, int $max): int
+        {
+            $this->min = $min;
+            $this->max = $max;
+
+            return $min;
+        }
+    };
+
+    expect(RetrySchedule::withJitter(5, 30, $seen))->toBe(3)
+        ->and($seen->min)->toBe(-2)
+        ->and($seen->max)->toBe(2);
+});
+
+it('clamps a randomizer that returns outside ±amplitude', function (): void {
+    $random = new class implements Randomizer
+    {
+        public function intBetween(int $min, int $max): int
+        {
+            return $min - 100; // deliberately below the requested range
+        }
+    };
+
+    // delay=100, amplitude=30 → clamped offset -30 → 70
+    expect(RetrySchedule::withJitter(100, 30, $random))->toBe(70);
+});
+
+it('caps delays at MAX_DELAY_SECONDS', function (): void {
+    $max = RetrySchedule::MAX_DELAY_SECONDS;
+
+    expect(RetrySchedule::withJitter($max + 100, 0, new FixedRandomizer([1])))->toBe($max)
+        ->and(RetrySchedule::withJitter($max, 0, new FixedRandomizer([1])))->toBe($max);
+});
+
+it('caps jittered results that would exceed MAX_DELAY_SECONDS', function (): void {
+    $max = RetrySchedule::MAX_DELAY_SECONDS;
+    // amplitude = min(10, floor(max/2)) = 10; offset +10 would exceed if delay were max
+    // but delay is capped to max first, amplitude = min(10, max/2)=10, result max+10 capped
+    $random = new FixedRandomizer([10]);
+
+    expect(RetrySchedule::withJitter($max, 10, $random))->toBe($max);
 });
 
 it('refuses negative delay and jitter', function (int $delay, int $jitter, string $message): void {
@@ -52,12 +99,12 @@ it('refuses negative delay and jitter', function (int $delay, int $jitter, strin
     'negative jitter' => [10, -1, 'Retry jitter must not be negative.'],
 ]);
 
-it('asks the randomizer for the full symmetric jitter range', function (): void {
+it('asks the randomizer for the proportional amplitude range', function (): void {
+    // delay=60, jitter=30 → amplitude=30; FixedRandomizer([-30]) fits once
     $random = new FixedRandomizer([-30]);
 
     RetrySchedule::withJitter(60, 30, $random);
 
-    // Consumed the only value that fits [-30, 30]; empty sequence would throw next.
     expect(fn () => RetrySchedule::withJitter(60, 30, $random))
         ->toThrow(RuntimeException::class);
 });

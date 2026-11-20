@@ -97,3 +97,32 @@ it('exposes backed enum values for storage', function (): void {
         ->and(DeliveryStatus::Failed->value)->toBe('failed')
         ->and(DeliveryStatus::Refused->value)->toBe('refused');
 });
+
+it('refuses http statuses outside 100–599', function (int $status): void {
+    expect(fn () => new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        $status,
+        null,
+        new DateTimeImmutable('@1'),
+        null,
+    ))->toThrow(InvalidArgumentException::class, 'http status must be between 100 and 599');
+})->with([99, 600, 0, -1]);
+
+it('refuses nextAttemptAt before at', function (): void {
+    $at = new DateTimeImmutable('@100');
+    $next = new DateTimeImmutable('@99');
+
+    expect(fn () => new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        503,
+        'upstream',
+        $at,
+        $next,
+    ))->toThrow(InvalidArgumentException::class, 'nextAttemptAt must not be before at');
+});
