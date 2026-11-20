@@ -41,29 +41,7 @@ final class RealTransportServer
         mkdir($this->captureDir, 0700, true);
 
         $router = dirname(__DIR__, 2).'/Support/real-transport-server.php';
-        $this->port = 18080 + random_int(0, 2000);
-
-        $cmd = sprintf(
-            'REAL_TRANSPORT_CAPTURE_DIR=%s %s -S %s:%d %s',
-            escapeshellarg($this->captureDir),
-            escapeshellarg(PHP_BINARY),
-            $this->pinAddress,
-            $this->port,
-            escapeshellarg($router),
-        );
-
-        $descriptors = [
-            0 => ['pipe', 'r'],
-            1 => ['file', $this->captureDir.'/server.out', 'w'],
-            2 => ['file', $this->captureDir.'/server.err', 'w'],
-        ];
-        $process = proc_open($cmd, $descriptors, $pipes);
-
-        if (! is_resource($process)) {
-            throw new RuntimeException('Failed to start php -S for real-transport tests.');
-        }
-
-        $this->process = $process;
+        $this->process = $this->startPhpServer($router);
         $this->waitUntilAcceptingConnections();
 
         $resolver = (new FakeHostResolver)
@@ -75,6 +53,73 @@ final class RealTransportServer
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
             $limits ?? new OutboundHttpLimits,
         );
+    }
+
+    /**
+     * @return resource
+     */
+    private function startPhpServer(string $router)
+    {
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $this->captureDir.'/server.out', 'w'],
+            2 => ['file', $this->captureDir.'/server.err', 'w'],
+        ];
+
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $port = $this->allocateFreePort();
+            $cmd = sprintf(
+                'REAL_TRANSPORT_CAPTURE_DIR=%s %s -S %s:%d %s',
+                escapeshellarg($this->captureDir),
+                escapeshellarg(PHP_BINARY),
+                $this->pinAddress,
+                $port,
+                escapeshellarg($router),
+            );
+
+            $pipes = [];
+            $process = proc_open($cmd, $descriptors, $pipes);
+
+            if (! is_resource($process)) {
+                throw new RuntimeException('Failed to start php -S for real-transport tests.');
+            }
+
+            // Brief pause so a bind failure shows up in proc status / stderr.
+            usleep(30_000);
+            $status = proc_get_status($process);
+            $err = @file_get_contents($this->captureDir.'/server.err') ?: '';
+
+            if (($status['running'] ?? false) === true && ! str_contains($err, 'Address already in use')) {
+                $this->port = $port;
+
+                return $process;
+            }
+
+            proc_terminate($process);
+            proc_close($process);
+            @unlink($this->captureDir.'/server.err');
+            @unlink($this->captureDir.'/server.out');
+        }
+
+        throw new RuntimeException('Failed to bind php -S to a free loopback port.');
+    }
+
+    private function allocateFreePort(): int
+    {
+        $socket = @stream_socket_server('tcp://'.$this->pinAddress.':0', $errno, $errstr);
+
+        if ($socket === false) {
+            throw new RuntimeException('Failed to allocate a free port: '.$errstr);
+        }
+
+        $name = stream_socket_get_name($socket, false);
+        fclose($socket);
+
+        if (! is_string($name) || ! str_contains($name, ':')) {
+            throw new RuntimeException('Failed to read allocated port name.');
+        }
+
+        return (int) substr($name, strrpos($name, ':') + 1);
     }
 
     private function waitUntilAcceptingConnections(): void

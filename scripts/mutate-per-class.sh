@@ -7,7 +7,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 min="${MUTATE_MIN:-95}"
-paths="${MUTATE_PATHS:-tests/Unit tests/Feature/RealTransport}"
+# RealTransport is only needed to kill PinnedHttpClient mutants; running it for
+# every class races php -S ports under parallel mutate workers.
+unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
+pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
 
 classes=(
   'Qiick\Outbound\Ssrf\RemoteUrlGuard'
@@ -23,7 +26,13 @@ classes=(
 status=0
 
 for class in "${classes[@]}"; do
+  paths="$unit_paths"
+  if [[ "$class" == 'Qiick\Outbound\Http\PinnedHttpClient' ]]; then
+    paths="$pin_paths"
+  fi
+
   echo "==> mutate ${class} (min=${min})"
+  # shellcheck disable=SC2086
   if ! vendor/bin/pest --mutate --class="${class}" --covered-only --min="${min}" ${paths} "$@"; then
     status=1
   fi
