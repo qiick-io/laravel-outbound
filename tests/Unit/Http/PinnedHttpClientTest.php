@@ -984,3 +984,17 @@ it('ignores non-digit Content-Length and strips a leaked handler option', functi
     expect(fn () => $onHeaders(new Psr7Response(200, ['Content-Length' => '11'], '')))
         ->toThrow(OutboundHttpException::class);
 });
+
+it('fails closed when PendingRequest has no options property to strip', function (): void {
+    $client = pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]));
+
+    $method = new ReflectionMethod(PinnedHttpClient::class, 'stripRequestHandlerOption');
+
+    $stub = new class
+    {
+        // Intentionally no $options — simulates a future Laravel rename.
+    };
+
+    expect(fn () => $method->invoke($client, $stub))
+        ->toThrow(OutboundHttpException::class, 'PendingRequest options property is missing');
+});
