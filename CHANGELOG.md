@@ -17,9 +17,7 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
 - **Pre-1.0:** minor versions may break. Prefer a tagged `0.1.0` (or a later
   `0.x`) over `dev-develop` in products.
 - **Install:** `composer require qiick/laravel-outbound:^0.1`, then
-  `php artisan vendor:publish --tag=outbound-config`. Packagist publish waits
-  on the maintainer (design: Packagist after go); until then depend on the
-  GitHub tag / VCS repository.
+  `php artisan vendor:publish --tag=outbound-config`.
 - **`PinnedHttpClient::send()`** configure callable receives `OutboundRequest`
   only (not Laravel `PendingRequest`). Timeout caps and the total deadline are
   config-owned via `OutboundHttpLimits` and cannot be raised per call.

@@ -8,9 +8,8 @@
 
 # qiick/laravel-outbound
 
-> **Status:** `0.1.0`. Pre-1.0: minor versions may break. Pre-release on Packagist
-> (publish waits on the maintainer); prefer a tagged release over `dev-develop`.
-> See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
+> **Status:** `0.1.0`. Pre-1.0: minor versions may break. Prefer a tagged release
+> over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
 SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.
 
@@ -19,8 +18,7 @@ SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products
 Released as **`0.1.0`** against the approved design
 (`projects/qiick/packages/laravel-outbound-design.md` in the qiick knowledge
 base). Public APIs, evaluation order and security properties follow SemVer;
-before `1.0.0`, a minor may break. Packagist publish is deferred (design:
-Packagist after the maintainer’s go) — until then install from the GitHub tag.
+before `1.0.0`, a minor may break.
 
 ## Purpose
 
@@ -70,7 +68,6 @@ composer require qiick/laravel-outbound:^0.1
 php artisan vendor:publish --tag=outbound-config
 ```
 
-Until Packagist lists the package, require the GitHub repository / tag instead.
 The service provider is auto-discovered.
 
 ## Public API
