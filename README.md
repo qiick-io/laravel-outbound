@@ -8,16 +8,17 @@
 
 # qiick/laravel-outbound
 
-> **In development. Not released and not on Packagist yet: do not depend on it.**
+> **Status:** `0.1.0`. Pre-1.0: minor versions may break. Prefer a tagged release
+> over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
 SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.
 
 ## Status
 
-This package is under active construction against the approved design
+Released as **`0.1.0`** against the approved design
 (`projects/qiick/packages/laravel-outbound-design.md` in the qiick knowledge
-base). Public APIs, evaluation order and security properties are binding once
-shipped; until `0.1.0` lands on Packagist, treat every surface as unstable.
+base). Public APIs, evaluation order and security properties follow SemVer;
+before `1.0.0`, a minor may break.
 
 ## Purpose
 
@@ -60,17 +61,16 @@ ship auto-disable.
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
 - guzzlehttp/guzzle ^7.8 or ^8.0
 
-## Install (when released)
+## Install
 
 ```bash
-composer require qiick/laravel-outbound
+composer require qiick/laravel-outbound:^0.1
 php artisan vendor:publish --tag=outbound-config
 ```
 
 The service provider is auto-discovered.
 
-
-## Public API (so far)
+## Public API
 
 ### SSRF
 

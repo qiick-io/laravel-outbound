@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-21
+
+First tagged release of `qiick/laravel-outbound`: SSRF-safe outbound HTTP and
+Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
+
+### Upgrade notes
+
+- **Pre-1.0:** minor versions may break. Prefer a tagged `0.1.0` (or a later
+  `0.x`) over `dev-develop` in products.
+- **Install:** `composer require qiick/laravel-outbound:^0.1`, then
+  `php artisan vendor:publish --tag=outbound-config`.
+- **`PinnedHttpClient::send()`** configure callable receives `OutboundRequest`
+  only (not Laravel `PendingRequest`). Timeout caps and the total deadline are
+  config-owned via `OutboundHttpLimits` and cannot be raised per call.
+- **Products** still own per-endpoint concurrency caps, circuit-break /
+  auto-disable, and honouring `Retry-After` / 410 / 429. This package does not
+  ship delivery tables or auto-disable.
+
 ### Changed
 
 - `PinnedHttpClient` fails closed if `PendingRequest::$options` is missing
@@ -71,3 +89,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   architecture tests, and CI (PHP 8.3/8.4/8.5 × Laravel 12/13 × lowest/stable,
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
+
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/qiick-io/laravel-outbound/releases/tag/v0.1.0
