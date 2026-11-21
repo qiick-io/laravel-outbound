@@ -82,6 +82,25 @@ it('caps delays at MAX_DELAY_SECONDS', function (): void {
         ->and(RetrySchedule::withJitter($max, 0, new FixedRandomizer([1])))->toBe($max);
 });
 
+it('caps configured jitter at MAX_JITTER_SECONDS before delay/2', function (): void {
+    $seen = new class implements Randomizer
+    {
+        public int $max = 0;
+
+        public function intBetween(int $min, int $max): int
+        {
+            $this->max = $max;
+
+            return 0;
+        }
+    };
+
+    // delay large enough that floor(delay/2) > MAX_JITTER; amplitude must be MAX_JITTER
+    RetrySchedule::withJitter(100_000, RetrySchedule::MAX_JITTER_SECONDS + 999, $seen);
+
+    expect($seen->max)->toBe(RetrySchedule::MAX_JITTER_SECONDS);
+});
+
 it('caps jittered results that would exceed MAX_DELAY_SECONDS', function (): void {
     $max = RetrySchedule::MAX_DELAY_SECONDS;
     // amplitude = min(10, floor(max/2)) = 10; offset +10 would exceed if delay were max

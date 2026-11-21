@@ -8,7 +8,8 @@ namespace Qiick\Outbound\Retry;
  * Pure retry delay tables and jitter for outbound webhook delivery.
  *
  * Prefer {@see standardDelays()} (Standard Webhooks example: 5s, 5m, 30m, 2h,
- * 5h, 10h, 14h, 20h, 24h — about 75.6 hours end-to-end). Bound
+ * 5h, 10h, 14h, 20h, 24h — about 75.6 hours end-to-end). Each delay is the wait
+ * from the previous attempt, not from the first send. Bound
  * {@see shortDelays()} to a migration window only. Products own concurrency
  * caps, circuit-break / auto-disable, and honouring Retry-After / 410 / 429.
  *
@@ -20,6 +21,11 @@ final class RetrySchedule
      * Hard cap so delay + jitter never overflows PHP integers.
      */
     public const int MAX_DELAY_SECONDS = 2_592_000; // 30 days
+
+    /**
+     * Cap on the configured jitter argument (before ±floor(delay/2)).
+     */
+    public const int MAX_JITTER_SECONDS = 3_600; // 1 hour
 
     /**
      * Standard Webhooks example delays (seconds).
@@ -59,6 +65,7 @@ final class RetrySchedule
         }
 
         $delaySeconds = min($delaySeconds, self::MAX_DELAY_SECONDS);
+        $jitterSeconds = min($jitterSeconds, self::MAX_JITTER_SECONDS);
 
         // Amplitude ≤ floor(delay/2) keeps wait ≥ ceil(delay/2) for delay > 0.
         $amplitude = min($jitterSeconds, intdiv($delaySeconds, 2));

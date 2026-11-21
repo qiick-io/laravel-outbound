@@ -45,8 +45,9 @@ user-supplied fetch target) must not reach:
 - Transition prefixes that re-embed IPv4 (NAT64, 6to4, Teredo)
 - DNS-rebinding races (pin the checked address with `CURLOPT_CONNECT_TO` on
   every hop; redirects never use transport auto-follow)
-- Signature forgery or replay on inbound Standard Webhooks (exact raw body,
-  integer timestamps, tolerance window, `hash_equals`)
+- Signature forgery on inbound Standard Webhooks (exact raw body, integer
+  timestamps, tolerance window, `hash_equals`); consumers must also dedupe
+  `webhook-id` within the tolerance window
 
 Products that adopt this package must still enforce per-endpoint concurrency
 caps, timeouts, circuit-break / auto-disable after repeated failures, and
@@ -55,7 +56,7 @@ ship auto-disable.
 
 ## Requirements
 
-- PHP ^8.3 with `ext-curl` and `ext-intl`
+- PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
 - guzzlehttp/guzzle ^7.8 or ^8.0
 
@@ -131,6 +132,53 @@ poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factor
 from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
 or use the `transferHandler` constructor seam for unit tests without a real client.
 
+
+### Standard Webhooks
+
+```php
+use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookSecret;
+
+$secret = WebhookSecret::parse('whsec_…'); // 24–64 raw bytes after base64
+$signer = app(StandardWebhookSigner::class);
+$signed = $signer->sign($msgId, $unixSeconds, $rawBody, [$secret]);
+
+$verifier = app(StandardWebhookVerifier::class); // cache-backed webhook-id dedupe
+$verifier->verify(
+    $rawBody,
+    $signed->headers['webhook-id'],
+    $signed->headers['webhook-timestamp'],
+    $signed->headers['webhook-signature'],
+    [$secret],
+    new DateTimeImmutable('now'),
+    // Scope MUST identify the secret or endpoint — never share 'default' across tenants.
+    dedupeScope: 'orders-webhook',
+);
+```
+
+Signing uses exact raw body bytes (`msg_id.timestamp.body`). Multi-secret
+rotation emits space-separated `v1,<base64>` signatures. Verification fails
+closed on non-integer timestamps, skew outside the tolerance window (both
+directions), oversize payloads, too many signatures/secrets, and uses
+`hash_equals` against every candidate (no early return). Timestamp tolerance
+alone is **not** replay protection: after a signature match the verifier
+atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance + 1`
+(covers sender skew; holds through the last accepted second). Cache drivers
+must provide atomic `add` (Redis/Memcached/database); the array store is for
+tests only. Cache write failures fail closed. The service provider binds a
+cache-backed `SeenWebhookIdStore` by default.
+
+`WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
+`outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
+`#[\SensitiveParameter]` and are redacted in `__debugInfo` / string casts.
+Do **not** `serialize` / `var_export` / `(array)` a `WebhookSecret` — persist a
+reference (secret id) or the canonical `whsec_` string from `serialized()`.
+(`var_export` / `(array)` dumps cannot be prevented by magic methods.)
+
+Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
+`@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).
+
 ### Retry schedule and delivery records
 
 ```php
@@ -143,6 +191,7 @@ $delays = match (config('outbound.webhooks.retry_preset')) {
     'short' => RetrySchedule::shortDelays(),
     default => RetrySchedule::standardDelays(),
 };
+// Each delay is measured from the previous attempt, not from the first send.
 $wait = RetrySchedule::withJitter(
     $delays[0],
     (int) config('outbound.webhooks.retry_jitter_seconds'),
@@ -162,12 +211,13 @@ $attempt = new DeliveryAttempt(
 ```
 
 Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
-**75.6 hours** end-to-end); bound `short` (`[10, 30, 60]`) to a migration
-window. Jitter is capped to ±floor(delay/2) so a positive delay is never
-immediate. `$errorMessage` on `DeliveryAttempt` must be sanitised by the
-caller (no URLs/tokens). Products still enforce per-endpoint concurrency,
-timeouts, circuit-break / auto-disable, and honour `Retry-After` / 410 / 429 —
-the package does not ship auto-disable.
+**75.6 hours** end-to-end); each entry is the wait **from the previous attempt**.
+Bound `short` (`[10, 30, 60]`) to a migration window. Jitter is capped
+(configured and ±floor(delay/2)) so a positive delay is never immediate.
+`DeliveryAttempt` strips control characters and caps `errorMessage` length.
+Products still enforce per-endpoint concurrency, timeouts, circuit-break /
+auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
+auto-disable.
 
 ## Configuration
 
@@ -201,7 +251,8 @@ composer analyse   # PHPStan level max
 
 Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
 must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`,
-`RetrySchedule`; more classes as they land). No method-level
+`WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`,
+`CacheSeenWebhookIdStore`, `RetrySchedule`). No method-level
 `@pest-mutate-ignore`.
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;

@@ -14,7 +14,9 @@ $host = $_SERVER['HTTP_HOST'] ?? '';
 
 $query = $_SERVER['QUERY_STRING'] ?? '';
 $record = static function (string $name) use ($captureDir, $method, $path, $body, $host, $query): void {
-    file_put_contents($captureDir.'/'.$name.'.json', json_encode([
+    // Atomic publish BEFORE any response bytes leave the process: write a temp
+    // file then rename so readers never see a partial JSON capture.
+    $payload = json_encode([
         'method' => $method,
         'path' => $path,
         'query' => $query,
@@ -29,7 +31,20 @@ $record = static function (string $name) use ($captureDir, $method, $path, $body
         'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
         'body' => $body,
         'content_length' => $_SERVER['CONTENT_LENGTH'] ?? '',
-    ], JSON_THROW_ON_ERROR));
+    ], JSON_THROW_ON_ERROR);
+
+    $target = $captureDir.'/'.$name.'.json';
+    $tmp = $captureDir.'/'.$name.'.'.bin2hex(random_bytes(4)).'.tmp';
+
+    if (file_put_contents($tmp, $payload) === false) {
+        throw new RuntimeException('Failed to write real-transport capture temp file.');
+    }
+
+    if (! rename($tmp, $target)) {
+        @unlink($tmp);
+
+        throw new RuntimeException('Failed to publish real-transport capture file.');
+    }
 };
 
 if ($path === '/ok') {

@@ -36,12 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standard Webhooks `WebhookSecret`, `WebhookMessage`, `SignedWebhook`,
+  `StandardWebhookSigner`, and `StandardWebhookVerifier`: exact raw-body `v1`
+  HMAC over `id.timestamp.body`, `whsec_` secrets (24–64 bytes), multi-secret
+  space-separated signatures, bidirectional timestamp tolerance, optional
+  atomic scoped `SeenWebhookIdStore::claim()` (cache `add`, TTL through
+  `timestamp + tolerance + 1`, fail closed on store errors; atomic `add`
+  required), payload/signature caps, full-candidate `hash_equals` (no early
+  return), legacy raw-secret parsing off by default, and
+  `#[\SensitiveParameter]` + redaction. `WebhookSecret` refuses
+  serialize/unserialize/var_export. Official vectors from standard-webhooks
+  `@ 3d65b182`. Bound from config via the service provider.
+
 - `RetrySchedule` + `Randomizer` / `SystemRandomizer`, plus `DeliveryStatus` and
-  `DeliveryAttempt`: Standard Webhooks example delays (~75.6h end-to-end),
-  short migration delays, jitter capped to ±floor(delay/2) with delay caps,
-  and an immutable delivery attempt record (HTTP 100–599, nextAttemptAt ≥ at;
-  callers must sanitise errorMessage). Products own concurrency caps and
-  auto-disable.
+  `DeliveryAttempt`: Standard Webhooks example delays (~75.6h end-to-end,
+  each from the previous attempt), short migration delays, capped jitter
+  (±floor(delay/2) and configured jitter cap), and an immutable delivery
+  attempt record (HTTP 100–599, nextAttemptAt ≥ at, errorMessage sanitised).
+  Products own concurrency caps and auto-disable.
 
 - `PinnedHttpClient` + `HttpRequestOptions` + `OutboundRequest` +
   `OutboundHttpLimits`: Laravel HTTP with SSRF authorize, CURLOPT_CONNECT_TO

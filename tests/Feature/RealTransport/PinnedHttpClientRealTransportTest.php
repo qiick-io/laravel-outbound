@@ -41,44 +41,8 @@ final class RealTransportServer
         mkdir($this->captureDir, 0700, true);
 
         $router = dirname(__DIR__, 2).'/Support/real-transport-server.php';
-        $this->port = 18080 + random_int(0, 2000);
-
-        $cmd = sprintf(
-            'REAL_TRANSPORT_CAPTURE_DIR=%s %s -S %s:%d %s',
-            escapeshellarg($this->captureDir),
-            escapeshellarg(PHP_BINARY),
-            $this->pinAddress,
-            $this->port,
-            escapeshellarg($router),
-        );
-
-        $descriptors = [
-            0 => ['pipe', 'r'],
-            1 => ['file', $this->captureDir.'/server.out', 'w'],
-            2 => ['file', $this->captureDir.'/server.err', 'w'],
-        ];
-        $process = proc_open($cmd, $descriptors, $pipes);
-
-        if (! is_resource($process)) {
-            throw new RuntimeException('Failed to start php -S for real-transport tests.');
-        }
-
-        $this->process = $process;
-
-        $deadline = microtime(true) + 5;
-
-        while (microtime(true) < $deadline) {
-            $errno = 0;
-            $errstr = '';
-            $fp = @fsockopen($this->pinAddress, $this->port, $errno, $errstr, 0.2);
-
-            if (is_resource($fp)) {
-                fclose($fp);
-                break;
-            }
-
-            usleep(50_000);
-        }
+        $this->process = $this->startPhpServer($router);
+        $this->waitUntilAcceptingConnections();
 
         $resolver = (new FakeHostResolver)
             ->with('app.test', [$this->pinAddress])
@@ -89,6 +53,121 @@ final class RealTransportServer
             new RemoteUrlGuard($resolver, allowPrivateHosts: true),
             $limits ?? new OutboundHttpLimits,
         );
+    }
+
+    /**
+     * @return resource
+     */
+    private function startPhpServer(string $router)
+    {
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $this->captureDir.'/server.out', 'w'],
+            2 => ['file', $this->captureDir.'/server.err', 'w'],
+        ];
+
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $port = $this->allocateFreePort();
+            $cmd = sprintf(
+                'REAL_TRANSPORT_CAPTURE_DIR=%s %s -S %s:%d %s',
+                escapeshellarg($this->captureDir),
+                escapeshellarg(PHP_BINARY),
+                $this->pinAddress,
+                $port,
+                escapeshellarg($router),
+            );
+
+            $pipes = [];
+            $process = proc_open($cmd, $descriptors, $pipes);
+
+            if (! is_resource($process)) {
+                throw new RuntimeException('Failed to start php -S for real-transport tests.');
+            }
+
+            // Brief pause so a bind failure shows up in proc status / stderr.
+            usleep(30_000);
+            $status = proc_get_status($process);
+            $err = @file_get_contents($this->captureDir.'/server.err') ?: '';
+
+            if (($status['running'] ?? false) === true && ! str_contains($err, 'Address already in use')) {
+                $this->port = $port;
+
+                return $process;
+            }
+
+            proc_terminate($process);
+            proc_close($process);
+            @unlink($this->captureDir.'/server.err');
+            @unlink($this->captureDir.'/server.out');
+        }
+
+        throw new RuntimeException('Failed to bind php -S to a free loopback port.');
+    }
+
+    private function allocateFreePort(): int
+    {
+        $socket = @stream_socket_server('tcp://'.$this->pinAddress.':0', $errno, $errstr);
+
+        if ($socket === false) {
+            throw new RuntimeException('Failed to allocate a free port: '.$errstr);
+        }
+
+        $name = stream_socket_get_name($socket, false);
+        fclose($socket);
+
+        if (! is_string($name) || ! str_contains($name, ':')) {
+            throw new RuntimeException('Failed to read allocated port name.');
+        }
+
+        return (int) substr($name, strrpos($name, ':') + 1);
+    }
+
+    private function waitUntilAcceptingConnections(): void
+    {
+        $deadline = microtime(true) + 10;
+        $lastError = 'timeout';
+
+        while (microtime(true) < $deadline) {
+            $status = proc_get_status($this->process);
+            if (is_array($status) && ($status['running'] ?? false) !== true) {
+                $err = @file_get_contents($this->captureDir.'/server.err') ?: '';
+                throw new RuntimeException('php -S exited before accepting connections: '.$err);
+            }
+
+            $errno = 0;
+            $errstr = '';
+            $fp = @fsockopen($this->pinAddress, $this->port, $errno, $errstr, 0.25);
+
+            if (is_resource($fp)) {
+                fclose($fp);
+
+                // TCP accept is not enough — wait until the router answers HTTP.
+                $probe = @file_get_contents(
+                    'http://'.$this->pinAddress.':'.$this->port.'/ok',
+                    false,
+                    stream_context_create([
+                        'http' => [
+                            'method' => 'GET',
+                            'timeout' => 0.5,
+                            'header' => "Host: app.test\r\n",
+                            'ignore_errors' => true,
+                        ],
+                    ]),
+                );
+
+                if (is_string($probe) && str_contains($probe, 'pinned-ok:')) {
+                    return;
+                }
+
+                $lastError = 'port open but /ok not ready';
+            } else {
+                $lastError = $errstr !== '' ? $errstr : 'errno '.$errno;
+            }
+
+            usleep(50_000);
+        }
+
+        throw new RuntimeException('php -S did not accept connections on '.$this->pinAddress.':'.$this->port.' ('.$lastError.')');
     }
 
     public function stop(): void
@@ -105,15 +184,32 @@ final class RealTransportServer
         @rmdir($this->captureDir);
     }
 
-    public function capture(string $name): ?array
+    /**
+     * Read a hop capture. When $timeoutSeconds > 0, poll until the atomically
+     * published file appears (bounded — no test/CI retries).
+     */
+    public function capture(string $name, float $timeoutSeconds = 2.0): ?array
     {
         $path = $this->captureDir.'/'.$name.'.json';
+        $deadline = microtime(true) + max(0.0, $timeoutSeconds);
 
-        if (! is_file($path)) {
-            return null;
-        }
+        do {
+            if (is_file($path)) {
+                $raw = @file_get_contents($path);
 
-        return json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+                if (is_string($raw) && $raw !== '') {
+                    return json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                }
+            }
+
+            if ($timeoutSeconds <= 0.0 || microtime(true) >= $deadline) {
+                break;
+            }
+
+            usleep(20_000);
+        } while (microtime(true) < $deadline);
+
+        return null;
     }
 
     public function url(string $host, string $path): string
@@ -191,7 +287,7 @@ it('refuses cross-origin 307 on the real wire even with the opt-in', function ()
             ]),
         ))->toThrow(OutboundHttpException::class, 'Cross-origin 307/308 redirect is not allowed.');
 
-        expect($server->capture('steal'))->toBeNull()
+        expect($server->capture('steal', 0.0))->toBeNull()
             ->and($server->capture('redirect-cross')['body'] ?? null)->toBe('super-secret-body');
     } finally {
         $server->stop();
@@ -304,7 +400,7 @@ it('still pins when the shared Http factory has a global handler (Guzzle bypass 
         expect($response->status())->toBe(200)
             ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
             ->and($server->capture('ok'))->not->toBeNull()
-            ->and($server->capture('unchecked'))->toBeNull();
+            ->and($server->capture('unchecked', 0.0))->toBeNull();
     } finally {
         Http::globalOptions([]);
         $server->stop();
@@ -384,7 +480,7 @@ it('still pins when constructed with a poisoned factory global handler', functio
         expect($response->status())->toBe(200)
             ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
             ->and($server->capture('ok'))->not->toBeNull()
-            ->and($server->capture('unchecked'))->toBeNull();
+            ->and($server->capture('unchecked', 0.0))->toBeNull();
     } finally {
         $server->stop();
     }

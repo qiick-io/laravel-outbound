@@ -126,3 +126,110 @@ it('refuses nextAttemptAt before at', function (): void {
         $next,
     ))->toThrow(InvalidArgumentException::class, 'nextAttemptAt must not be before at');
 });
+
+it('strips C0 controls and caps errorMessage length on a byte boundary', function (): void {
+    $long = str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES + 50);
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        "boom\n\tok\x00".$long,
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    expect($attempt->errorMessage)->not->toContain("\n")
+        ->and($attempt->errorMessage)->not->toContain("\t")
+        ->and($attempt->errorMessage)->not->toContain("\0")
+        ->and(strlen((string) $attempt->errorMessage))->toBe(DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES)
+        ->and($attempt->errorMessage)->toStartWith('boomok');
+});
+
+it('caps with mb_strcut so a multi-byte character is never split', function (): void {
+    // Euro sign is 3 bytes in UTF-8; fill so substr would cut mid-character.
+    $euro = "\u{20AC}";
+    $prefix = str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES - 1);
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        $prefix.$euro.$euro,
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    $msg = (string) $attempt->errorMessage;
+    // substr() would leave a dangling euro lead byte (invalid UTF-8); mb_strcut must not.
+    expect(strlen($msg))->toBeLessThanOrEqual(DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES)
+        ->and(mb_check_encoding($msg, 'UTF-8'))->toBeTrue()
+        ->and($msg)->toBe(str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES - 1));
+});
+
+it('strips U+2028 and U+2029 line/paragraph separators', function (): void {
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        "a\u{2028}b\u{2029}c",
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    expect($attempt->errorMessage)->toBe('abc');
+});
+
+it('strips C1 controls U+0080–U+009F', function (): void {
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        "x\u{0085}y\u{009F}z",
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    expect($attempt->errorMessage)->toBe('xyz');
+});
+
+it('strips bidi control characters', function (): void {
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        "a\u{202E}b\u{2066}c\u{2069}d",
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    expect($attempt->errorMessage)->toBe('abcd');
+});
+
+it('scrubs invalid UTF-8 instead of returning an empty string', function (): void {
+    $invalid = "ok\x80\xFFend";
+    $attempt = new DeliveryAttempt(
+        'evt',
+        'type',
+        1,
+        DeliveryStatus::Failed,
+        500,
+        $invalid,
+        new DateTimeImmutable('@1'),
+        null,
+    );
+
+    expect($attempt->errorMessage)->not->toBe('')
+        ->and($attempt->errorMessage)->not->toBeNull()
+        ->and(mb_check_encoding((string) $attempt->errorMessage, 'UTF-8'))->toBeTrue()
+        ->and($attempt->errorMessage)->toContain('ok')
+        ->and($attempt->errorMessage)->toContain('end');
+});

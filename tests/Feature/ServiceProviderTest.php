@@ -6,6 +6,10 @@ use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 
 it('merges the package defaults into the outbound config', function (): void {
     expect(config('outbound'))->toMatchArray([
@@ -43,10 +47,16 @@ it('lets an app publish the config file', function (): void {
     unlink(config_path('outbound.php'));
 });
 
-it('binds HostResolver, RemoteUrlGuard and PinnedHttpClient as singletons', function (): void {
+it('binds HostResolver, RemoteUrlGuard, PinnedHttpClient and webhook signer/verifier as singletons', function (): void {
     expect($this->app->make(HostResolver::class))->toBeInstanceOf(DnsHostResolver::class)
         ->and($this->app->make(RemoteUrlGuard::class))->toBeInstanceOf(RemoteUrlGuard::class)
         ->and($this->app->make(RemoteUrlGuard::class))->toBe($this->app->make(RemoteUrlGuard::class))
         ->and($this->app->make(PinnedHttpClient::class))->toBeInstanceOf(PinnedHttpClient::class)
-        ->and($this->app->make(PinnedHttpClient::class))->toBe($this->app->make(PinnedHttpClient::class));
+        ->and($this->app->make(PinnedHttpClient::class))->toBe($this->app->make(PinnedHttpClient::class))
+        ->and($this->app->make(StandardWebhookSigner::class))->toBeInstanceOf(StandardWebhookSigner::class)
+        ->and($this->app->make(StandardWebhookSigner::class))->toBe($this->app->make(StandardWebhookSigner::class))
+        ->and($this->app->make(StandardWebhookVerifier::class))->toBeInstanceOf(StandardWebhookVerifier::class)
+        ->and($this->app->make(StandardWebhookVerifier::class))->toBe($this->app->make(StandardWebhookVerifier::class))
+        ->and($this->app->make(SeenWebhookIdStore::class))->toBeInstanceOf(CacheSeenWebhookIdStore::class)
+        ->and($this->app->make(SeenWebhookIdStore::class))->toBe($this->app->make(SeenWebhookIdStore::class));
 });
