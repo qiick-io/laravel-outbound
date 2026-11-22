@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: PHP ${{ matrix.php }} Laravel ${{ matrix.laravel }} ${{ matrix.dependency-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        php:
+          - '8.3'
+          - '8.4'
+          - '8.5'
+        laravel:
+          - '12'
+          - '13'
+        dependency-version:
+          - lowest
+          - stable
+        include:
+          - laravel: '12'
+            testbench: '10'
+          - laravel: '13'
+            testbench: '11'
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          extensions: curl, intl
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: |
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^${{ matrix.testbench }}.0"
+          composer require --no-interaction --no-update "illuminate/support:^${{ matrix.laravel }}.0" "illuminate/http:^${{ matrix.laravel }}.0" "illuminate/contracts:^${{ matrix.laravel }}.0"
+          if [ "${{ matrix.dependency-version }}" = "lowest" ]; then
+            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
+          else
+            composer update --no-interaction --prefer-dist --with-all-dependencies
+          fi
+
+      - name: Composer audit
+        run: composer audit
+
+      # Static analysis depends on the tool versions, not on the runtime floor:
+      # with --prefer-lowest, old polyfills redefine core functions without types.
+      - name: Pint
+        if: matrix.dependency-version == 'stable'
+        run: vendor/bin/pint --test
+
+      - name: PHPStan
+        if: matrix.dependency-version == 'stable'
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+
+      # Level max with no baseline: the ratchet fails if a baseline ever appears.
+      - name: Larastan baseline only shrinks
+        run: node scripts/qiick-ratchet.mjs phpstan
+
+      - name: Pest
+        run: vendor/bin/pest
+
+  real-transport:
+    name: Real transport Guzzle ${{ matrix.guzzle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Lowest supported Guzzle 7 line (composer.json ^7.8 || ^8.0).
+          - guzzle: '7.8'
+            prefer: lowest
+          # Current stable Guzzle 8.
+          - guzzle: '8.5'
+            prefer: stable
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          extensions: curl, intl
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: |
+          # Packagist advisories block older Guzzle 7 installs; this job exists
+          # to exercise that line under real curl, so advisory blocking is off here only.
+          composer config audit.block-insecure false
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
+          if [ "${{ matrix.prefer }}" = "lowest" ]; then
+            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
+          else
+            composer update --no-interaction --prefer-dist --with-all-dependencies
+          fi
+          composer show guzzlehttp/guzzle | head -5
+
+      - name: Real-transport Pest
+        run: vendor/bin/pest --group=real-transport
+
+  mutate:
+    name: Mutation (per-class ≥95%)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: pcov
+          extensions: curl, intl
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: |
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer update --no-interaction --prefer-dist --with-all-dependencies
+
+      - name: Pest mutate per class
+        run: bash scripts/mutate-per-class.sh
+
+  # The qiick standards pack (agent files, architecture test) must match app-ui.
+  standards:
+    # qiick-io/app-ui@v0.11.0
+    uses: qiick-io/app-ui/.github/workflows/drift-check.yml@cbb1843eb1f50ef5a38e7e7bdf9b8dbec7b48bed # v0.11.0
+    with:
+      standards: true
+      registry: false
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    # qiick-io/app-ui@v0.11.0
+    uses: qiick-io/app-ui/.github/workflows/pr-title.yml@cbb1843eb1f50ef5a38e7e7bdf9b8dbec7b48bed # v0.11.0
