@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use Qiick\Outbound\Testing\FakeSeenWebhookIdStore;
 use Qiick\Outbound\Tests\Fixtures\StandardWebhooks\OfficialVectors;
+use Qiick\Outbound\Webhooks\DuplicateWebhookIdException;
+use Qiick\Outbound\Webhooks\InvalidWebhookSignatureException;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 use Qiick\Outbound\Webhooks\WebhookSecret;
 
 function swVerifier(
@@ -197,7 +200,7 @@ it('refuses a wrong signature and a v2-only header with the correct digest', fun
         'v1,'.base64_encode(str_repeat('z', 32)),
         [$secret],
         $now,
-    ))->toThrow(WebhookException::class)
+    ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.')
         ->and(fn () => swVerifier()->verify(
             OfficialVectors::SIGN_PAYLOAD,
             OfficialVectors::SIGN_MSG_ID,
@@ -205,7 +208,7 @@ it('refuses a wrong signature and a v2-only header with the correct digest', fun
             'v2,'.$digest,
             [$secret],
             $now,
-        ))->toThrow(WebhookException::class);
+        ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.');
 });
 
 it('refuses malformed signature tokens', function (string $header, string $message): void {
@@ -233,7 +236,16 @@ it('refuses verification when the raw body differs by a single byte', function (
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
-    ))->toThrow(WebhookException::class);
+    ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.');
+});
+
+it('exposes duplicate, store-failure and signature-miss as WebhookException subclasses for BC', function (): void {
+    expect(new DuplicateWebhookIdException('Webhook id has already been processed.'))
+        ->toBeInstanceOf(WebhookException::class)
+        ->and(new WebhookIdStoreFailedException('Webhook id dedupe store failed.'))
+        ->toBeInstanceOf(WebhookException::class)
+        ->and(new InvalidWebhookSignatureException('No matching webhook signature found.'))
+        ->toBeInstanceOf(WebhookException::class);
 });
 
 it('uses hash_equals semantics — a matching signature still wins among decoys', function (): void {
@@ -354,7 +366,7 @@ it('refuses a repeated webhook-id via atomic claim after a successful verify', f
         [$secret],
         $now,
         'endpoint-a',
-    ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
+    ))->toThrow(DuplicateWebhookIdException::class, 'Webhook id has already been processed.');
 });
 
 it('keeps a claimed id until timestamp + tolerance under sender clock skew', function (): void {
@@ -393,7 +405,7 @@ it('keeps a claimed id until timestamp + tolerance under sender clock skew', fun
         [$secret],
         new DateTimeImmutable('@'.($nowUnix + 400)),
         'tenant-1',
-    ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
+    ))->toThrow(DuplicateWebhookIdException::class, 'Webhook id has already been processed.');
 });
 
 it('claims with TTL equal to timestamp + tolerance - now + 1', function (): void {
@@ -465,7 +477,7 @@ it('refuses a replay on the exact second the timestamp window still accepts', fu
             [$secret],
             new DateTimeImmutable('@'.($t0 + 500)),
             'endpoint-boundary',
-        ))->toThrow(WebhookException::class, 'Webhook id has already been processed.');
+        ))->toThrow(DuplicateWebhookIdException::class, 'Webhook id has already been processed.');
 });
 
 it('isolates claims by dedupe scope', function (): void {
@@ -511,7 +523,7 @@ it('fails closed when the seen-id store cannot record a claim', function (): voi
         [$secret],
         $now,
         'endpoint-a',
-    ))->toThrow(WebhookException::class, 'Webhook id dedupe store failed.');
+    ))->toThrow(WebhookIdStoreFailedException::class, 'Webhook id dedupe store failed.');
 });
 
 it('does not claim a webhook-id when signature verification fails', function (): void {
@@ -528,7 +540,7 @@ it('does not claim a webhook-id when signature verification fails', function ():
         [$secret],
         $now,
         'endpoint-a',
-    ))->toThrow(WebhookException::class);
+    ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.');
 
     $verifier->verify(
         OfficialVectors::SIGN_PAYLOAD,

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CacheSeenWebhookIdStore` allowlists atomic cache drivers** (database,
+  redis, memcached, dynamodb, file for single-host) and refuses `storage` and
+  `failover` even when they expose `add()`. Array remains tests-only.
+  Resolving the verifier with a refused store throws
+  `UnsupportedWebhookIdCacheStoreException` immediately.
+- **Dedicated webhook exceptions** for consumers:
+  `DuplicateWebhookIdException`, `WebhookIdStoreFailedException`, and
+  `InvalidWebhookSignatureException` (messages unchanged for BC).
+
 ## [0.1.0] - 2026-11-21
 
 First tagged release of `qiick/laravel-outbound`: SSRF-safe outbound HTTP and

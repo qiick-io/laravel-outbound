@@ -10,6 +10,7 @@ use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
 
 it('merges the package defaults into the outbound config', function (): void {
     expect(config('outbound'))->toMatchArray([
@@ -59,4 +60,13 @@ it('binds HostResolver, RemoteUrlGuard, PinnedHttpClient and webhook signer/veri
         ->and($this->app->make(StandardWebhookVerifier::class))->toBe($this->app->make(StandardWebhookVerifier::class))
         ->and($this->app->make(SeenWebhookIdStore::class))->toBeInstanceOf(CacheSeenWebhookIdStore::class)
         ->and($this->app->make(SeenWebhookIdStore::class))->toBe($this->app->make(SeenWebhookIdStore::class));
+});
+
+it('fails clearly when resolving the verifier with ArrayStore outside testing', function (): void {
+    $this->app->detectEnvironment(fn (): string => 'production');
+    $this->app->forgetInstance(SeenWebhookIdStore::class);
+    $this->app->forgetInstance(StandardWebhookVerifier::class);
+
+    expect(fn () => $this->app->make(StandardWebhookVerifier::class))
+        ->toThrow(UnsupportedWebhookIdCacheStoreException::class, 'refuses ArrayStore outside tests');
 });

@@ -164,10 +164,16 @@ directions), oversize payloads, too many signatures/secrets, and uses
 `hash_equals` against every candidate (no early return). Timestamp tolerance
 alone is **not** replay protection: after a signature match the verifier
 atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance + 1`
-(covers sender skew; holds through the last accepted second). Cache drivers
-must provide atomic `add` (Redis/Memcached/database); the array store is for
-tests only. Cache write failures fail closed. The service provider binds a
-cache-backed `SeenWebhookIdStore` by default.
+(covers sender skew; holds through the last accepted second). The seen-id
+cache allowlist is **database, redis, memcached, dynamodb, and file**
+(file is single-host only). `storage` and `failover` are refused even when
+they expose `add()`. The array store is tests-only. Resolving
+`StandardWebhookVerifier` (or `SeenWebhookIdStore`) with a refused driver
+throws `UnsupportedWebhookIdCacheStoreException` immediately — not a later
+generic 500. Catch `DuplicateWebhookIdException`,
+`WebhookIdStoreFailedException`, and `InvalidWebhookSignatureException`
+instead of string-matching; messages stay stable for BC. The service
+provider binds a cache-backed `SeenWebhookIdStore` by default.
 
 `WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
 `outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use
