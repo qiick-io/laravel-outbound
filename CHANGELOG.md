@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-22
+
+### Upgrade notes
+
+- **Catch typed webhook exceptions** instead of string-matching messages:
+  `DuplicateWebhookIdException`, `WebhookIdStoreFailedException`,
+  `InvalidWebhookSignatureException`. Messages are unchanged for BC.
+- **Webhook id cache drivers:** use database, redis, memcached, dynamodb, or
+  file (single-host only). `storage` and `failover` are refused; array is
+  tests-only. Resolving `StandardWebhookVerifier` with a refused store throws
+  `UnsupportedWebhookIdCacheStoreException` at resolve time.
+
 ### Fixed
 
 - **`CacheSeenWebhookIdStore` allowlists atomic cache drivers** (database,
@@ -101,5 +113,6 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qiick-io/laravel-outbound/releases/tag/v0.1.0
