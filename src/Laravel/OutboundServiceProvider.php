@@ -93,12 +93,25 @@ final class OutboundServiceProvider extends ServiceProvider
         });
     }
 
+    /**
+     * The webhook tables are mandatory, so the package loads its own
+     * migrations unless `outbound.migrations.load` is off; a product that
+     * turns it off publishes them instead (standards review R1).
+     */
     public function boot(): void
     {
+        $migrationsPath = __DIR__.'/../../database/migrations';
+
+        if ($this->app->make(ConfigRepository::class)->get('outbound.migrations.load', true) !== false) {
+            $this->loadMigrationsFrom($migrationsPath);
+        }
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__.'/../../config/outbound.php' => config_path('outbound.php'),
             ], 'outbound-config');
+
+            $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
         }
     }
 

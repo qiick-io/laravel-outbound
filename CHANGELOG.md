@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **New tables.** The provider loads five migrations (`webhook_endpoints`,
+  `webhook_endpoint_secrets`, `webhook_subscriptions`, `webhook_deliveries`,
+  `webhook_delivery_attempts`); run `php artisan migrate`. A product with
+  tables of the same names renames its own. Before `1.0.0` these `create_`
+  migrations may still change: recreate the database after an upgrade.
+- **`DeliveryStatus` has three new cases** (`Pending`, `Exhausted`,
+  `Cancelled`); an exhaustive `match` over it needs the new arms.
+- **New dependency:** `illuminate/database` (already part of every Laravel app).
+
+### Added
+
+- Package migrations and Eloquent models for the five webhook delivery tables
+  (standards review M1, M2, M15), loaded by the provider unless
+  `outbound.migrations.load` is off, and publishable with
+  `vendor:publish --tag=outbound-migrations`.
+- `outbound.webhooks.scope_column` for a product's own scope column, and
+  `outbound.webhooks.users_table` for the `created_by` / `triggered_by` keys.
+- Enums `WebhookEndpointDisabledReasonEnum`, `WebhookDeliveryTriggerEnum`,
+  `WebhookAttemptTriggerEnum` and `WebhookSignatureSchemeEnum`.
+- CI runs the suite on PostgreSQL 17, MySQL 8.4 and MariaDB 10.11 as well as SQLite.
+
+### Changed
+
+- `DeliveryStatus` gains `Pending`, `Exhausted` and `Cancelled` for delivery
+  rows (standards review M7); attempts keep `Delivered`, `Failed`, `Refused`.
+
 ## [0.1.1] - 2026-11-22
 
 ### Upgrade notes

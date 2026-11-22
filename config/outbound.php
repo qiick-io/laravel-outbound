@@ -10,6 +10,17 @@ declare(strict_types=1);
  */
 return [
 
+    'migrations' => [
+
+        /*
+         * Load the package's mandatory migrations (the five webhook tables).
+         * Turn off only after publishing them with
+         * `vendor:publish --tag=outbound-migrations`, so they still run.
+         */
+        'load' => (bool) env('OUTBOUND_MIGRATIONS_LOAD', true),
+
+    ],
+
     'ssrf' => [
 
         /*
@@ -78,6 +89,19 @@ return [
          * secrets. Off by default; products turn it on only during migration.
          */
         'allow_raw_legacy_secret' => (bool) env('OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET', false),
+
+        /*
+         * The product's own scope column on `webhook_endpoints` (for example
+         * `project_id`), added by the product's migration. Null means one
+         * instance-wide scope. Table names are fixed by the package.
+         */
+        'scope_column' => env('OUTBOUND_WEBHOOK_SCOPE_COLUMN'),
+
+        /*
+         * Table that `created_by` and `triggered_by` reference, with
+         * null-on-delete. Null or empty keeps the columns without a foreign key.
+         */
+        'users_table' => env('OUTBOUND_WEBHOOK_USERS_TABLE', 'users'),
 
     ],
 

@@ -57,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           composer require --dev --no-interaction --no-update "orchestra/testbench:^${{ matrix.testbench }}.0"
-          composer require --no-interaction --no-update "illuminate/support:^${{ matrix.laravel }}.0" "illuminate/http:^${{ matrix.laravel }}.0" "illuminate/contracts:^${{ matrix.laravel }}.0"
+          composer require --no-interaction --no-update "illuminate/support:^${{ matrix.laravel }}.0" "illuminate/http:^${{ matrix.laravel }}.0" "illuminate/contracts:^${{ matrix.laravel }}.0" "illuminate/database:^${{ matrix.laravel }}.0"
           if [ "${{ matrix.dependency-version }}" = "lowest" ]; then
             composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
           else
@@ -118,7 +118,7 @@ jobs:
           # to exercise that line under real curl, so advisory blocking is off here only.
           composer config audit.block-insecure false
           composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
-          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0" "illuminate/database:^13.0"
           composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
           if [ "${{ matrix.prefer }}" = "lowest" ]; then
             composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
@@ -151,11 +151,76 @@ jobs:
       - name: Install dependencies
         run: |
           composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
-          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0"
+          composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0" "illuminate/database:^13.0"
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
       - name: Pest mutate per class
         run: bash scripts/mutate-per-class.sh
+
+  # The package ships migrations (1.0 checklist item 6): the suite also runs on
+  # each server engine, not only on in-memory SQLite. Webhook ids and event
+  # types are case-sensitive, and the MySQL family's default collations are not.
+  databases:
+    name: Pest on ${{ matrix.database.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        database:
+          - name: MySQL 8.4
+            connection: mysql
+            image: mysql:8.4
+            port: 3306
+            options: >-
+              -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -e MYSQL_DATABASE=laravel_outbound
+              --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval=5s --health-retries=20
+          - name: MariaDB 10.11
+            connection: mariadb
+            image: mariadb:10.11
+            port: 3306
+            options: >-
+              -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=yes -e MARIADB_DATABASE=laravel_outbound
+              --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-retries=20
+          - name: PostgreSQL 17
+            connection: pgsql
+            image: postgres:17
+            port: 5432
+            options: >-
+              -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=laravel_outbound
+              --health-cmd="pg_isready -U postgres" --health-interval=5s --health-retries=20
+    services:
+      database:
+        image: ${{ matrix.database.image }}
+        ports:
+          - ${{ matrix.database.port }}:${{ matrix.database.port }}
+        options: ${{ matrix.database.options }}
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup PHP
+        # shivammathur/setup-php@2.40.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          extensions: curl, intl, pdo_mysql, pdo_pgsql
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer update --no-interaction --prefer-dist --with-all-dependencies
+
+      - name: Pest
+        env:
+          DB_CONNECTION: ${{ matrix.database.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.database.port }}
+          DB_DATABASE: laravel_outbound
+          DB_USERNAME: ${{ matrix.database.connection == 'pgsql' && 'postgres' || 'root' }}
+          DB_PASSWORD: ''
+        run: vendor/bin/pest --exclude-group=real-transport
 
   # The qiick standards pack (agent files, architecture test) must match app-ui.
   standards:

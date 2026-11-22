@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run pest mutation per security class so each stays >= MUTATE_MIN (default 95).
+# Run pest mutation per class so each stays >= MUTATE_MIN (default 95).
 # Usage: scripts/mutate-per-class.sh [extra pest args...]
 set -euo pipefail
 
@@ -11,8 +11,10 @@ min="${MUTATE_MIN:-95}"
 # every class races php -S ports under parallel mutate workers.
 unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
 pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
+webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Feature/Webhooks}"
 
-classes=(
+# Classes from before the 1.0 completeness work still run with --covered-only.
+covered_only_classes=(
   'Qiick\Outbound\Ssrf\RemoteUrlGuard'
   'Qiick\Outbound\Ssrf\AuthorizedDestination'
   'Qiick\Outbound\Http\PinnedHttpClient'
@@ -23,9 +25,19 @@ classes=(
   'Qiick\Outbound\Retry\RetrySchedule'
 )
 
+# Every class added since: no --covered-only, so every mutated line must be killed.
+webhook_classes=(
+  'Qiick\Outbound\Models\WebhookEndpoint'
+  'Qiick\Outbound\Models\WebhookEndpointSecret'
+  'Qiick\Outbound\Models\WebhookSubscription'
+  'Qiick\Outbound\Models\WebhookDelivery'
+  'Qiick\Outbound\Models\WebhookDeliveryAttempt'
+  'Qiick\Outbound\Models\Concerns\PackageModelTrait'
+)
+
 status=0
 
-for class in "${classes[@]}"; do
+for class in "${covered_only_classes[@]}"; do
   paths="$unit_paths"
   if [[ "$class" == 'Qiick\Outbound\Http\PinnedHttpClient' ]]; then
     paths="$pin_paths"
@@ -34,6 +46,14 @@ for class in "${classes[@]}"; do
   echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
   if ! vendor/bin/pest --mutate --class="${class}" --covered-only --min="${min}" ${paths} "$@"; then
+    status=1
+  fi
+done
+
+for class in "${webhook_classes[@]}"; do
+  echo "==> mutate ${class} (min=${min})"
+  # shellcheck disable=SC2086
+  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${webhook_paths} "$@"; then
     status=1
   fi
 done
