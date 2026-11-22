@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Testing;
 
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
-use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 use RuntimeException;
 
 /**
@@ -39,7 +39,7 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
         if ($this->failNextWrite) {
             $this->failNextWrite = false;
 
-            throw new WebhookException('Webhook id dedupe store failed.', 0, new RuntimeException('forced cache write failure'));
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, new RuntimeException('forced cache write failure'));
         }
 
         $key = hash('sha256', $scope."\0".$webhookId);

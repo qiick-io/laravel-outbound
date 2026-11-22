@@ -91,7 +91,7 @@ final class StandardWebhookVerifier
 
         $candidates = $this->parseSignatureHeader($webhookSignatureHeader);
         if ($candidates === []) {
-            throw new WebhookException('No matching webhook signature found.');
+            throw new InvalidWebhookSignatureException('No matching webhook signature found.');
         }
 
         $expectedSignatures = [];
@@ -109,7 +109,7 @@ final class StandardWebhookVerifier
         }
 
         if (! $matched) {
-            throw new WebhookException('No matching webhook signature found.');
+            throw new InvalidWebhookSignatureException('No matching webhook signature found.');
         }
 
         if ($this->seenIds === null) {
@@ -125,11 +125,11 @@ final class StandardWebhookVerifier
         } catch (WebhookException $e) {
             throw $e;
         } catch (Throwable $e) {
-            throw new WebhookException('Webhook id dedupe store failed.', 0, $e);
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, $e);
         }
 
         if (! $claimed) {
-            throw new WebhookException('Webhook id has already been processed.');
+            throw new DuplicateWebhookIdException('Webhook id has already been processed.');
         }
     }
 
