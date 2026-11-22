@@ -137,59 +137,10 @@ it('refuses the failover store even though it exposes add', function (): void {
 });
 
 it('refuses a non-allowlisted store that still implements add', function (): void {
-    $inner = new class implements \Illuminate\Contracts\Cache\Store
+    // NullStore is outside the allowlist; adding add() must not make it acceptable
+    // (mirrors StorageStore's get-then-put add that method_exists alone would pass).
+    $inner = new class extends NullStore
     {
-        public function get($key): mixed
-        {
-            return null;
-        }
-
-        public function many(array $keys): array
-        {
-            return [];
-        }
-
-        public function put($key, $value, $seconds): bool
-        {
-            return true;
-        }
-
-        public function putMany(array $values, $seconds): bool
-        {
-            return true;
-        }
-
-        public function increment($key, $value = 1): bool|int
-        {
-            return false;
-        }
-
-        public function decrement($key, $value = 1): bool|int
-        {
-            return false;
-        }
-
-        public function forever($key, $value): bool
-        {
-            return true;
-        }
-
-        public function forget($key): bool
-        {
-            return true;
-        }
-
-        public function flush(): bool
-        {
-            return true;
-        }
-
-        public function getPrefix(): string
-        {
-            return '';
-        }
-
-        /** Non-atomic get-then-put stand-in (mirrors StorageStore). */
         public function add($key, $value, $seconds): bool
         {
             if ($this->get($key) !== null) {
