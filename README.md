@@ -30,9 +30,15 @@ One canonical path for:
 - **Standard Webhooks** — symmetric `v1` signing and verification over the
   exact raw body bytes, multi-secret rotation bounds, and pure retry schedules.
 
-Non-goals for v1: delivery tables/migrations, queue job bases / auto-disable
-enforcement (product duty), asymmetric Standard Webhooks (`v2a`), global
-helpers, a hard dependency on `laravel/framework`.
+- **Webhook delivery storage** — the five delivery tables ship as package
+  migrations, so every product stores endpoints, secrets, subscriptions,
+  deliveries and attempts in one shape (see [Webhook tables](#webhook-tables)).
+
+Non-goals for v1: asymmetric Standard Webhooks (`v2a`; its columns are
+reserved), global helpers, a hard dependency on `laravel/framework`. The
+delivery layer the 2026-11-22 standards review made mandatory before 1.0
+(delivery coordinator, Retry-After, auto-disable, redelivery, secret
+lifecycle) lands in the following pull requests.
 
 ## Threat model
 
@@ -221,14 +227,73 @@ Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
 Bound `short` (`[10, 30, 60]`) to a migration window. Jitter is capped
 (configured and ±floor(delay/2)) so a positive delay is never immediate.
 `DeliveryAttempt` strips control characters and caps `errorMessage` length.
-Products still enforce per-endpoint concurrency, timeouts, circuit-break /
-auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
-auto-disable.
+Until the delivery coordinator lands (the next PRs of the 1.0 work), products
+still enforce per-endpoint concurrency, timeouts, circuit-break / auto-disable,
+and honour `Retry-After` / 410 / 429: the tables already hold the columns
+(`failing_since`, `consecutive_failures`, `disabled_reason`), but no package
+code applies the auto-disable policy yet.
+
+## Webhook tables
+
+The package owns five tables with fixed, standard names (standards review
+of 2026-11-22; the names are not configurable):
+
+| Table | One row per |
+| --- | --- |
+| `webhook_endpoints` | destination URL, with its policy overrides and failure streak |
+| `webhook_endpoint_secrets` | signing secret (up to 4 during a rotation), encrypted at rest |
+| `webhook_subscriptions` | endpoint and event type (`*` for every type) |
+| `webhook_deliveries` | endpoint and event, with the retry state and the encrypted body |
+| `webhook_delivery_attempts` | HTTP attempt, append-only |
+
+They are mandatory, so the service provider loads the migrations itself:
+`php artisan migrate` creates them. A product that wants the files in its own
+`database/migrations` publishes them and turns loading off:
+
+```bash
+php artisan vendor:publish --tag=outbound-migrations
+OUTBOUND_MIGRATIONS_LOAD=false
+```
+
+> **Do both or neither.** Publishing with loading still on registers each
+> table twice: `migrate` then fails on the second `create` with "table already
+> exists". Set `OUTBOUND_MIGRATIONS_LOAD=false` in every environment (and in
+> `.env.example`) in the same change that commits the published files.
+
+Eloquent models live in `Qiick\Outbound\Models` (`WebhookEndpoint`,
+`WebhookEndpointSecret`, `WebhookSubscription`, `WebhookDelivery`,
+`WebhookDeliveryAttempt`). Each has a UUID v7 `public_id`, which is its route
+key and the only id that leaves the database; the bigint `id`, foreign keys,
+`secret` and `payload` are hidden from arrays and JSON. `secret` and `payload`
+use Laravel's `encrypted` cast, so rotating `APP_KEY` needs
+`APP_PREVIOUS_KEYS`. `created_by` and `triggered_by` reference
+`outbound.webhooks.users_table` (`users`) with null-on-delete.
+
+**Scope column.** The package defines no tenancy column and no morph. A product
+that scopes endpoints adds its own foreign key to `webhook_endpoints` with its
+own migration, indexed with `is_active`, and names it in
+`outbound.webhooks.scope_column`:
+
+```php
+Schema::table('webhook_endpoints', function (Blueprint $table): void {
+    $table->foreignId('project_id')->nullable()->after('public_id')->constrained()->cascadeOnDelete();
+    $table->index(['project_id', 'is_active']);
+});
+// .env: OUTBOUND_WEBHOOK_SCOPE_COLUMN=project_id
+```
+
+Null (the default) means one instance-wide scope. A product may add other
+columns the same way; the package reads only the scope column.
+
+Before `1.0.0` a schema change edits the package's `create_` migrations
+instead of adding new ones: recreate the database (`migrate:fresh`) after an
+upgrade. From `1.0.0` the migrations are frozen and change only additively.
 
 ## Configuration
 
 | Config key | Env | Default |
 | --- | --- | --- |
+| `outbound.migrations.load` | `OUTBOUND_MIGRATIONS_LOAD` | `true` |
 | `outbound.ssrf.allow_private_hosts` | `OUTBOUND_ALLOW_PRIVATE_HOSTS` | `false` |
 | `outbound.ssrf.https_only` | `OUTBOUND_HTTPS_ONLY` | `false` |
 | `outbound.http.timeout_seconds` | `OUTBOUND_TIMEOUT_SECONDS` | `5` |
@@ -245,6 +310,8 @@ auto-disable.
 | `outbound.webhooks.retry_preset` | `OUTBOUND_WEBHOOK_RETRY_PRESET` | `standard` |
 | `outbound.webhooks.retry_jitter_seconds` | `OUTBOUND_WEBHOOK_RETRY_JITTER` | `30` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
+| `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
+| `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |
 
 ## Development
 
@@ -258,8 +325,13 @@ composer analyse   # PHPStan level max
 Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
 must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`,
 `WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`,
-`CacheSeenWebhookIdStore`, `RetrySchedule`). No method-level
+`CacheSeenWebhookIdStore`, `RetrySchedule`), and every class added for the
+delivery layer, without `--covered-only`. No method-level
 `@pest-mutate-ignore`.
+
+The suite runs on in-memory SQLite by default; CI also runs it on PostgreSQL,
+MySQL and MariaDB. Point it at a server with the usual `DB_*` variables
+(`DB_CONNECTION=pgsql DB_DATABASE=laravel_outbound vendor/bin/pest`).
 
 Tests are deterministic: no live network. DNS and HTTP use injectable fakes;
 clock and randomizer are fixed in tests.

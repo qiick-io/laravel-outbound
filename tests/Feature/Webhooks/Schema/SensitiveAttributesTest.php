@@ -1,0 +1,104 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Eloquent\Model;
+use Qiick\Outbound\Models\WebhookDelivery;
+use Qiick\Outbound\Models\WebhookDeliveryAttempt;
+use Qiick\Outbound\Models\WebhookEndpoint;
+use Qiick\Outbound\Models\WebhookEndpointSecret;
+use Qiick\Outbound\Models\WebhookSubscription;
+use Qiick\Outbound\Webhooks\WebhookSecret;
+
+/*
+ * Mass assignment takes an explicit, minimal allow-list per model. Secret
+ * bytes and the stored body (with its hash) are set only through the models'
+ * dedicated methods, and never leave the model through arrays or JSON.
+ */
+
+/**
+ * @return array<string, array{class-string<Model>, list<string>}>
+ */
+function sensitiveAttributesByModel(): array
+{
+    return [
+        'endpoint secret' => [WebhookEndpointSecret::class, ['secret']],
+        'delivery' => [WebhookDelivery::class, ['payload', 'payload_hash']],
+    ];
+}
+
+it('allows mass assignment of the listed attributes only', function (string $modelClass, array $fillableAttributes): void {
+    /** @var Model $model */
+    $model = new $modelClass;
+
+    expect($model->getFillable())->toBe($fillableAttributes)
+        ->and($model->getGuarded())->toBe(['*'])
+        ->and($model->isFillable('id'))->toBeFalse()
+        ->and($model->isFillable('public_id'))->toBeFalse();
+})->with([
+    'endpoint' => [WebhookEndpoint::class, [
+        'name', 'description', 'url', 'payload_version', 'legacy_profile', 'https_only',
+        'allow_private_hosts', 'timeout_seconds', 'max_concurrency', 'rate_limit_per_minute',
+        'retry_preset', 'max_attempts', 'auto_disable', 'headers', 'metadata', 'created_by',
+    ]],
+    'endpoint secret' => [WebhookEndpointSecret::class, ['metadata']],
+    'subscription' => [WebhookSubscription::class, ['event_type']],
+    'delivery' => [WebhookDelivery::class, [
+        'event_id', 'event_type', 'occurred_at', 'payload_version', 'max_attempts', 'trigger', 'metadata',
+    ]],
+    'attempt' => [WebhookDeliveryAttempt::class, []],
+]);
+
+it('lets the product fill its own scope column on endpoints', function (): void {
+    config()->set('outbound.webhooks.scope_column', 'project_id');
+
+    expect((new WebhookEndpoint)->isFillable('project_id'))->toBeTrue();
+
+    config()->set('outbound.webhooks.scope_column', '');
+
+    expect((new WebhookEndpoint)->getFillable())->not->toContain('');
+});
+
+it('never mass-assigns a sensitive attribute', function (string $modelClass, array $sensitiveAttributes): void {
+    foreach ($sensitiveAttributes as $sensitiveAttribute) {
+        /** @var Model $model */
+        $model = new $modelClass;
+        $model->fill([$sensitiveAttribute => 'whsec_forged']);
+
+        expect($model->isFillable($sensitiveAttribute))->toBeFalse()
+            ->and($model->getAttributes())->not->toHaveKey($sensitiveAttribute);
+    }
+})->with(sensitiveAttributesByModel());
+
+it('never shows a sensitive attribute in arrays or JSON', function (string $modelClass, array $sensitiveAttributes): void {
+    /** @var Model $model */
+    $model = new $modelClass;
+    $model->forceFill(array_fill_keys($sensitiveAttributes, 'sensitive-value'));
+
+    foreach ($sensitiveAttributes as $sensitiveAttribute) {
+        expect($model->toArray())->not->toHaveKey($sensitiveAttribute)
+            ->and(json_decode($model->toJson(), true))->not->toHaveKey($sensitiveAttribute)
+            ->and($model->toJson())->not->toContain('sensitive-value');
+    }
+})->with(sensitiveAttributesByModel());
+
+it('stores a secret only through useSecret, in canonical whsec_ form', function (): void {
+    $secret = WebhookSecret::parseAllowingLegacyRaw(base64_encode(str_repeat('k', 32)), allowRaw: true);
+    $endpointSecret = (new WebhookEndpointSecret)->forceFill(['is_legacy_raw' => true]);
+
+    expect($endpointSecret->useSecret($secret))->toBe($endpointSecret)
+        ->and($endpointSecret->secret)->toBe($secret->serialized())
+        ->and($endpointSecret->is_legacy_raw)->toBeFalse();
+});
+
+it('stores a body only through usePayload, with its SHA-256 hash and byte length', function (): void {
+    $delivery = new WebhookDelivery;
+    $rawBody = '{"type":"invoice.paid","data":{"name":"Zoë"}}';
+
+    expect($delivery->usePayload($rawBody))->toBe($delivery)
+        ->and($delivery->payload)->toBe($rawBody)
+        ->and($delivery->payload_hash)->toBe(hash('sha256', $rawBody))
+        ->and($delivery->payload_bytes)->toBe(strlen($rawBody))
+        ->and($delivery->payload_bytes)->not->toBe(mb_strlen($rawBody))
+        ->and($delivery->isFillable('payload_bytes'))->toBeFalse();
+});

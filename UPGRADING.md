@@ -15,6 +15,28 @@ and the approved design before adopting a commit from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
+## To the next release (webhook tables)
+
+- Run `php artisan migrate`: the package now loads the migrations of five
+  tables (`webhook_endpoints`, `webhook_endpoint_secrets`,
+  `webhook_subscriptions`, `webhook_deliveries`, `webhook_delivery_attempts`).
+  Their names are fixed; an unreleased product with its own tables of the same
+  names drops or renames them and recreates its schema on the package tables.
+- Do not publish the migrations unless you also set
+  `OUTBOUND_MIGRATIONS_LOAD=false` everywhere: with both, `migrate` fails on
+  the second `create` of each table.
+- Mass assignment takes an explicit allow-list per model. Set a secret with
+  `WebhookEndpointSecret::useSecret()` and a body with
+  `WebhookDelivery::usePayload()`; lifecycle and retry columns are written by
+  the package.
+- A product that scopes endpoints adds its scope foreign key to
+  `webhook_endpoints` with its own migration and sets
+  `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").
+- Add the new `DeliveryStatus` cases (`Pending`, `Exhausted`, `Cancelled`) to
+  any exhaustive `match`.
+- Until `1.0.0` the package edits its `create_` migrations instead of adding
+  new ones, so recreate the database after each pre-1.0 upgrade.
+
 ## Deprecation windows (products)
 
 - Externa legacy `X-Externa-*` webhook headers: dual-send with Standard Webhooks

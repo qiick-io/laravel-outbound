@@ -14,6 +14,9 @@ use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
 
 it('merges the package defaults into the outbound config', function (): void {
     expect(config('outbound'))->toMatchArray([
+        'migrations' => [
+            'load' => true,
+        ],
         'ssrf' => [
             'allow_private_hosts' => false,
             'https_only' => false,
@@ -35,6 +38,8 @@ it('merges the package defaults into the outbound config', function (): void {
             'retry_preset' => 'standard',
             'retry_jitter_seconds' => 30,
             'allow_raw_legacy_secret' => false,
+            'scope_column' => null,
+            'users_table' => 'users',
         ],
     ]);
 });
