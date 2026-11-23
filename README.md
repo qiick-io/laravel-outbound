@@ -191,6 +191,43 @@ reference (secret id) or the canonical `whsec_` string from `serialized()`.
 Official vectors: `tests/Fixtures/StandardWebhooks/` (standard-webhooks
 `@ 3d65b1824b6697f05a5a4584e7062bd23512fc8e`).
 
+### Secret rotation
+
+An endpoint signs with its **signing set**: the primary secret plus the
+non-revoked secrets whose `expires_at` is still in the future, primary first,
+at most `outbound.webhooks.max_secrets` (4). `SecretRotator` keeps exactly one
+primary per endpoint, under a row lock on the endpoint:
+
+```php
+use Qiick\Outbound\Webhooks\SecretRotator;
+use Qiick\Outbound\Webhooks\WebhookSecretResolver;
+
+$rotator = app(SecretRotator::class);
+
+$secret = $rotator->issue($endpoint);             // first primary
+$secret = $rotator->rotate($endpoint);            // old primary signs 24 h more
+$secret = $rotator->rotate($endpoint, graceSeconds: 0); // leaked: old key stops now
+$rotator->revoke($oldSecret);                     // a grace secret stops now
+
+$secret->secret; // the whsec_ string: show it once, never again
+
+$signingSet = app(WebhookSecretResolver::class)->signingSetFor($endpoint);
+$signer->sign($msgId, $unixSeconds, $rawBody, $signingSet->secrets());
+$signingSet->secretPublicIds(); // record which secrets signed, never their bytes
+```
+
+`max_secrets` is a hard limit of 1–4: a larger value is refused when the
+application boots. An issue or a rotation that would push the set past it is
+refused: revoke an old secret first. The primary cannot be revoked; rotate
+with a zero grace period instead. A deleted endpoint gets no new secret, but
+its old secrets can still be revoked. Grace periods are measured in UTC: the
+package models store and read every date as UTC whatever `app.timezone` is,
+so a daylight-saving change never stretches or cuts one. The resolver fails closed when an endpoint has no active
+primary or more than one. Only `v1` rows sign; `v2a` rows are reserved. A row
+flagged `is_legacy_raw` may hold a non-`whsec_` secret only while
+`outbound.webhooks.allow_raw_legacy_secret` is on. A product that keeps its
+secrets elsewhere binds its own `WebhookSecretResolver`.
+
 ### Retry schedule and delivery records
 
 ```php
@@ -307,6 +344,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.max_payload_bytes` | `OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES` | `1048576` |
 | `outbound.webhooks.max_signatures` | `OUTBOUND_WEBHOOK_MAX_SIGNATURES` | `8` |
 | `outbound.webhooks.max_secrets` | `OUTBOUND_WEBHOOK_MAX_SECRETS` | `4` |
+| `outbound.webhooks.secret_rotation_grace_seconds` | `OUTBOUND_WEBHOOK_SECRET_ROTATION_GRACE_SECONDS` | `86400` |
 | `outbound.webhooks.retry_preset` | `OUTBOUND_WEBHOOK_RETRY_PRESET` | `standard` |
 | `outbound.webhooks.retry_jitter_seconds` | `OUTBOUND_WEBHOOK_RETRY_JITTER` | `30` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |

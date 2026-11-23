@@ -15,9 +15,13 @@ use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver;
+use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookSecretResolver;
 
 /**
  * Auto-discovered Laravel service provider for qiick/laravel-outbound.
@@ -91,15 +95,36 @@ final class OutboundServiceProvider extends ServiceProvider
                 seenIds: $app->make(SeenWebhookIdStore::class),
             );
         });
+
+        $this->app->singleton(WebhookSecretResolver::class, function (Application $app): WebhookSecretResolver {
+            return new DatabaseWebhookSecretResolver(
+                allowRawLegacySecret: $app->make(ConfigRepository::class)->get('outbound.webhooks.allow_raw_legacy_secret', false) === true,
+            );
+        });
+
+        $this->app->singleton(SecretRotator::class, function (Application $app): SecretRotator {
+            $config = $app->make(ConfigRepository::class);
+
+            return new SecretRotator(
+                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets', 4),
+                defaultGraceSeconds: self::configInt($config, 'outbound.webhooks.secret_rotation_grace_seconds', 86_400),
+            );
+        });
     }
 
     /**
      * The webhook tables are mandatory, so the package loads its own
      * migrations unless `outbound.migrations.load` is off; a product that
      * turns it off publishes them instead (standards review R1).
+     *
+     * @throws WebhookException when `outbound.webhooks.max_secrets` is outside
+     *                          1–4: the fixed limit is refused at boot, not at
+     *                          the first rotation
      */
     public function boot(): void
     {
+        $this->app->make(SecretRotator::class);
+
         $migrationsPath = __DIR__.'/../../database/migrations';
 
         if ($this->app->make(ConfigRepository::class)->get('outbound.migrations.load', true) !== false) {

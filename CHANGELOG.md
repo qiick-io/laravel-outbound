@@ -34,9 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its hash and length only with `WebhookDelivery::usePayload()`; both
   stay encrypted at rest and hidden from arrays and JSON, like `payload_hash`.
 - CI runs the suite on PostgreSQL 17, MySQL 8.4 and MariaDB 10.11 as well as SQLite.
+- Secret lifecycle (standards review M3): the `WebhookSecretResolver` contract
+  with the default `DatabaseWebhookSecretResolver`, the `WebhookSigningSet`
+  value object, `SecretRotator` (issue, rotate with a grace period, revoke; at
+  most `max_secrets` signing secrets, one primary per endpoint), the
+  `WebhookEndpointSecret::signingAt()` scope, and
+  `outbound.webhooks.secret_rotation_grace_seconds` (24 h). `max_secrets`
+  outside 1–4 is refused at boot.
 
 ### Changed
 
+- The package models store and read every date as UTC, whatever
+  `app.timezone` is, so grace periods and retries do not move at a
+  daylight-saving change.
 - `DeliveryStatus` gains `Pending`, `Exhausted` and `Cancelled` for delivery
   rows (standards review M7); attempts keep `Delivered`, `Failed`, `Refused`.
 

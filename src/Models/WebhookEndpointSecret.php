@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Models;
 
 use Carbon\CarbonImmutable;
+use DateTimeInterface;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
@@ -73,6 +75,25 @@ class WebhookEndpointSecret extends Model
     protected function fillableAttributes(): array
     {
         return ['metadata'];
+    }
+
+    /**
+     * Secrets that sign at `$now`: `v1`, not revoked, and either the primary
+     * or still inside their grace period (`expires_at` after `$now`). Only
+     * `v1` signs in 1.0; `v2a` rows are reserved (review M15).
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeSigningAt(Builder $query, DateTimeInterface $now): Builder
+    {
+        return $query
+            ->where('scheme', WebhookSignatureSchemeEnum::V1->value)
+            ->whereNull('revoked_at')
+            ->where(function (Builder $signingQuery) use ($now): void {
+                // Bindings are formatted in the date's own zone; the column holds UTC.
+                $signingQuery->where('is_primary', true)->orWhere('expires_at', '>', CarbonImmutable::instance($now)->utc());
+            });
     }
 
     /**
