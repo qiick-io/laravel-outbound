@@ -92,6 +92,30 @@ return [
         'retry_jitter_seconds' => (int) env('OUTBOUND_WEBHOOK_RETRY_JITTER', 30),
 
         /*
+         * Timeout of one webhook POST. Standard Webhooks "Request timeouts"
+         * suggests 15-30 s; other outbound calls keep `http.timeout_seconds`
+         * (5 s). An endpoint may override it, never above
+         * `http.max_timeout_seconds`, and the chain deadline still applies.
+         * The product's scheduler or job timeout must be longer.
+         */
+        'timeout_seconds' => (int) env('OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 15),
+
+        /*
+         * Honour Retry-After on 429, 502, 503 and 504: the retry never comes
+         * sooner. A Retry-After above the cap stops automatic retries
+         * (`exhausted`, `retry_after_exceeds_cap`) instead of being shortened.
+         */
+        'respect_retry_after' => (bool) env('OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER', true),
+
+        'retry_after_cap_seconds' => (int) env('OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS', 86_400),
+
+        /*
+         * Attempts in flight at once per endpoint, unless the endpoint sets
+         * `max_concurrency`.
+         */
+        'default_max_concurrency' => (int) env('OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY', 2),
+
+        /*
          * Allow WebhookSecret::parseAllowingLegacyRaw to accept non-whsec_
          * secrets. Off by default; products turn it on only during migration.
          */

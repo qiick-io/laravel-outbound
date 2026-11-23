@@ -1,0 +1,687 @@
+<?php
+
+declare(strict_types=1);
+
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Support\Facades\Schema;
+use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
+use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
+use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
+use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Http\OutboundHttpLimits;
+use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Models\WebhookDelivery;
+use Qiick\Outbound\Models\WebhookDeliveryAttempt;
+use Qiick\Outbound\Models\WebhookEndpoint;
+use Qiick\Outbound\Retry\RetryPolicy;
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Testing\FakeHostResolver;
+use Qiick\Outbound\Tests\Support\RecordingTransferHandler;
+use Qiick\Outbound\Webhooks\SecretRotator;
+use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookMessage;
+use Qiick\Outbound\Webhooks\WebhookSecret;
+use Qiick\Outbound\Webhooks\WebhookSecretResolver;
+
+/*
+ * Standards review M9 (the coordinator over the package tables), R4/R9 (retry
+ * order and classification) and S2 (15 s webhook timeout). Every request goes
+ * through the package's PinnedHttpClient; the recording transfer handler sits
+ * innermost, under the pin, so it sees what really leaves.
+ */
+
+beforeEach(function (): void {
+    CarbonImmutable::setTestNow('2026-11-23 10:00:00');
+    config()->set('outbound.webhooks.retry_jitter_seconds', 0);
+    $this->transfer = new RecordingTransferHandler;
+    $this->hostResolver = new FakeHostResolver(answers: [
+        'hooks.example.com' => ['93.184.216.34'],
+        'other.example.com' => ['93.184.216.35'],
+        'internal.example.com' => ['127.0.0.1'],
+    ]);
+    // A fixed clock keeps the chain deadline (30 s) whole for the timeout assertions.
+    $this->clock = static fn (): float => 1_000.0;
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        $this->transfer,
+    ));
+});
+
+afterEach(function (): void {
+    CarbonImmutable::setTestNow();
+});
+
+/**
+ * @param  array<string, mixed>  $attributes
+ * @param  list<string>  $eventTypes
+ */
+function deliveryEndpoint(array $attributes = [], array $eventTypes = ['invoice.paid'], bool $hasSecret = true): WebhookEndpoint
+{
+    $endpoint = (new WebhookEndpoint)->forceFill(['url' => 'https://hooks.example.com/receive', ...$attributes]);
+    $endpoint->save();
+
+    foreach ($eventTypes as $eventType) {
+        $endpoint->subscriptions()->create(['event_type' => $eventType]);
+    }
+
+    if ($hasSecret) {
+        app(SecretRotator::class)->issue($endpoint);
+    }
+
+    return $endpoint;
+}
+
+function invoicePaidMessage(string $messageId = 'msg_2KWPBgLlAfxdpx2AI54pPJ85f4W'): WebhookMessage
+{
+    return new WebhookMessage(
+        id: $messageId,
+        type: 'invoice.paid',
+        timestamp: new DateTimeImmutable('2026-11-23 09:59:00', new DateTimeZone('UTC')),
+        data: ['invoice' => 'inv_1', 'amount' => 4200],
+    );
+}
+
+function coordinator(): WebhookDeliveryCoordinator
+{
+    return app(WebhookDeliveryCoordinator::class);
+}
+
+function onlyDelivery(): WebhookDelivery
+{
+    return WebhookDelivery::query()->sole();
+}
+
+it('creates one pending delivery per active endpoint subscribed to the type or to every type', function (): void {
+    $exact = deliveryEndpoint();
+    $wildcard = deliveryEndpoint(eventTypes: ['*']);
+    deliveryEndpoint(eventTypes: ['invoice.voided']);
+    deliveryEndpoint(['is_active' => false]);
+    deliveryEndpoint()->delete();
+    $message = invoicePaidMessage();
+
+    $deliveries = coordinator()->dispatch($message);
+    $delivery = $deliveries->firstWhere('endpoint_id', $exact->id);
+
+    expect($deliveries->pluck('endpoint_id')->sort()->values()->all())->toBe([$exact->id, $wildcard->id])
+        ->and(WebhookDelivery::query()->count())->toBe(2)
+        ->and($delivery?->event_id)->toBe('msg_2KWPBgLlAfxdpx2AI54pPJ85f4W')
+        ->and($delivery?->event_type)->toBe('invoice.paid')
+        ->and($delivery?->occurred_at?->toDateTimeString())->toBe('2026-11-23 09:59:00')
+        ->and($delivery?->payload_version)->toBe('1')
+        ->and($delivery?->payload)->toBe($message->toPayloadJson())
+        ->and($delivery?->payload_hash)->toBe(hash('sha256', $message->toPayloadJson()))
+        ->and($delivery?->status)->toBe(DeliveryStatus::Pending)
+        ->and($delivery?->max_attempts)->toBe(10)
+        ->and($delivery?->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($delivery?->fresh()?->status)->toBe(DeliveryStatus::Pending);
+});
+
+it('snapshots max attempts from the endpoint, its preset, or the configured preset', function (): void {
+    config()->set('outbound.webhooks.retry_preset', 'short');
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    $configured = deliveryEndpoint();
+    $standard = deliveryEndpoint(['retry_preset' => 'standard', 'payload_version' => '2']);
+    $explicit = deliveryEndpoint(['max_attempts' => 3]);
+    $unknownPreset = deliveryEndpoint(['retry_preset' => 'nightly']);
+
+    coordinator()->dispatch(invoicePaidMessage());
+    $deliveryOf = fn (WebhookEndpoint $endpoint): WebhookDelivery => WebhookDelivery::query()->where('endpoint_id', $endpoint->id)->sole();
+
+    expect($deliveryOf($configured)->max_attempts)->toBe(4)
+        ->and($deliveryOf($standard)->max_attempts)->toBe(10)
+        ->and($deliveryOf($standard)->payload_version)->toBe('2')
+        ->and($deliveryOf($explicit)->max_attempts)->toBe(3)
+        ->and($deliveryOf($unknownPreset)->max_attempts)->toBe(4);
+});
+
+it('dispatches an event once per endpoint, even when asked twice', function (): void {
+    deliveryEndpoint();
+
+    $first = coordinator()->dispatch(invoicePaidMessage());
+    $second = coordinator()->dispatch(invoicePaidMessage());
+
+    expect($first)->toHaveCount(1)
+        ->and($second)->toHaveCount(0)
+        ->and(WebhookDelivery::query()->count())->toBe(1);
+});
+
+it('fans out only to the given scope when the product names a scope column', function (): void {
+    Schema::table('webhook_endpoints', function (Blueprint $table): void {
+        $table->string('project_id')->nullable();
+    });
+    config()->set('outbound.webhooks.scope_column', 'project_id');
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    $inScope = deliveryEndpoint(['project_id' => 'p1']);
+    deliveryEndpoint(['project_id' => 'p2']);
+    $instanceLevel = deliveryEndpoint();
+
+    expect(coordinator()->dispatch(invoicePaidMessage('msg_a'), 'p1')->pluck('endpoint_id')->all())->toBe([$inScope->id])
+        ->and(coordinator()->dispatch(invoicePaidMessage('msg_b'))->pluck('endpoint_id')->all())->toBe([$instanceLevel->id]);
+});
+
+it('refuses a scope when no scope column is configured, so a product never believes it scoped', function (): void {
+    deliveryEndpoint();
+
+    coordinator()->dispatch(invoicePaidMessage(), 'p1');
+})->throws(InvalidArgumentException::class, 'A webhook scope needs outbound.webhooks.scope_column.');
+
+it('signs the stored body with every signing secret and posts it through the pinned client', function (): void {
+    $endpoint = deliveryEndpoint(['headers' => [
+        'X-Tenant' => 'acme',
+        'Webhook-Id' => 'msg_forged',
+        'WEBHOOK-TIMESTAMP' => '1',
+        'Webhook-Signature' => 'forged',
+        'content-type' => 'text/plain',
+    ]]);
+    $oldSecret = $endpoint->secrets()->sole();
+    $newSecret = app(SecretRotator::class)->rotate($endpoint);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    expect(coordinator()->work(50))->toBe(1);
+
+    $request = $this->transfer->requests[0];
+    $rawBody = (string) $request->getBody();
+    $verify = fn (string $secret) => app(StandardWebhookVerifier::class)->verify(
+        $rawBody,
+        $request->getHeaderLine('webhook-id'),
+        $request->getHeaderLine('webhook-timestamp'),
+        $request->getHeaderLine('webhook-signature'),
+        [WebhookSecret::parse($secret)],
+        new DateTimeImmutable('2026-11-23 10:00:00'),
+        dedupeScope: 'test-'.$secret,
+    );
+
+    expect($request->getMethod())->toBe('POST')
+        ->and((string) $request->getUri())->toBe('https://hooks.example.com/receive')
+        ->and($rawBody)->toBe(invoicePaidMessage()->toPayloadJson())
+        ->and($request->getHeaderLine('webhook-id'))->toBe('msg_2KWPBgLlAfxdpx2AI54pPJ85f4W')
+        ->and($request->getHeaderLine('webhook-timestamp'))->toBe('1795428000')
+        ->and($request->getHeader('webhook-id'))->toHaveCount(1)
+        ->and($request->getHeader('webhook-timestamp'))->toHaveCount(1)
+        ->and($request->getHeader('webhook-signature'))->toHaveCount(1)
+        ->and($request->getHeaderLine('content-type'))->toBe('application/json')
+        ->and($request->getHeaderLine('x-tenant'))->toBe('acme')
+        ->and($this->transfer->transportOptions[0]['curl'][CURLOPT_CONNECT_TO])->toBe(['::93.184.216.34:443'])
+        ->and($this->transfer->transportOptions[0]['allow_redirects'])->toBeFalse()
+        ->and(fn () => $verify((string) $oldSecret->secret))->not->toThrow(Throwable::class)
+        ->and(fn () => $verify((string) $newSecret->secret))->not->toThrow(Throwable::class);
+});
+
+it('records a delivered attempt and resets the endpoint failure streak', function (): void {
+    $endpoint = deliveryEndpoint();
+    $endpoint->forceFill(['consecutive_failures' => 4, 'failing_since' => '2026-11-22 10:00:00', 'last_failure_at' => '2026-11-23 09:00:00'])->save();
+    $this->transfer->respond(204, [
+        'Content-Type' => 'text/plain',
+        'Retry-After' => '30',
+        'X-Request-Id' => 'req-'.str_repeat('r', 76),
+        'Date' => 'Mon, 23 Nov 2026 10:00:00 GMT',
+        'Set-Cookie' => 'session=secret',
+        'X-Internal' => 'nope',
+    ], 'thanks');
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $delivery = onlyDelivery();
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+    $endpoint->refresh();
+
+    expect($delivery->status)->toBe(DeliveryStatus::Delivered)
+        ->and($delivery->attempts_count)->toBe(1)
+        ->and($delivery->delivered_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($delivery->last_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($delivery->last_http_status)->toBe(204)
+        ->and($delivery->last_error)->toBeNull()
+        ->and($delivery->next_attempt_at)->toBeNull()
+        ->and($delivery->claimed_until)->toBeNull()
+        ->and($attempt->attempt)->toBe(1)
+        ->and($attempt->trigger)->toBe(WebhookAttemptTriggerEnum::Schedule)
+        ->and($attempt->status)->toBe(WebhookAttemptStatusEnum::Delivered)
+        ->and($attempt->http_status)->toBe(204)
+        ->and($attempt->error_code)->toBeNull()
+        ->and($attempt->webhook_timestamp)->toBe(1_795_428_000)
+        ->and($attempt->signature_schemes)->toBe('v1')
+        ->and($attempt->secret_public_ids)->toBe([$endpoint->secrets()->sole()->public_id])
+        ->and($attempt->retry_after_seconds)->toBe(30)
+        // toEqual: MySQL's JSON type reorders object keys.
+        ->and($attempt->response_headers)->toEqual([
+            'content-type' => 'text/plain',
+            'retry-after' => '30',
+            'x-request-id' => 'req-'.str_repeat('r', 76),
+            'date' => 'Mon, 23 Nov 2026 10:00:00 GMT',
+        ])
+        ->and($attempt->request_id)->toBe('req-'.str_repeat('r', 60))
+        ->and($attempt->response_bytes)->toBe(6)
+        ->and($attempt->response_excerpt)->toBeNull()
+        ->and($attempt->duration_ms)->toBeGreaterThanOrEqual(0)
+        ->and($attempt->attempted_at->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($attempt->next_attempt_at)->toBeNull()
+        ->and($endpoint->consecutive_failures)->toBe(0)
+        ->and($endpoint->failing_since)->toBeNull()
+        ->and($endpoint->last_success_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($endpoint->last_failure_at?->toDateTimeString())->toBe('2026-11-23 09:00:00');
+});
+
+it('schedules a failed attempt on the Standard Webhooks delays and counts the failure streak', function (): void {
+    $endpoint = deliveryEndpoint();
+    $this->transfer->respond(500)->respond(500);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $afterFirst = onlyDelivery();
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+    coordinator()->work(50);
+    $afterSecond = onlyDelivery();
+    $attempts = WebhookDeliveryAttempt::query()->orderBy('attempt')->get();
+    $endpoint->refresh();
+
+    expect($afterFirst->status)->toBe(DeliveryStatus::Pending)
+        ->and($afterFirst->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($afterFirst->last_http_status)->toBe(500)
+        ->and($afterFirst->last_error)->toBe('HTTP 500')
+        ->and($afterSecond->attempts_count)->toBe(2)
+        ->and($afterSecond->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:05:05')
+        ->and($attempts->pluck('attempt')->all())->toBe([1, 2])
+        ->and($attempts[0]->status)->toBe(WebhookAttemptStatusEnum::Failed)
+        ->and($attempts[0]->error_code)->toBe('http_status')
+        ->and($attempts[0]->error_message)->toBe('HTTP 500')
+        ->and($attempts[0]->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($endpoint->consecutive_failures)->toBe(2)
+        ->and($endpoint->failing_since?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($endpoint->last_failure_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($endpoint->last_success_at)->toBeNull();
+});
+
+it('does not send a delivery before it is due', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(500);
+    coordinator()->dispatch(invoicePaidMessage());
+    coordinator()->work(50);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:04');
+
+    expect(coordinator()->work(50))->toBe(0)
+        ->and($this->transfer->requests)->toHaveCount(1);
+});
+
+it('waits at least the Retry-After of a 503', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(503, ['Retry-After' => '120']);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:02:00')
+        ->and(WebhookDeliveryAttempt::query()->sole()->retry_after_seconds)->toBe(120);
+});
+
+it('stops automatic retries when Retry-After exceeds the cap, and on 410 Gone', function (int $httpStatus, array $headers, WebhookExhaustedReasonEnum $reason, string $errorCode): void {
+    config()->set('outbound.webhooks.retry_after_cap_seconds', 3600);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    deliveryEndpoint();
+    $this->transfer->respond($httpStatus, $headers);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $delivery = onlyDelivery();
+
+    expect($delivery->status)->toBe(DeliveryStatus::Exhausted)
+        ->and($delivery->exhausted_reason)->toBe($reason)
+        ->and($delivery->next_attempt_at)->toBeNull()
+        ->and($delivery->claimed_until)->toBeNull()
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($errorCode);
+})->with([
+    'Retry-After above the cap' => [429, ['Retry-After' => '3601'], WebhookExhaustedReasonEnum::RetryAfterExceedsCap, 'http_status'],
+    '410 Gone' => [410, [], WebhookExhaustedReasonEnum::Gone, 'gone'],
+]);
+
+it('stops after the last attempt', function (): void {
+    deliveryEndpoint(['max_attempts' => 2]);
+    $this->transfer->respond(500)->respond(500);
+    coordinator()->dispatch(invoicePaidMessage());
+    coordinator()->work(50);
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->status)->toBe(DeliveryStatus::Exhausted)
+        ->and(onlyDelivery()->exhausted_reason)->toBe(WebhookExhaustedReasonEnum::MaxAttempts)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(2);
+});
+
+it('never follows a redirect: a 3xx is a failure', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(302, ['Location' => 'https://other.example.com/']);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($this->transfer->requests)->toHaveCount(1)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Pending)
+        ->and(WebhookDeliveryAttempt::query()->sole()->http_status)->toBe(302);
+});
+
+it('records a connection error as a failure without an HTTP status', function (): void {
+    deliveryEndpoint();
+    $this->transfer->failToConnect();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($attempt->status)->toBe(WebhookAttemptStatusEnum::Failed)
+        ->and($attempt->http_status)->toBeNull()
+        ->and($attempt->error_code)->toBe('transport')
+        ->and($attempt->error_message)->toBe('Outbound request failed: connection error.')
+        ->and(onlyDelivery()->last_http_status)->toBeNull()
+        ->and(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05');
+});
+
+it('refuses an attempt the guard or the signer stops, sends nothing, and retries it on the schedule', function (array $endpointAttributes, bool $hasSecret, string $errorCode, string $errorMessage): void {
+    $endpoint = deliveryEndpoint($endpointAttributes, hasSecret: $hasSecret);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($this->transfer->requests)->toBe([])
+        ->and($attempt->status)->toBe(WebhookAttemptStatusEnum::Refused)
+        ->and($attempt->error_code)->toBe($errorCode)
+        ->and($attempt->error_message)->toBe($errorMessage)
+        ->and($attempt->secret_public_ids)->toBeNull()
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Pending)
+        ->and(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($endpoint->refresh()->consecutive_failures)->toBe(1);
+})->with([
+    'private address' => [['url' => 'https://internal.example.com/hook'], true, 'ssrf_refused', 'Host resolves to a disallowed address.'],
+    'no signing secret' => [[], false, 'signing', 'Webhook endpoint has no active primary signing secret.'],
+    'refused header' => [['headers' => ['Host' => 'evil.example.com']], true, 'request_refused', 'Outbound request must not set Host or routing headers.'],
+]);
+
+it('refuses an attempt whose body has been pruned', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    onlyDelivery()->forceFill(['payload' => null])->save();
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('signing')
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_message)->toBe('Webhook delivery body has been pruned.');
+});
+
+it('posts with a 15 s timeout, an endpoint override, and never above the configured maximum', function (?int $endpointTimeout, int $expectedTimeout): void {
+    deliveryEndpoint(['timeout_seconds' => $endpointTimeout]);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($this->transfer->transportOptions[0]['timeout'])->toBe($expectedTimeout)
+        ->and($this->transfer->transportOptions[0]['connect_timeout'])->toBe(3);
+})->with([
+    'webhook default' => [null, 15],
+    'endpoint override' => [20, 20],
+    'endpoint above the 60 s maximum, then bounded by the 30 s chain deadline' => [120, 30],
+    'endpoint at 45 s, bounded by the 30 s chain deadline' => [45, 30],
+]);
+
+it('applies the endpoint https and private-host overrides to the guard', function (): void {
+    deliveryEndpoint(['url' => 'http://hooks.example.com/plain', 'https_only' => true]);
+    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => true]);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $errorCodes = WebhookDeliveryAttempt::query()->orderBy('id')->pluck('error_code')->all();
+
+    expect($errorCodes)->toBe(['ssrf_refused', null])
+        ->and($this->transfer->requests)->toHaveCount(1)
+        ->and((string) $this->transfer->requests[0]->getUri())->toBe('https://internal.example.com/hook');
+});
+
+it('keeps each endpoint within its concurrency, counting deliveries other workers hold', function (): void {
+    $single = deliveryEndpoint(['max_concurrency' => 1]);
+    $default = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    foreach (['msg_1', 'msg_2', 'msg_3'] as $messageId) {
+        coordinator()->dispatch(invoicePaidMessage($messageId));
+    }
+
+    expect(coordinator()->work(50))->toBe(3)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $single->id)->where('status', 'delivered')->count())->toBe(1)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $default->id)->where('status', 'delivered')->count())->toBe(2);
+
+    WebhookDelivery::query()->where('endpoint_id', $single->id)->where('status', 'pending')->limit(1)->update(['claimed_until' => '2026-11-23 10:01:00']);
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $single->id)->where('status', 'pending')->count())->toBe(2);
+});
+
+it('takes a delivery back once a crashed worker\'s lease expires', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    onlyDelivery()->forceFill(['claimed_until' => '2026-11-23 10:01:30'])->save();
+
+    expect(coordinator()->work(50))->toBe(0);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:01:30');
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('holds a lease of the chain deadline plus a minute while it sends', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $leaseSeenBySender = null;
+    $this->transfer->respond(200);
+    $recordLease = function () use (&$leaseSeenBySender): void {
+        $leaseSeenBySender = WebhookDelivery::query()->sole()->claimed_until?->toDateTimeString();
+    };
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use ($recordLease) {
+            $recordLease();
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    coordinator()->work(50);
+
+    expect($leaseSeenBySender)->toBe('2026-11-23 10:01:30');
+});
+
+it('claims at most the given number of due deliveries, oldest first', function (): void {
+    deliveryEndpoint(['max_concurrency' => 10]);
+    coordinator()->dispatch(invoicePaidMessage('msg_now'));
+    coordinator()->dispatch(invoicePaidMessage('msg_late'));
+    WebhookDelivery::query()->where('event_id', 'msg_late')->update(['next_attempt_at' => '2026-11-23 09:58:00']);
+
+    expect(coordinator()->work(limit: 1))->toBe(1)
+        ->and(WebhookDelivery::query()->where('event_id', 'msg_late')->sole()->status)->toBe(DeliveryStatus::Delivered)
+        ->and(WebhookDelivery::query()->where('event_id', 'msg_now')->sole()->status)->toBe(DeliveryStatus::Pending);
+});
+
+it('skips deliveries of endpoints that are disabled or deleted, and settled deliveries', function (): void {
+    $disabled = deliveryEndpoint();
+    $deleted = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    coordinator()->dispatch(invoicePaidMessage());
+    $disabled->forceFill(['is_active' => false])->save();
+    $deleted->delete();
+
+    expect(coordinator()->work(50))->toBe(0);
+
+    $delivered = deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage('msg_settled'));
+    WebhookDelivery::query()->where('endpoint_id', $delivered->id)->update(['status' => 'delivered']);
+
+    expect(coordinator()->work(50))->toBe(0)
+        ->and($this->transfer->requests)->toBe([]);
+});
+
+it('works through due deliveries from the outbound:webhooks:work command', function (): void {
+    deliveryEndpoint(['max_concurrency' => 5]);
+    coordinator()->dispatch(invoicePaidMessage('msg_1'));
+    coordinator()->dispatch(invoicePaidMessage('msg_2'));
+
+    $this->artisan('outbound:webhooks:work', ['--limit' => 1])
+        ->expectsOutput('Sent 1 webhook delivery attempt(s).')
+        ->assertSuccessful();
+    $this->artisan('outbound:webhooks:work')
+        ->expectsOutput('Sent 1 webhook delivery attempt(s).')
+        ->assertSuccessful();
+});
+
+it('refuses a limit below one', function (): void {
+    $this->artisan('outbound:webhooks:work', ['--limit' => 0])
+        ->expectsOutput('The --limit option must be a positive integer.')
+        ->assertFailed();
+});
+
+it('cuts kept response header values at 255 characters and keeps none when there are none', function (): void {
+    deliveryEndpoint(['max_concurrency' => 5]);
+    $this->transfer->respond(200, ['Content-Type' => str_repeat('a', 300)])->respond(200);
+    coordinator()->dispatch(invoicePaidMessage('msg_1'));
+    coordinator()->dispatch(invoicePaidMessage('msg_2'));
+
+    coordinator()->work(50);
+    $attempts = WebhookDeliveryAttempt::query()->orderBy('id')->get();
+
+    expect($attempts[0]->response_headers)->toBe(['content-type' => str_repeat('a', 255)])
+        ->and($attempts[1]->response_headers)->toBe([])
+        ->and($attempts[1]->request_id)->toBeNull()
+        ->and($attempts[1]->response_bytes)->toBe(0)
+        ->and($attempts[1]->retry_after_seconds)->toBeNull();
+});
+
+it('measures the attempt duration in whole milliseconds on a monotonic clock', function (): void {
+    deliveryEndpoint();
+    deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    coordinator()->dispatch(invoicePaidMessage());
+    // 87.999999 ms and exactly 88 ms: whole milliseconds, rounded down.
+    $readings = [5_000_000_000, 5_087_999_999, 6_000_000_000, 6_088_000_000];
+    $coordinator = new WebhookDeliveryCoordinator(
+        app(DatabaseDeliveryStore::class),
+        app(WebhookSecretResolver::class),
+        app(StandardWebhookSigner::class),
+        app(PinnedHttpClient::class),
+        app(RetryPolicy::class),
+        app(OutboundHttpLimits::class),
+        timeoutSeconds: 15,
+        connectTimeoutSeconds: 3,
+        defaultRetryPreset: WebhookRetryPresetEnum::Standard,
+        defaultMaxConcurrency: 2,
+        maxResponseBytes: 1_048_576,
+        nanosecondClock: function () use (&$readings): int {
+            return (int) array_shift($readings);
+        },
+    );
+
+    $coordinator->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->orderBy('id')->pluck('duration_ms')->all())->toBe([87, 88]);
+});
+
+it('drops its result when another worker recorded this attempt after the lease ran out', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            // Another worker took the expired lease and recorded attempt 1 first.
+            WebhookDelivery::query()->update(['attempts_count' => 1]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Pending)
+        ->and(onlyDelivery()->claimed_until)->not->toBeNull()
+        ->and(WebhookEndpoint::query()->sole()->last_success_at)->toBeNull();
+});
+
+it('ignores Retry-After when the configuration turns it off', function (): void {
+    config()->set('outbound.webhooks.respect_retry_after', false);
+    $this->app->forgetInstance(RetryPolicy::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    deliveryEndpoint();
+    $this->transfer->respond(503, ['Retry-After' => '120']);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05');
+});
+
+it('treats an empty scope column setting as instance scope', function (): void {
+    config()->set('outbound.webhooks.scope_column', '');
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    deliveryEndpoint();
+
+    expect(fn () => coordinator()->dispatch(invoicePaidMessage(), 'p1'))
+        ->toThrow(InvalidArgumentException::class, 'A webhook scope needs outbound.webhooks.scope_column.')
+        ->and(coordinator())->toBe(coordinator());
+});
+
+it('refuses a work limit below one', function (): void {
+    coordinator()->work(0);
+})->throws(InvalidArgumentException::class, 'The work limit must be at least 1.');
+
+it('claims nothing for an endpoint already over its concurrency', function (): void {
+    $endpoint = deliveryEndpoint(['max_concurrency' => 1]);
+    foreach (['msg_1', 'msg_2', 'msg_3'] as $messageId) {
+        coordinator()->dispatch(invoicePaidMessage($messageId));
+    }
+    WebhookDelivery::query()->whereIn('event_id', ['msg_1', 'msg_2'])->update(['claimed_until' => '2026-11-23 10:01:00']);
+
+    expect(coordinator()->work(50))->toBe(0)
+        ->and($this->transfer->requests)->toBe([]);
+});
+
+it('records nothing for a delivery deleted while it was being sent', function (): void {
+    $endpoint = deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            WebhookDelivery::query()->delete();
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0)
+        ->and($endpoint->refresh()->last_success_at)->toBeNull();
+});
+
+it('sends to a plain-http URL when neither the endpoint nor the config asks for https', function (): void {
+    deliveryEndpoint(['url' => 'http://hooks.example.com/plain']);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect((string) $this->transfer->requests[0]->getUri())->toBe('http://hooks.example.com/plain')
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered);
+});

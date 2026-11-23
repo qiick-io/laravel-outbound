@@ -10,8 +10,9 @@ namespace Qiick\Outbound\Retry;
  * Prefer {@see standardDelays()} (Standard Webhooks example: 5s, 5m, 30m, 2h,
  * 5h, 10h, 14h, 20h, 24h — about 75.6 hours end-to-end). Each delay is the wait
  * from the previous attempt, not from the first send. Bound
- * {@see shortDelays()} to a migration window only. Products own concurrency
- * caps, circuit-break / auto-disable, and honouring Retry-After / 410 / 429.
+ * {@see shortDelays()} to a migration window only. {@see RetryPolicy} applies
+ * these delays with Retry-After and 410; the delivery coordinator enforces
+ * per-endpoint concurrency.
  *
  * @api
  */
