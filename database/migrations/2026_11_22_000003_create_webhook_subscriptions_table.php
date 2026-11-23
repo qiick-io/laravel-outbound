@@ -17,6 +17,10 @@ use Illuminate\Support\Facades\Schema;
  * wrong one, so on MySQL and MariaDB `event_type` uses utf8mb4_bin. A
  * collation, not a binary type: VARBINARY becomes `bytea` on PostgreSQL.
  *
+ * The `event_type` index is not redundant with the (`endpoint_id`,
+ * `event_type`) unique key: that key leads with the endpoint, while fan-out
+ * looks up every endpoint subscribed to one type.
+ *
  * `filter` is reserved for payload filters (review L4) and unused in 1.0.
  */
 return new class extends Migration

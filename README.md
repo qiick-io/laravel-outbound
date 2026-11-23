@@ -227,9 +227,11 @@ Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
 Bound `short` (`[10, 30, 60]`) to a migration window. Jitter is capped
 (configured and ±floor(delay/2)) so a positive delay is never immediate.
 `DeliveryAttempt` strips control characters and caps `errorMessage` length.
-Products still enforce per-endpoint concurrency, timeouts, circuit-break /
-auto-disable, and honour `Retry-After` / 410 / 429 — the package does not ship
-auto-disable.
+Until the delivery coordinator lands (the next PRs of the 1.0 work), products
+still enforce per-endpoint concurrency, timeouts, circuit-break / auto-disable,
+and honour `Retry-After` / 410 / 429: the tables already hold the columns
+(`failing_since`, `consecutive_failures`, `disabled_reason`), but no package
+code applies the auto-disable policy yet.
 
 ## Webhook tables
 
@@ -252,6 +254,11 @@ They are mandatory, so the service provider loads the migrations itself:
 php artisan vendor:publish --tag=outbound-migrations
 OUTBOUND_MIGRATIONS_LOAD=false
 ```
+
+> **Do both or neither.** Publishing with loading still on registers each
+> table twice: `migrate` then fails on the second `create` with "table already
+> exists". Set `OUTBOUND_MIGRATIONS_LOAD=false` in every environment (and in
+> `.env.example`) in the same change that commits the published files.
 
 Eloquent models live in `Qiick\Outbound\Models` (`WebhookEndpoint`,
 `WebhookEndpointSecret`, `WebhookSubscription`, `WebhookDelivery`,

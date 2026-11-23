@@ -27,7 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `outbound.webhooks.scope_column` for a product's own scope column, and
   `outbound.webhooks.users_table` for the `created_by` / `triggered_by` keys.
 - Enums `WebhookEndpointDisabledReasonEnum`, `WebhookDeliveryTriggerEnum`,
-  `WebhookAttemptTriggerEnum` and `WebhookSignatureSchemeEnum`.
+  `WebhookAttemptTriggerEnum`, `WebhookAttemptStatusEnum` (attempt rows:
+  delivered, failed, refused) and `WebhookSignatureSchemeEnum`.
+- Each model takes an explicit, minimal mass-assignment allow-list. Secret
+  bytes are set only with `WebhookEndpointSecret::useSecret()`, and the body
+  with its hash and length only with `WebhookDelivery::usePayload()`; both
+  stay encrypted at rest and hidden from arrays and JSON, like `payload_hash`.
 - CI runs the suite on PostgreSQL 17, MySQL 8.4 and MariaDB 10.11 as well as SQLite.
 
 ### Changed

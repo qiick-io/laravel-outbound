@@ -16,17 +16,11 @@ it('loads the package migrations by default', function () use ($packageMigration
 });
 
 it('does not load the package migrations when outbound.migrations.load is off', function () use ($packageMigrationsPath): void {
-    putenv('OUTBOUND_MIGRATIONS_LOAD=false');
+    $this->configBeforeBoot = ['outbound.migrations.load' => false];
+    $this->refreshApplication();
+    $loadedPaths = array_map(realpath(...), $this->app->make('migrator')->paths());
 
-    try {
-        $this->refreshApplication();
-        $loadedPaths = array_map(realpath(...), $this->app->make('migrator')->paths());
-    } finally {
-        putenv('OUTBOUND_MIGRATIONS_LOAD');
-    }
-
-    expect(config('outbound.migrations.load'))->toBeFalse()
-        ->and($loadedPaths)->not->toContain($packageMigrationsPath);
+    expect($loadedPaths)->not->toContain($packageMigrationsPath);
 });
 
 it('publishes the migrations under the outbound-migrations tag', function (): void {

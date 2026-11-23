@@ -44,6 +44,16 @@ class WebhookSubscription extends Model
     }
 
     /**
+     * `filter` is reserved for payload filters after 1.0 (review L4).
+     *
+     * @return list<string>
+     */
+    protected function fillableAttributes(): array
+    {
+        return ['event_type'];
+    }
+
+    /**
      * @return list<string>
      */
     protected function privateAttributes(): array

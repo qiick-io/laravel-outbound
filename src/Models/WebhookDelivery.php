@@ -16,8 +16,10 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * One event for one endpoint (`webhook_deliveries`), with its retry state.
  *
  * `payload` is the exact raw body that every attempt signs, encrypted at rest
- * and hidden from arrays and JSON: bodies can carry personal data, and a
- * raw body never goes into logs or event payloads (standards review R5).
+ * and hidden from arrays and JSON, like its hash: bodies can carry personal
+ * data, and a raw body never goes into logs or event payloads (standards
+ * review R5). The body, its hash and its length are set together, only
+ * through {@see usePayload()}; the retry state is the package's to write.
  *
  * @property int $id
  * @property string $public_id
@@ -69,11 +71,32 @@ class WebhookDelivery extends Model
     }
 
     /**
+     * Store the exact raw body with its SHA-256 hash and its length in bytes,
+     * so the three always agree. Does not save.
+     */
+    public function usePayload(#[\SensitiveParameter] string $rawBody): static
+    {
+        return $this->forceFill([
+            'payload' => $rawBody,
+            'payload_hash' => hash('sha256', $rawBody),
+            'payload_bytes' => strlen($rawBody),
+        ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function fillableAttributes(): array
+    {
+        return ['event_id', 'event_type', 'occurred_at', 'payload_version', 'max_attempts', 'trigger', 'metadata'];
+    }
+
+    /**
      * @return list<string>
      */
     protected function privateAttributes(): array
     {
-        return ['endpoint_id', 'payload'];
+        return ['endpoint_id', 'payload', 'payload_hash'];
     }
 
     /**

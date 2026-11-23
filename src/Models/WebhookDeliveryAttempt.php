@@ -7,7 +7,7 @@ namespace Qiick\Outbound\Models;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
 
@@ -24,7 +24,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int $attempt
  * @property WebhookAttemptTriggerEnum $trigger
  * @property int|null $triggered_by
- * @property DeliveryStatus $status
+ * @property WebhookAttemptStatusEnum $status
  * @property int $webhook_timestamp
  * @property string $signature_schemes
  * @property list<string>|null $secret_public_ids
@@ -65,6 +65,16 @@ class WebhookDeliveryAttempt extends Model
     }
 
     /**
+     * None: attempts are append-only and written by the package alone.
+     *
+     * @return list<string>
+     */
+    protected function fillableAttributes(): array
+    {
+        return [];
+    }
+
+    /**
      * @return list<string>
      */
     protected function privateAttributes(): array
@@ -89,7 +99,7 @@ class WebhookDeliveryAttempt extends Model
     {
         return [
             'trigger' => WebhookAttemptTriggerEnum::class,
-            'status' => DeliveryStatus::class,
+            'status' => WebhookAttemptStatusEnum::class,
             'secret_public_ids' => 'array',
             'response_headers' => 'array',
             'attempted_at' => 'immutable_datetime',

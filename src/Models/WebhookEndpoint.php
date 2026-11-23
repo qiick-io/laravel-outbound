@@ -82,6 +82,38 @@ class WebhookEndpoint extends Model
     }
 
     /**
+     * What a product edits. The state the package manages (`is_active`, the
+     * disable reason and the failure streak) is not mass-assignable. The
+     * product's scope column is, when `outbound.webhooks.scope_column` names one.
+     *
+     * @return list<string>
+     */
+    protected function fillableAttributes(): array
+    {
+        $scopeColumn = config('outbound.webhooks.scope_column');
+
+        return [
+            'name',
+            'description',
+            'url',
+            'payload_version',
+            'legacy_profile',
+            'https_only',
+            'allow_private_hosts',
+            'timeout_seconds',
+            'max_concurrency',
+            'rate_limit_per_minute',
+            'retry_preset',
+            'max_attempts',
+            'auto_disable',
+            'headers',
+            'metadata',
+            'created_by',
+            ...(is_string($scopeColumn) && $scopeColumn !== '' ? [$scopeColumn] : []),
+        ];
+    }
+
+    /**
      * @return list<string>
      */
     protected function privateAttributes(): array

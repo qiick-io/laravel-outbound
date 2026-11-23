@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
+use Qiick\Outbound\Webhooks\WebhookSecret;
 
 /**
  * One signing secret of an endpoint (`webhook_endpoint_secrets`).
@@ -16,7 +17,9 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * `secret` is encrypted at rest with the application key (2026-11-20 core
  * hardening: secrets at rest use the `encrypted` cast) and is hidden from
  * arrays and JSON: a product shows it once, on create and on rotate, and never
- * again.
+ * again. It is set only through {@see useSecret()}, never by mass assignment;
+ * the lifecycle columns (`is_primary`, `expires_at`, `revoked_at`) are the
+ * package's to write.
  *
  * @property int $id
  * @property string $public_id
@@ -48,6 +51,28 @@ class WebhookEndpointSecret extends Model
     public function endpoint(): BelongsTo
     {
         return $this->belongsTo(WebhookEndpoint::class, 'endpoint_id');
+    }
+
+    /**
+     * Store a parsed secret in its canonical `whsec_` form. A legacy raw
+     * secret parsed with {@see WebhookSecret::parseAllowingLegacyRaw()} is
+     * stored canonical too, so the row is no longer `is_legacy_raw`: the
+     * HMAC key bytes are the same either way. Does not save.
+     */
+    public function useSecret(WebhookSecret $secret): static
+    {
+        return $this->forceFill([
+            'secret' => $secret->serialized(),
+            'is_legacy_raw' => false,
+        ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function fillableAttributes(): array
+    {
+        return ['metadata'];
     }
 
     /**

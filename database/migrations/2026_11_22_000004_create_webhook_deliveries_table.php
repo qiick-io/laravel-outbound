@@ -13,7 +13,9 @@ use Illuminate\Support\Facades\Schema;
  * `event_id` is sent as `webhook-id` on every attempt, a manual redelivery
  * included (review R7), so it is unique per endpoint and compares byte for
  * byte: on MySQL and MariaDB it uses utf8mb4_bin, for the same reason as
- * `webhook_subscriptions.event_type`.
+ * `webhook_subscriptions.event_type`. Its own index serves a lookup by
+ * `webhook-id` across endpoints (a consumer's support request), which the
+ * (`endpoint_id`, `event_id`) unique key, led by the endpoint, cannot.
  *
  * `payload` is the exact raw body under Laravel's `encrypted` cast, kept until
  * `payload_expires_at` (30 days by default) and then pruned to null;

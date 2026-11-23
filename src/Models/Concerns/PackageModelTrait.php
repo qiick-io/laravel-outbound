@@ -13,7 +13,9 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
  *   bigint primary key stays auto-incrementing. Public ids are the only ids
  *   that leave the database (2026-11-20 fleet contracts: UUIDs on the wire),
  *   so `id`, foreign keys and sensitive columns are hidden from arrays.
- * - Neither id can be mass-assigned.
+ * - Mass assignment takes an explicit, minimal allow-list per model; every
+ *   other attribute (ids, lifecycle state, secret bytes, the stored body) is
+ *   written by the package itself or through a dedicated model method.
  * - A new instance starts with the table's column defaults, so it reads like
  *   a stored row before it is saved or refreshed.
  *
@@ -23,6 +25,13 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 trait PackageModelTrait
 {
     use HasUuids;
+
+    /**
+     * The only attributes `fill()` and `create()` accept.
+     *
+     * @return list<string>
+     */
+    abstract protected function fillableAttributes(): array;
 
     /**
      * Foreign keys and sensitive columns hidden from arrays and JSON, on top of `id`.
@@ -40,7 +49,8 @@ trait PackageModelTrait
 
     public function initializePackageModelTrait(): void
     {
-        $this->guarded = ['id', 'public_id'];
+        $this->fillable = $this->fillableAttributes();
+        $this->guarded = ['*'];
         $this->hidden = ['id', ...$this->privateAttributes()];
         $this->attributes = [...$this->databaseDefaults(), ...$this->attributes];
     }

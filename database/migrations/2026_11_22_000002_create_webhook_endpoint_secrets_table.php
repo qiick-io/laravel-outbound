@@ -17,6 +17,10 @@ use Illuminate\Support\Facades\Schema;
  * keeps only its public half (`public_key`) or a KMS reference (`key_ref`),
  * reserved now so `v2a` needs no migration after 1.0 (review M15).
  *
+ * "One primary per endpoint" and the `max_secrets` cap are enforced in code,
+ * under a lock on the endpoint row, not by the schema: MySQL and MariaDB have
+ * no partial unique index, and the cap is configuration.
+ *
  * Deleting an endpoint that still has secrets is refused: an endpoint is
  * soft-deleted, and its secrets are revoked, never silently dropped.
  */

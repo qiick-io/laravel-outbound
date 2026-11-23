@@ -12,8 +12,9 @@ namespace Qiick\Outbound\Delivery;
  * while retries remain, `Exhausted` when automatic retries stopped, and
  * `Cancelled` when the product withdrew it. All cases exist before 1.0
  * because adding one later breaks exhaustive `match` in products (standards
- * review M7). Backing values are stored in `webhook_deliveries.status` and
- * `webhook_delivery_attempts.status`, so they never change.
+ * review M7). Backing values are stored in `webhook_deliveries.status`, so
+ * they never change; attempt rows use the narrower `WebhookAttemptStatusEnum`
+ * with the same values.
  *
  * @api
  */

@@ -25,6 +25,15 @@ abstract class PackageTestCase extends TestCase
     use LazilyRefreshDatabase;
 
     /**
+     * Config applied before the providers boot, for a test that sets it and
+     * then calls refreshApplication(). Per instance, so it never leaks into
+     * another test the way a process-wide putenv() could.
+     *
+     * @var array<string, mixed>
+     */
+    protected array $configBeforeBoot = [];
+
+    /**
      * @param  Application  $app
      * @return list<class-string>
      */
@@ -42,5 +51,6 @@ abstract class PackageTestCase extends TestCase
         $app['config']->set('database.default', getenv('DB_CONNECTION') ?: 'testing');
         // Products run with foreign keys on; the in-memory connection must too.
         $app['config']->set('database.connections.testing.foreign_key_constraints', true);
+        $app['config']->set($this->configBeforeBoot);
     }
 }

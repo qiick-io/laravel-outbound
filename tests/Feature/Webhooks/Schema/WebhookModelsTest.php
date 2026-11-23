@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
@@ -16,24 +18,46 @@ use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookEndpointSecret;
 use Qiick\Outbound\Models\WebhookSubscription;
 
+/*
+ * These tests write every column, the package-managed ones included, so they
+ * use forceFill(); what mass assignment accepts is SensitiveAttributesTest's.
+ */
+
 function createEndpointModel(array $attributes = []): WebhookEndpoint
 {
-    return WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive', ...$attributes]);
+    $endpoint = (new WebhookEndpoint)->forceFill(['url' => 'https://hooks.example.com/receive', ...$attributes]);
+    $endpoint->save();
+
+    return $endpoint;
 }
 
 function createDeliveryModel(WebhookEndpoint $endpoint, array $attributes = []): WebhookDelivery
 {
-    return $endpoint->deliveries()->create([
+    $delivery = $endpoint->deliveries()->make()->usePayload('{"type":"invoice.paid"}')->forceFill([
         'event_id' => 'msg_1',
         'event_type' => 'invoice.paid',
         'occurred_at' => CarbonImmutable::parse('2026-11-22 10:00:00'),
         'payload_version' => '1',
         'max_attempts' => 10,
-        'payload' => '{"type":"invoice.paid"}',
-        'payload_hash' => hash('sha256', '{"type":"invoice.paid"}'),
-        'payload_bytes' => 23,
         ...$attributes,
     ]);
+    $delivery->save();
+
+    return $delivery;
+}
+
+/**
+ * @template TModel of \Illuminate\Database\Eloquent\Model
+ *
+ * @param  TModel  $model
+ * @param  array<string, mixed>  $attributes
+ * @return TModel
+ */
+function forceCreateModel(Model $model, array $attributes): Model
+{
+    $model->forceFill($attributes)->save();
+
+    return $model;
 }
 
 it('gives every model a UUID v7 public id as route key and keeps the bigint key incrementing', function (): void {
@@ -116,12 +140,12 @@ it('lets a product subclass override a column default and keep the others', func
 it('never serialises bigint ids, user ids, secrets or bodies', function (): void {
     $userId = (int) DB::table('users')->insertGetId(['name' => 'Owner', 'email' => 'owner@example.com', 'password' => 'x']);
     $endpoint = createEndpointModel(['created_by' => $userId]);
-    $secret = $endpoint->secrets()->create(['secret' => 'whsec_c2VjcmV0']);
+    $secret = forceCreateModel($endpoint->secrets()->make(), ['secret' => 'whsec_c2VjcmV0']);
     $subscription = $endpoint->subscriptions()->create(['event_type' => '*']);
     $delivery = createDeliveryModel($endpoint);
-    $attempt = $delivery->attempts()->create([
+    $attempt = forceCreateModel($delivery->attempts()->make(), [
         'attempt' => 1,
-        'status' => DeliveryStatus::Failed,
+        'status' => WebhookAttemptStatusEnum::Failed,
         'webhook_timestamp' => 1_763_800_000,
         'signature_schemes' => 'v1',
         'triggered_by' => $userId,
@@ -131,7 +155,7 @@ it('never serialises bigint ids, user ids, secrets or bodies', function (): void
     expect(array_keys($endpoint->toArray()))->not->toContain('id')->not->toContain('created_by')
         ->and(array_keys($secret->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('secret')
         ->and(array_keys($subscription->toArray()))->not->toContain('id')->not->toContain('endpoint_id')
-        ->and(array_keys($delivery->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('payload')
+        ->and(array_keys($delivery->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('payload')->not->toContain('payload_hash')
         ->and(array_keys($attempt->toArray()))->not->toContain('id')->not->toContain('delivery_id')->not->toContain('triggered_by')
         ->and($endpoint->toArray())->toHaveKey('public_id');
 });
@@ -144,7 +168,7 @@ it('encrypts the secret at rest and casts every secret attribute', function (): 
         ->and($fresh->is_legacy_raw)->toBeFalse()
         ->and($fresh->is_primary)->toBeFalse();
 
-    $secret = $endpoint->secrets()->create([
+    $secret = forceCreateModel($endpoint->secrets()->make(), [
         'secret' => 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw',
         'scheme' => 'v1',
         'is_legacy_raw' => 1,
@@ -174,7 +198,7 @@ it('encrypts the secret at rest and casts every secret attribute', function (): 
 
 it('casts every subscription attribute and links it to its endpoint', function (): void {
     $endpoint = createEndpointModel();
-    $subscription = $endpoint->subscriptions()->create([
+    $subscription = forceCreateModel($endpoint->subscriptions()->make(), [
         'event_type' => WebhookSubscription::ALL_EVENT_TYPES,
         'filter' => ['amount' => ['gt' => 0]],
     ]);
@@ -243,7 +267,7 @@ it('appends attempts with milliseconds, no updated_at, and every attribute cast'
 
     $userId = (int) DB::table('users')->insertGetId(['name' => 'Owner', 'email' => 'owner@example.com', 'password' => 'x']);
     $delivery = createDeliveryModel(createEndpointModel());
-    $attempt = $delivery->attempts()->create([
+    $attempt = forceCreateModel($delivery->attempts()->make(), [
         'attempt' => '2',
         'trigger' => 'manual',
         'triggered_by' => (string) $userId,
@@ -267,7 +291,7 @@ it('appends attempts with milliseconds, no updated_at, and every attribute cast'
         ->and($attempt->attempt)->toBe(2)
         ->and($attempt->trigger)->toBe(WebhookAttemptTriggerEnum::Manual)
         ->and($attempt->triggered_by)->toBe($userId)
-        ->and($attempt->status)->toBe(DeliveryStatus::Delivered)
+        ->and($attempt->status)->toBe(WebhookAttemptStatusEnum::Delivered)
         ->and($attempt->webhook_timestamp)->toBe(1_763_800_000)
         ->and($attempt->secret_public_ids)->toBe(['0193-a', '0193-b'])
         ->and($attempt->http_status)->toBe(204)
@@ -283,12 +307,18 @@ it('appends attempts with milliseconds, no updated_at, and every attribute cast'
         ->and($delivery->attempts()->sole()->is($attempt))->toBeTrue();
 });
 
-it('refuses mass assignment of the bigint and public ids', function (string $modelClass): void {
-    expect((new $modelClass)->getGuarded())->toBe(['id', 'public_id']);
-})->with([
-    WebhookEndpoint::class,
-    WebhookEndpointSecret::class,
-    WebhookSubscription::class,
-    WebhookDelivery::class,
-    WebhookDeliveryAttempt::class,
-]);
+it('reads an attempt status only from the three attempt outcomes', function (string $deliveryOnlyStatus): void {
+    $delivery = createDeliveryModel(createEndpointModel());
+    $attemptId = forceCreateModel($delivery->attempts()->make(), [
+        'attempt' => 1,
+        'status' => 'failed',
+        'webhook_timestamp' => 1_763_800_000,
+        'signature_schemes' => 'v1',
+        'attempted_at' => CarbonImmutable::now(),
+    ])->id;
+    DB::table('webhook_delivery_attempts')->where('id', $attemptId)->update(['status' => $deliveryOnlyStatus]);
+
+    expect(array_map(static fn (WebhookAttemptStatusEnum $status): string => $status->value, WebhookAttemptStatusEnum::cases()))
+        ->toBe(['delivered', 'failed', 'refused'])
+        ->and(fn () => WebhookDeliveryAttempt::query()->findOrFail($attemptId)->status)->toThrow(ValueError::class);
+})->with(['pending', 'exhausted', 'cancelled']);
