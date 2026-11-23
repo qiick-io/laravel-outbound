@@ -52,6 +52,10 @@ and the approved design before adopting a commit from `develop`.
   mass-assignable: set them in your own code (`created_by` from
   `auth()->id()`), never from request input, since the disable email goes
   to `created_by`.
+- `webhook_deliveries` gains `next_attempt_trigger` and
+  `next_attempt_triggered_by` (redelivery): recreate the database. A
+  redelivery keeps its `webhook-id`, so a consumer that claimed the id and
+  then failed drops it as a duplicate until the claim expires.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

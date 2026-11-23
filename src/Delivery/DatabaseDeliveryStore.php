@@ -8,6 +8,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use InvalidArgumentException;
+use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -267,6 +268,45 @@ final class DatabaseDeliveryStore
             'consecutive_failures' => 0,
             'failing_since' => null,
         ]) === 1;
+    }
+
+    /**
+     * Schedule the deliveries the query selects for an attempt now, marked
+     * with the trigger and the user the worker records on it. A settled
+     * delivery (delivered, exhausted, refused, cancelled) is pending again
+     * with exactly one more attempt: if it fails, the delivery is exhausted
+     * again rather than starting a new schedule. A pending one keeps its
+     * schedule; only its next attempt comes sooner.
+     *
+     * @param  Builder<WebhookDelivery>  $deliveriesQuery
+     * @return int the deliveries scheduled
+     */
+    public function scheduleRedelivery(Builder $deliveriesQuery, WebhookAttemptTriggerEnum $trigger, ?int $triggeredBy): int
+    {
+        $redeliveryRequest = [
+            'next_attempt_at' => CarbonImmutable::now('UTC'),
+            'next_attempt_trigger' => $trigger->value,
+            'next_attempt_triggered_by' => $triggeredBy,
+        ];
+
+        /** @var int $scheduledCount Laravel 12 types transaction() as mixed. */
+        $scheduledCount = WebhookDelivery::query()->getConnection()->transaction(function () use ($deliveriesQuery, $redeliveryRequest): int {
+            $pendingCount = $deliveriesQuery->clone()
+                ->where('status', DeliveryStatus::Pending->value)
+                ->update($redeliveryRequest);
+            $settledCount = $deliveriesQuery->clone()
+                ->where('status', '!=', DeliveryStatus::Pending->value)
+                ->update([
+                    ...$redeliveryRequest,
+                    'status' => DeliveryStatus::Pending->value,
+                    'exhausted_reason' => null,
+                    'max_attempts' => WebhookDelivery::query()->getQuery()->raw('attempts_count + 1'),
+                ]);
+
+            return $pendingCount + $settledCount;
+        });
+
+        return $scheduledCount;
     }
 
     /**
