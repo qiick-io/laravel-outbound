@@ -2,11 +2,16 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\DeadlockException;
+use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Qiick\Outbound\Delivery\DuplicateWebhookDeliveryException;
+use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
 use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
@@ -220,4 +225,83 @@ it('saves and updates a delivery normally', function (): void {
     expect($delivery->save())->toBeTrue()
         ->and($delivery->forceFill(['attempts_count' => 1])->save())->toBeTrue()
         ->and(WebhookDelivery::query()->sole()->attempts_count)->toBe(1);
+});
+
+/**
+ * Makes the next delivery insert fail the way a deadlock does, with the
+ * bindings (the body hash among them) in the QueryException message.
+ */
+function failNextDeliveryInsertWithDeadlock(): void
+{
+    WebhookDelivery::creating(function (WebhookDelivery $delivery): void {
+        throw new QueryException(
+            'testing',
+            'insert into "webhook_deliveries" ("payload_hash", "event_id") values (?, ?)',
+            [$delivery->payload_hash, $delivery->event_id],
+            new PDOException('SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock'),
+        );
+    });
+}
+
+it('keeps the bindings out of a deadlock, inside or outside a product transaction, and lets Laravel retry it', function (bool $isInProductTransaction): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $rawBody = '{"type":"ping"}';
+    failNextDeliveryInsertWithDeadlock();
+    $save = fn () => unsavedDelivery($endpoint, $rawBody)->save();
+
+    try {
+        $isInProductTransaction ? DB::transaction($save) : $save();
+        $thrown = null;
+    } catch (Throwable $exception) {
+        $thrown = $exception;
+    }
+
+    $chain = '';
+    $chainClasses = [];
+    for ($link = $thrown; $link !== null; $link = $link->getPrevious()) {
+        $chain .= $link->getMessage()."\n";
+        $chainClasses[] = $link::class;
+    }
+
+    // Inside a transaction Laravel wraps a concurrency error once more, around ours.
+    expect($thrown)->toBeInstanceOf(DeadlockException::class)
+        ->and($thrown?->getCode())->toBe(40001)
+        ->and($thrown?->getMessage())->toBe('Webhook delivery could not be saved: deadlock or serialization failure (SQLSTATE 40001).')
+        ->and($chainClasses)->toBe($isInProductTransaction
+            ? [DeadlockException::class, WebhookDeliveryConcurrencyException::class]
+            : [WebhookDeliveryConcurrencyException::class])
+        ->and($chain)->not->toContain(hash('sha256', $rawBody))->not->toContain('msg_1')
+        ->and((string) $thrown)->not->toContain(hash('sha256', $rawBody));
+})->with(['outside a transaction' => [false], 'inside a product transaction' => [true]]);
+
+it('is a concurrency error by Laravel\'s own rule, so DB::transaction retries it', function (): void {
+    $detector = new class
+    {
+        use DetectsConcurrencyErrors;
+
+        public function detects(Throwable $exception): bool
+        {
+            return $this->causedByConcurrencyError($exception);
+        }
+    };
+    $lockWaitTimeout = new QueryException('testing', 'insert', ['secret-hash'], new PDOException('SQLSTATE[HY000]: General error: 1205 Lock wait timeout exceeded; try restarting transaction'));
+    $duplicate = new UniqueConstraintViolationException('testing', 'insert', ['secret-hash'], new PDOException('SQLSTATE[23000]: duplicate'));
+
+    expect($detector->detects(WebhookDeliveryStorageException::withoutBindings($lockWaitTimeout)))->toBeTrue()
+        ->and(WebhookDeliveryStorageException::withoutBindings($lockWaitTimeout))->toBeInstanceOf(WebhookDeliveryConcurrencyException::class)
+        ->and($detector->detects(WebhookDeliveryStorageException::withoutBindings($duplicate)))->toBeFalse();
+});
+
+it('keeps the QueryException out of stack-trace arguments', function (): void {
+    $queryException = new QueryException('testing', 'insert', ['secret-hash'], new PDOException('SQLSTATE[23000]: duplicate'));
+    $previousSetting = ini_get('zend.exception_ignore_args');
+    ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        $storageException = WebhookDeliveryStorageException::withoutBindings($queryException);
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previousSetting);
+    }
+
+    expect($storageException->getTrace()[0]['args'][0] ?? null)->toBeInstanceOf(SensitiveParameterValue::class);
 });

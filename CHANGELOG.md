@@ -53,8 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   primary outside `SecretRotator`'s lock.
 - `WebhookDelivery::save()` rethrows a failed write as
   `WebhookDeliveryStorageException` (`DuplicateWebhookDeliveryException` for a
-  unique key) with only the SQLSTATE, so `payload_hash` never reaches an
-  exception message or a log.
+  unique key) with only the SQLSTATE, and a deadlock or serialization failure
+  as `WebhookDeliveryConcurrencyException` (a retryable `DeadlockException`),
+  so `payload_hash` never reaches an exception message, a log or a stack-trace
+  argument.
 - `DeliveryStatus` gains `Pending`, `Exhausted` and `Cancelled` for delivery
   rows (standards review M7); attempts keep `Delivered`, `Failed`, `Refused`.
 

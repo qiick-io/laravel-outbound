@@ -33,7 +33,9 @@ and the approved design before adopting a commit from `develop`.
   `create([... 'is_primary' => true])`, or the endpoint ends up with two
   primaries and stops signing. A secret cannot be `replicate()`d.
 - `webhook_endpoints.headers` is now `text` under the `encrypted:array` cast,
-  and hidden from arrays and JSON: recreate the database.
+  and hidden from arrays and JSON: recreate the database. Like `secret` and
+  `payload`, it is unreadable after an `APP_KEY` rotation unless the old key
+  is in `APP_PREVIOUS_KEYS`.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

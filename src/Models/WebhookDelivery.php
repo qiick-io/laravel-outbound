@@ -8,8 +8,9 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\QueryException;
+use PDOException;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
 use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
@@ -25,8 +26,11 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  *
  * `payload_hash` is the plain SHA-256 of the body (review R5), used to
  * deduplicate and to verify a body after it is pruned. A short body can be
- * guessed from it, so it is hidden from arrays and kept out of exception
- * messages: {@see save()} rethrows a failed write without its bindings.
+ * guessed from it, so it is hidden from arrays, and a failed {@see save()}
+ * is rethrown without its bindings. Writes through the query builder
+ * (`insert()`, `update()`, `upsert()`) are not wrapped, and query recorders
+ * (Telescope, Debugbar, Flare's query bindings, `DB::listen`) see the hash of
+ * every successful write.
  *
  * @property int $id
  * @property string $public_id
@@ -86,6 +90,9 @@ class WebhookDelivery extends Model
      * @param  array{touch?: bool|null}  $options
      *
      * @throws WebhookDeliveryStorageException when the row cannot be written
+     * @throws WebhookDeliveryConcurrencyException on a deadlock or serialization
+     *                                             failure, which a product
+     *                                             transaction may retry
      */
     public function save(array $options = []): bool
     {
@@ -94,8 +101,9 @@ class WebhookDelivery extends Model
             $isSaved = $this->getConnection()->transaction(fn (): bool => parent::save($options));
 
             return $isSaved;
-        } catch (QueryException $queryException) {
-            throw WebhookDeliveryStorageException::withoutBindings($queryException);
+        } catch (PDOException $databaseException) {
+            // QueryException and, inside a transaction, DeadlockException.
+            throw WebhookDeliveryStorageException::withoutBindings($databaseException);
         }
     }
 

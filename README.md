@@ -304,9 +304,14 @@ key and the only id that leaves the database; the bigint `id`, foreign keys,
 `secret`, `payload` and the endpoint's custom `headers` (often a token) are
 hidden from arrays and JSON. Those three use Laravel's `encrypted` cast, so
 rotating `APP_KEY` needs `APP_PREVIOUS_KEYS`. `payload_hash` (the plain SHA-256 of the body, to
-deduplicate and verify) is hidden too, and a failed delivery save throws
-`WebhookDeliveryStorageException` (or `DuplicateWebhookDeliveryException`)
-with only the SQLSTATE, never Laravel's `QueryException` with its bindings. `created_by` and `triggered_by` reference
+deduplicate and verify) is hidden too. A failed `WebhookDelivery::save()`
+throws `WebhookDeliveryStorageException` (`DuplicateWebhookDeliveryException`
+for a unique key) with only the SQLSTATE, and a deadlock or serialization
+failure throws `WebhookDeliveryConcurrencyException` (a `DeadlockException`,
+so `DB::transaction(..., attempts: n)` still retries it), never Laravel's
+exception with its bindings. Query recorders (Telescope, Debugbar, Flare with
+query bindings, `DB::listen` loggers) still see the hash of every write: a
+short, guessable body can be found from it. `created_by` and `triggered_by` reference
 `outbound.webhooks.users_table` (`users`) with null-on-delete.
 
 **Scope column.** The package defines no tenancy column and no morph. A product
