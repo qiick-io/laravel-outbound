@@ -8,7 +8,9 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\QueryException;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
 
@@ -21,10 +23,10 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * review R5). The body, its hash and its length are set together, only
  * through {@see usePayload()}; the retry state is the package's to write.
  *
- * `payload_hash` is an integrity fingerprint, not a secret: it is hidden from
- * arrays, but it shows among the bindings of a failed query's
- * `QueryException`, and a short, guessable body (`{"type":"ping"}`) can be
- * found from it. Never treat it as protecting the body.
+ * `payload_hash` is the plain SHA-256 of the body (review R5), used to
+ * deduplicate and to verify a body after it is pruned. A short body can be
+ * guessed from it, so it is hidden from arrays and kept out of exception
+ * messages: {@see save()} rethrows a failed write without its bindings.
  *
  * @property int $id
  * @property string $public_id
@@ -73,6 +75,23 @@ class WebhookDelivery extends Model
     public function attempts(): HasMany
     {
         return $this->hasMany(WebhookDeliveryAttempt::class, 'delivery_id');
+    }
+
+    /**
+     * A failed write is rethrown without its bindings, so `payload_hash`
+     * never reaches an exception message or a log.
+     *
+     * @param  array{touch?: bool|null}  $options
+     *
+     * @throws WebhookDeliveryStorageException when the row cannot be written
+     */
+    public function save(array $options = []): bool
+    {
+        try {
+            return parent::save($options);
+        } catch (QueryException $queryException) {
+            throw WebhookDeliveryStorageException::withoutBindings($queryException);
+        }
     }
 
     /**

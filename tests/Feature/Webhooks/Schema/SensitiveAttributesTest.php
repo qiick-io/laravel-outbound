@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Qiick\Outbound\Delivery\DuplicateWebhookDeliveryException;
+use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -127,3 +129,69 @@ it('refuses to replicate a signing secret, which would copy the key and the prim
         ->toThrow(WebhookException::class, 'Webhook secrets cannot be replicated; issue or rotate them with SecretRotator.')
         ->and(WebhookEndpointSecret::query()->count())->toBe(1);
 })->with(['replicate', 'replicateQuietly']);
+
+/**
+ * @param  array<string, mixed>  $attributes
+ */
+function unsavedDelivery(WebhookEndpoint $endpoint, string $rawBody, array $attributes = []): WebhookDelivery
+{
+    return $endpoint->deliveries()->make()->usePayload($rawBody)->forceFill([
+        'event_id' => 'msg_1',
+        'event_type' => 'invoice.paid',
+        'occurred_at' => '2026-11-23 10:00:00',
+        'payload_version' => '1',
+        'max_attempts' => 10,
+        ...$attributes,
+    ]);
+}
+
+it('keeps the body hash and every other binding out of a failed delivery save', function (): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $rawBody = '{"type":"ping"}';
+    $delivery = unsavedDelivery($endpoint, $rawBody, ['event_type' => null]);
+
+    try {
+        $delivery->save();
+        $thrown = null;
+    } catch (Throwable $exception) {
+        $thrown = $exception;
+    }
+
+    $chainMessages = [];
+    for ($link = $thrown; $link !== null; $link = $link->getPrevious()) {
+        $chainMessages[] = $link->getMessage();
+    }
+
+    expect($thrown)->toBeInstanceOf(WebhookDeliveryStorageException::class)
+        ->and($thrown)->not->toBeInstanceOf(DuplicateWebhookDeliveryException::class)
+        ->and($thrown?->getMessage())->toMatch('/^Webhook delivery could not be saved \(SQLSTATE \w{5}\)\.$/')
+        ->and($thrown?->getPrevious())->toBeNull()
+        ->and(implode("\n", $chainMessages))->not->toContain(hash('sha256', $rawBody))->not->toContain('msg_1')
+        ->and((string) $thrown)->not->toContain(hash('sha256', $rawBody));
+});
+
+it('reports a second delivery of the same event to the same endpoint as a duplicate, without bindings', function (): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    unsavedDelivery($endpoint, '{"type":"ping"}')->save();
+
+    try {
+        unsavedDelivery($endpoint, '{"type":"ping"}')->save();
+        $thrown = null;
+    } catch (Throwable $exception) {
+        $thrown = $exception;
+    }
+
+    expect($thrown)->toBeInstanceOf(DuplicateWebhookDeliveryException::class)
+        ->and($thrown?->getMessage())->toMatch('/^Webhook delivery could not be saved \(SQLSTATE \w{5}\)\.$/')
+        ->and($thrown?->getPrevious())->toBeNull()
+        ->and(WebhookDelivery::query()->count())->toBe(1);
+});
+
+it('saves and updates a delivery normally', function (): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $delivery = unsavedDelivery($endpoint, '{"type":"ping"}');
+
+    expect($delivery->save())->toBeTrue()
+        ->and($delivery->forceFill(['attempts_count' => 1])->save())->toBeTrue()
+        ->and(WebhookDelivery::query()->sole()->attempts_count)->toBe(1);
+});

@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and hidden from arrays and JSON, because custom headers often carry a token.
 - `WebhookEndpointSecret::replicate()` throws: a copy would be a second
   primary outside `SecretRotator`'s lock.
+- `WebhookDelivery::save()` rethrows a failed write as
+  `WebhookDeliveryStorageException` (`DuplicateWebhookDeliveryException` for a
+  unique key) with only the SQLSTATE, so `payload_hash` never reaches an
+  exception message or a log.
 - `DeliveryStatus` gains `Pending`, `Exhausted` and `Cancelled` for delivery
   rows (standards review M7); attempts keep `Delivered`, `Failed`, `Refused`.
 
