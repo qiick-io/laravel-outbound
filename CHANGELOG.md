@@ -41,9 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WebhookEndpointSecret::signingAt()` scope, and
   `outbound.webhooks.secret_rotation_grace_seconds` (24 h). `max_secrets`
   outside 1–4 is refused at boot.
+- `OutboundHttpException::transportErrorKind()` and
+  `OutboundTransportErrorKindEnum` (`timeout`, `tls`, `dns`, `connection`):
+  `PinnedHttpClient` says which kind of transport error it hit, read from the
+  curl errno on Guzzle 7 and 8, without the host or address in the message.
 
 ### Changed
 
+- A transport timeout, TLS or DNS failure now reads `Outbound request failed:
+  timeout.` / `TLS error.` / `DNS error.` instead of `connection error.`.
 - The package models store and read every date as UTC, whatever
   `app.timezone` is, so grace periods and retries do not move at a
   daylight-saving change.

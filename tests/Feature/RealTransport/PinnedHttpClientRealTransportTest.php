@@ -8,6 +8,7 @@ use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Http;
 use Psr\Http\Message\RequestInterface;
+use Qiick\Outbound\Enums\OutboundTransportErrorKindEnum;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
@@ -505,5 +506,44 @@ it('aborts an oversized stream without Content-Length via progress and bounds me
         expect($delta)->toBeLessThan(8 * 1024 * 1024);
     } finally {
         $server->stop();
+    }
+})->group('real-transport');
+
+it('names a real timeout, TLS failure and refused connection without the address', function (): void {
+    $server = new RealTransportServer;
+    $failureOf = static function (string $url, int $timeoutSeconds = 3) use ($server): OutboundHttpException {
+        try {
+            $server->client->send('GET', $url, static function (OutboundRequest $request): void {}, realTransportOptions([
+                'timeoutSeconds' => $timeoutSeconds,
+                'connectTimeoutSeconds' => 1,
+            ]));
+        } catch (OutboundHttpException $exception) {
+            return $exception;
+        }
+
+        throw new RuntimeException('The request did not fail.');
+    };
+
+    try {
+        // A TLS handshake against the plain-HTTP listener. First: php -S is
+        // single-threaded, and /slow keeps it busy afterwards.
+        $tls = $failureOf('https://app.test:'.$server->port.'/ok');
+        $timeout = $failureOf($server->url('app.test', '/slow'), timeoutSeconds: 1);
+        // A loopback port with no listener: bound, read, closed again.
+        $probe = stream_socket_server('tcp://127.0.0.1:0');
+        $closedPort = (int) substr((string) stream_socket_get_name($probe, false), strrpos((string) stream_socket_get_name($probe, false), ':') + 1);
+        fclose($probe);
+        $refused = $failureOf("http://app.test:{$closedPort}/ok");
+    } finally {
+        $server->stop();
+    }
+
+    expect($timeout->transportErrorKind())->toBe(OutboundTransportErrorKindEnum::Timeout)
+        ->and($tls->transportErrorKind())->toBe(OutboundTransportErrorKindEnum::Tls)
+        ->and($refused->transportErrorKind())->toBe(OutboundTransportErrorKindEnum::Connection);
+
+    foreach ([$timeout, $tls, $refused] as $exception) {
+        expect($exception->getMessage())->not->toContain('127.0.0.1')->not->toContain('app.test')
+            ->and($exception->getPrevious()?->getMessage())->toBe('Underlying transport error.');
     }
 })->group('real-transport');
