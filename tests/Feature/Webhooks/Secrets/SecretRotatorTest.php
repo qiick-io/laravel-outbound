@@ -243,3 +243,120 @@ it('refuses a zero-grace rotation when the set is already over the limit', funct
 
     $rotator->rotate($endpoint, graceSeconds: 0);
 })->throws(WebhookException::class, 'Rotating would exceed 2 signing secrets; revoke an old secret first.');
+
+it('caps the signing set at four secrets, whatever the configuration says', function (int $maxSecrets): void {
+    new SecretRotator(maxSecrets: $maxSecrets);
+})->with([0, 5])->throws(WebhookException::class, 'max_secrets must be between 1 and 4');
+
+it('accepts every cap from one to four', function (int $maxSecrets): void {
+    $endpoint = rotatorEndpoint();
+    $rotator = new SecretRotator(maxSecrets: $maxSecrets);
+    $rotator->issue($endpoint);
+
+    for ($signingCount = 1; $signingCount < $maxSecrets; $signingCount++) {
+        $rotator->rotate($endpoint);
+    }
+
+    expect(signingPublicIds($endpoint))->toHaveCount($maxSecrets);
+})->with([1, 4]);
+
+it('refuses an issue that would push the signing set past the cap', function (): void {
+    $endpoint = rotatorEndpoint();
+    $rotator = new SecretRotator(maxSecrets: 2);
+    $old = $rotator->issue($endpoint);
+    $rotator->rotate($endpoint);
+    // A primary demoted outside the rotator leaves two grace-like secrets and no primary.
+    WebhookEndpointSecret::query()->whereKeyNot($old->id)->update(['is_primary' => false, 'expires_at' => '2026-11-24 10:00:00']);
+
+    expect(fn () => $rotator->issue($endpoint))
+        ->toThrow(WebhookException::class, 'Issuing would exceed 2 signing secrets; revoke an old secret first.')
+        ->and(WebhookEndpointSecret::query()->count())->toBe(2);
+});
+
+it('revokes a secret of a soft-deleted endpoint', function (): void {
+    $endpoint = rotatorEndpoint();
+    $rotator = new SecretRotator;
+    $old = $rotator->issue($endpoint);
+    $rotator->rotate($endpoint);
+    $endpoint->delete();
+
+    $rotator->revoke($old);
+
+    expect($old->refresh()->revoked_at?->toDateTimeString())->toBe('2026-11-23 10:00:00');
+});
+
+it('refuses to issue or rotate secrets for a soft-deleted endpoint', function (): void {
+    $endpoint = rotatorEndpoint();
+    $rotator = new SecretRotator;
+    $rotator->issue($endpoint);
+    $endpoint->delete();
+
+    expect(fn () => $rotator->rotate($endpoint))->toThrow(WebhookException::class, 'Webhook endpoint is deleted.')
+        ->and(fn () => $rotator->issue(rotatorEndpointDeletedWithoutSecrets()))->toThrow(WebhookException::class, 'Webhook endpoint is deleted.');
+});
+
+function rotatorEndpointDeletedWithoutSecrets(): WebhookEndpoint
+{
+    $endpoint = rotatorEndpoint();
+    $endpoint->delete();
+
+    return $endpoint;
+}
+
+/*
+ * With a local app.timezone, a wall-clock `expires_at` signs 40 minutes too
+ * long across the autumn daylight-saving change (review of #21, nit 4).
+ * Carbon's test clock cannot hold a time inside the repeated hour, so these
+ * tests prove the cause is gone instead: stored dates and comparisons are UTC.
+ */
+it('stores the grace expiry in UTC and reads it back as the same instant', function (): void {
+    date_default_timezone_set('Europe/Rome');
+
+    try {
+        CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-07-01 10:00:00', 'UTC'));
+        $endpoint = rotatorEndpoint();
+        $rotator = new SecretRotator;
+        $old = $rotator->issue($endpoint);
+        $rotator->rotate($endpoint, graceSeconds: 1800);
+        $storedRow = DB::table('webhook_endpoint_secrets')->where('id', $old->id)->first(['expires_at', 'created_at']);
+
+        expect((string) $storedRow?->expires_at)->toStartWith('2026-07-01 10:30:00')
+            ->and((string) $storedRow?->created_at)->toStartWith('2026-07-01 10:00:00')
+            ->and($old->refresh()->expires_at?->getTimestamp())->toBe(CarbonImmutable::parse('2026-07-01 10:30:00', 'UTC')->getTimestamp())
+            ->and($old->expires_at?->getTimezone()->getName())->toBe('UTC');
+    } finally {
+        date_default_timezone_set('UTC');
+    }
+});
+
+it('compares the grace expiry in UTC, whatever zone "now" is in', function (): void {
+    $endpoint = rotatorEndpoint();
+    $rotator = new SecretRotator;
+    $old = $rotator->issue($endpoint);
+    $old->forceFill(['is_primary' => false, 'expires_at' => CarbonImmutable::parse('2026-07-01 10:30:00', 'UTC')])->save();
+    $rotator->issue($endpoint);
+    $signingAt = fn (string $localTime): array => $endpoint->secrets()
+        ->signingAt(CarbonImmutable::parse($localTime, 'Europe/Rome'))
+        ->pluck('public_id')
+        ->all();
+
+    expect($signingAt('2026-07-01 12:29:59'))->toContain($old->public_id)
+        ->and($signingAt('2026-07-01 12:30:00'))->not->toContain($old->public_id);
+});
+
+it('stores an assigned date with an offset as its UTC instant, and a bare string as UTC', function (): void {
+    date_default_timezone_set('Europe/Rome');
+
+    try {
+        $secret = (new WebhookEndpointSecret)->forceFill([
+            'expires_at' => '2026-07-01T12:30:00+02:00',
+            'revoked_at' => '2026-07-01 10:30:00',
+        ]);
+
+        expect($secret->getAttributes()['expires_at'])->toBe('2026-07-01 10:30:00')
+            ->and($secret->getAttributes()['revoked_at'])->toBe('2026-07-01 10:30:00')
+            ->and($secret->revoked_at?->getTimestamp())->toBe(CarbonImmutable::parse('2026-07-01 10:30:00', 'UTC')->getTimestamp());
+    } finally {
+        date_default_timezone_set('UTC');
+    }
+});

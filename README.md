@@ -216,9 +216,13 @@ $signer->sign($msgId, $unixSeconds, $rawBody, $signingSet->secrets());
 $signingSet->secretPublicIds(); // record which secrets signed, never their bytes
 ```
 
-A rotation that would push the set past `max_secrets` is refused: revoke an
-old secret first. The primary cannot be revoked; rotate with a zero grace
-period instead. The resolver fails closed when an endpoint has no active
+`max_secrets` is a hard limit of 1–4: a larger value is refused when the
+application boots. An issue or a rotation that would push the set past it is
+refused: revoke an old secret first. The primary cannot be revoked; rotate
+with a zero grace period instead. A deleted endpoint gets no new secret, but
+its old secrets can still be revoked. Grace periods are measured in UTC: the
+package models store and read every date as UTC whatever `app.timezone` is,
+so a daylight-saving change never stretches or cuts one. The resolver fails closed when an endpoint has no active
 primary or more than one. Only `v1` rows sign; `v2a` rows are reserved. A row
 flagged `is_legacy_raw` may hold a non-`whsec_` secret only while
 `outbound.webhooks.allow_raw_legacy_secret` is on. A product that keeps its

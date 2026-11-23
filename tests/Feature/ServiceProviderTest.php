@@ -93,6 +93,8 @@ it('configures the rotator grace period and secret cap from config', function ()
     CarbonImmutable::setTestNow('2026-11-23 10:00:00');
     config()->set('outbound.webhooks.secret_rotation_grace_seconds', 60);
     config()->set('outbound.webhooks.max_secrets', 2);
+    // Boot already built the singleton (to check max_secrets); build it again.
+    $this->app->forgetInstance(SecretRotator::class);
     $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
     $rotator = $this->app->make(SecretRotator::class);
     $old = $rotator->issue($endpoint);
@@ -119,3 +121,12 @@ it('lets the resolver read legacy raw secrets only when the config allows them',
 
     expect($resolve)->toThrow(WebhookException::class, 'whsec_ prefix');
 })->with([true, false]);
+
+it('refuses to boot with a max_secrets above four', function (): void {
+    $this->configBeforeBoot = ['outbound.webhooks.max_secrets' => 5];
+
+    expect(fn () => $this->refreshApplication())->toThrow(WebhookException::class, 'max_secrets must be between 1 and 4');
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+});

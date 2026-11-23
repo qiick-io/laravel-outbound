@@ -34,21 +34,36 @@ final class SecretRotator
      * @param  int  $maxSecrets  `outbound.webhooks.max_secrets`, the signer's cap
      * @param  int  $defaultGraceSeconds  `outbound.webhooks.secret_rotation_grace_seconds`
      */
+    /**
+     * @throws WebhookException when `$maxSecrets` is outside 1–4: four is the
+     *                          fleet's hard limit (standards review M3)
+     */
     public function __construct(
         private readonly int $maxSecrets = 4,
         private readonly int $defaultGraceSeconds = 86_400,
-    ) {}
+    ) {
+        if ($maxSecrets < 1 || $maxSecrets > 4) {
+            throw new WebhookException('outbound.webhooks.max_secrets must be between 1 and 4.');
+        }
+    }
 
     /**
      * Give an endpoint its first primary secret.
      *
-     * @throws WebhookException when the endpoint already has an active primary
+     * @throws WebhookException when the endpoint is deleted, already has an
+     *                          active primary, or would exceed `max_secrets`
      */
     public function issue(WebhookEndpoint $endpoint): WebhookEndpointSecret
     {
         return $this->whileEndpointLocked($endpoint->id, function (WebhookEndpoint $lockedEndpoint): WebhookEndpointSecret {
-            if ($this->signingSecretsOf($lockedEndpoint)->contains('is_primary', true)) {
+            $signingSecrets = $this->signingSecretsOfLive($lockedEndpoint);
+
+            if ($signingSecrets->contains('is_primary', true)) {
                 throw new WebhookException('Webhook endpoint already has a primary secret; rotate it instead.');
+            }
+
+            if ($signingSecrets->count() + 1 > $this->maxSecrets) {
+                throw new WebhookException("Issuing would exceed {$this->maxSecrets} signing secrets; revoke an old secret first.");
             }
 
             return $this->createPrimary($lockedEndpoint);
@@ -61,7 +76,8 @@ final class SecretRotator
      * once, which is the answer to a leaked secret.
      *
      * @throws WebhookException when the grace period is negative, the endpoint
-     *                          has no primary, or the set would exceed `max_secrets`
+     *                          is deleted or has no primary, or the set would
+     *                          exceed `max_secrets`
      */
     public function rotate(WebhookEndpoint $endpoint, ?int $graceSeconds = null): WebhookEndpointSecret
     {
@@ -73,7 +89,7 @@ final class SecretRotator
 
         return $this->whileEndpointLocked($endpoint->id, function (WebhookEndpoint $lockedEndpoint) use ($graceSeconds): WebhookEndpointSecret {
             $now = CarbonImmutable::now();
-            $signingSecrets = $this->signingSecretsOf($lockedEndpoint);
+            $signingSecrets = $this->signingSecretsOfLive($lockedEndpoint);
             $primary = $signingSecrets->firstWhere('is_primary', true);
 
             if ($primary === null) {
@@ -97,6 +113,8 @@ final class SecretRotator
 
     /**
      * Stop an old secret signing at once. Revoking twice keeps the first time.
+     * Works on a soft-deleted endpoint too, so its secrets can be retired
+     * after the endpoint itself.
      *
      * @throws WebhookException when the secret is the active primary: an
      *                          endpoint must always have one, so rotate instead
@@ -128,17 +146,25 @@ final class SecretRotator
     private function whileEndpointLocked(int $endpointId, Closure $change): mixed
     {
         return WebhookEndpoint::query()->getConnection()->transaction(function () use ($endpointId, $change): mixed {
-            $lockedEndpoint = WebhookEndpoint::query()->whereKey($endpointId)->lockForUpdate()->firstOrFail();
+            $lockedEndpoint = WebhookEndpoint::withTrashed()->whereKey($endpointId)->lockForUpdate()->firstOrFail();
 
             return $change($lockedEndpoint);
         });
     }
 
     /**
+     * A deleted endpoint gets no new secret: it must not start signing again.
+     *
      * @return Collection<int, WebhookEndpointSecret>
+     *
+     * @throws WebhookException when the endpoint is soft-deleted
      */
-    private function signingSecretsOf(WebhookEndpoint $endpoint): Collection
+    private function signingSecretsOfLive(WebhookEndpoint $endpoint): Collection
     {
+        if ($endpoint->trashed()) {
+            throw new WebhookException('Webhook endpoint is deleted.');
+        }
+
         return $endpoint->secrets()->signingAt(CarbonImmutable::now())->get();
     }
 

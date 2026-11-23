@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Models\Concerns;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 
 /**
@@ -18,6 +19,10 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
  *   written by the package itself or through a dedicated model method.
  * - A new instance starts with the table's column defaults, so it reads like
  *   a stored row before it is saved or refreshed.
+ * - Every date is stored and read as UTC, whatever `app.timezone` says
+ *   (standards review, "Package schema"). The columns carry no time zone, so
+ *   a local wall clock would move a grace period or a retry by an hour at
+ *   each daylight-saving change.
  *
  * The rules are applied in Eloquent's `initialize{Trait}` hook instead of
  * property defaults, so each one is executed code the mutation suite checks.
@@ -69,5 +74,24 @@ trait PackageModelTrait
     public function getRouteKeyName(): string
     {
         return 'public_id';
+    }
+
+    /**
+     * Eloquent reads a stored string, and parses an assigned one, in
+     * `app.timezone`; a string without its own zone is UTC here instead. A
+     * date that names its instant (an object, a unix time, a string with an
+     * offset) is converted to UTC, so `fromDateTime()` stores UTC too.
+     *
+     * @param  mixed  $value
+     */
+    protected function asDateTime($value): CarbonInterface
+    {
+        $dateTime = parent::asDateTime($value);
+
+        if (is_string($value) && ! is_numeric($value) && $dateTime->getTimezone()->getName() === date_default_timezone_get()) {
+            return $dateTime->shiftTimezone('UTC');
+        }
+
+        return $dateTime->utc();
     }
 }

@@ -20,6 +20,7 @@ use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookException;
 use Qiick\Outbound\Webhooks\WebhookSecretResolver;
 
 /**
@@ -115,9 +116,15 @@ final class OutboundServiceProvider extends ServiceProvider
      * The webhook tables are mandatory, so the package loads its own
      * migrations unless `outbound.migrations.load` is off; a product that
      * turns it off publishes them instead (standards review R1).
+     *
+     * @throws WebhookException when `outbound.webhooks.max_secrets` is outside
+     *                          1–4: the fixed limit is refused at boot, not at
+     *                          the first rotation
      */
     public function boot(): void
     {
+        $this->app->make(SecretRotator::class);
+
         $migrationsPath = __DIR__.'/../../database/migrations';
 
         if ($this->app->make(ConfigRepository::class)->get('outbound.migrations.load', true) !== false) {

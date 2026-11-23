@@ -91,7 +91,8 @@ class WebhookEndpointSecret extends Model
             ->where('scheme', WebhookSignatureSchemeEnum::V1->value)
             ->whereNull('revoked_at')
             ->where(function (Builder $signingQuery) use ($now): void {
-                $signingQuery->where('is_primary', true)->orWhere('expires_at', '>', $now);
+                // Bindings are formatted in the date's own zone; the column holds UTC.
+                $signingQuery->where('is_primary', true)->orWhere('expires_at', '>', CarbonImmutable::instance($now)->utc());
             });
     }
 
