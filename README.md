@@ -391,15 +391,25 @@ Schedule::command('outbound:webhooks:prune')->daily();
 ```
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
-(`encrypted` cast). It is kept until `payload_expires_at`, 30 days after
-dispatch by default (`outbound.webhooks.payload_retention_days`, at least 4,
-so it outlives the 75 h retry schedule): long enough for the retries and a
-window of manual redelivery (Luca's Q3). `outbound:webhooks:prune` then clears
-it and keeps `payload_hash` and `payload_bytes`, so the delivery log still
-proves what was sent. A pruned delivery cannot be redelivered. A pending
-delivery whose body expires (an endpoint disabled for weeks) is exhausted
-(`payload_expired`); one a worker is sending keeps its body until its lease
-ends.
+(`encrypted` cast). It is kept until `payload_expires_at`: 30 days after
+dispatch by default (`outbound.webhooks.payload_retention_days`, at least 1;
+the maintainer's decision Q3 of 2026-11-22), or until the delivery's longest
+possible retry plan ends, plus an hour, if that is later. The plan counts
+every retry at its delay plus the most jitter, or at the `Retry-After` cap
+when Retry-After is honoured, so a receiver that keeps answering `503` with
+a long `Retry-After`, or an endpoint with a higher `max_attempts`, never loses
+its body mid-schedule.
+
+`outbound:webhooks:prune` then clears the body and keeps `payload_hash` and
+`payload_bytes`, so the delivery log still proves what was sent. It also
+deletes settled deliveries created `outbound.webhooks.delivery_retention_days`
+ago (90, at least the payload retention), with their attempts; pending ones
+are kept. It works in blocks of 500, each in its own short transaction.
+
+- A body that has expired, pruned or not, cannot be redelivered.
+- A pending delivery whose body expires (an endpoint disabled for weeks) is
+  exhausted (`payload_expired`); one a worker is sending keeps its body until
+  its lease ends.
 
 ### Retry schedule and delivery records
 
@@ -531,6 +541,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
+| `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |

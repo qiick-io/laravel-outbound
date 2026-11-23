@@ -16,7 +16,7 @@ use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
  *
  * Standard Webhooks "Deliverability and reliability": when deliveries keep
  * failing, notify the consumer through another channel and disable future
- * delivery (standards review R8, Luca's Q2). The mail carries no text a
+ * delivery (standards review R8, the maintainer's decision Q2). The mail carries no text a
  * tenant wrote: the endpoint's free-form name could hold a bare URL that mail
  * clients turn into a link. It names the endpoint by its host and public id,
  * and its only link is the product's own endpoint page, from config. Queued,

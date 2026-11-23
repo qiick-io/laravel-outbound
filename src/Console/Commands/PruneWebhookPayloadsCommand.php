@@ -9,7 +9,8 @@ use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 
 /**
  * Clears the bodies of deliveries whose retention has ended, keeping their
- * hash and length (standards review R5, M12).
+ * hash and length (standards review R5, M12), then deletes settled delivery
+ * rows past `delivery_retention_days` with their attempts.
  *
  * Run it from the scheduler, for example
  * `Schedule::command('outbound:webhooks:prune')->daily()`.
@@ -26,7 +27,10 @@ final class PruneWebhookPayloadsCommand extends Command
 
     public function handle(DatabaseDeliveryStore $store): int
     {
-        $this->info("Pruned {$store->pruneExpiredPayloads()} webhook delivery bodies.");
+        $prunedBodies = $store->pruneExpiredPayloads();
+        $deletedDeliveries = $store->deleteExpiredDeliveries();
+
+        $this->info("Pruned {$prunedBodies} webhook delivery bodies and deleted {$deletedDeliveries} webhook deliveries.");
 
         return self::SUCCESS;
     }

@@ -57,8 +57,9 @@ and the approved design before adopting a commit from `develop`.
   redelivery keeps its `webhook-id`, so a consumer that claimed the id and
   then failed drops it as a duplicate until the claim expires.
 - Schedule `outbound:webhooks:prune` (for example `daily()`): bodies are
-  kept 30 days after dispatch (`OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS`, at
-  least 4), then cleared. `WebhookExhaustedReasonEnum` gains
+  kept 30 days after dispatch (`OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS`), or
+  until their retry plan ends if later, then cleared; settled delivery rows
+  are deleted after 90 days (`OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS`). `WebhookExhaustedReasonEnum` gains
   `PayloadExpired`: add it to any exhaustive `match`.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets

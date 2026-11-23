@@ -19,7 +19,7 @@ use Qiick\Outbound\Notifications\WebhookEndpointDisabledNotification;
 use Qiick\Outbound\Tests\Support\NotifiableUser;
 
 /*
- * Luca's Q2 of 2026-11-22: an automatically disabled endpoint's owner hears
+ * the maintainer's decision Q2 of 2026-11-22: an automatically disabled endpoint's owner hears
  * of it by email. The package notifies `created_by`; a product can turn that
  * off and listen to WebhookEndpointDisabledEvent for its own channels.
  */

@@ -120,6 +120,7 @@ final class OutboundServiceProvider extends ServiceProvider
             return new DatabaseDeliveryStore(
                 scopeColumn: is_string($scopeColumn) && $scopeColumn !== '' ? $scopeColumn : null,
                 payloadRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.payload_retention_days', 30),
+                deliveryRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.delivery_retention_days', 90),
             );
         });
 

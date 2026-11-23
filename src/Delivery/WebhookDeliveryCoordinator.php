@@ -8,6 +8,7 @@ use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
@@ -105,8 +106,9 @@ final class WebhookDeliveryCoordinator
         $createdDeliveries = new Collection;
 
         foreach ($this->store->subscribedEndpoints($message->type, $scope) as $endpoint) {
-            $maxAttempts = $endpoint->max_attempts ?? count($this->retryDelaysFor($endpoint)) + 1;
-            $delivery = $this->store->createDelivery($endpoint, $message, $rawBody, $maxAttempts);
+            $retryDelays = $this->retryDelaysFor($endpoint);
+            $maxAttempts = $endpoint->max_attempts ?? count($retryDelays) + 1;
+            $delivery = $this->store->createDelivery($endpoint, $message, $rawBody, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts));
 
             if ($delivery !== null) {
                 $createdDeliveries->push($delivery);
@@ -266,8 +268,8 @@ final class WebhookDeliveryCoordinator
             throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
         }
 
-        if ($delivery->payload === null) {
-            throw new WebhookException('Webhook delivery body has been pruned; it cannot be redelivered.');
+        if ($delivery->payload === null || $delivery->payload_expires_at?->lessThanOrEqualTo(CarbonImmutable::now()) === true) {
+            throw new WebhookException('Webhook delivery body has been pruned or has expired; it cannot be redelivered.');
         }
 
         // Checked again in the update itself: a prune or a cancel may have
@@ -275,7 +277,7 @@ final class WebhookDeliveryCoordinator
         $scheduledCount = $this->store->scheduleRedelivery(
             WebhookDelivery::query()
                 ->whereKey($delivery->id)
-                ->whereNotNull('payload')
+                ->tap($this->withLiveBody(...))
                 ->where('status', '!=', DeliveryStatus::Cancelled),
             WebhookAttemptTriggerEnum::Manual,
             $triggeredBy,
@@ -335,7 +337,7 @@ final class WebhookDeliveryCoordinator
                 ->where('created_at', '<', $until->utc())
                 // Laravel binds backed enums by their value.
                 ->whereIn('status', $statuses)
-                ->whereNotNull('payload'),
+                ->tap($this->withLiveBody(...)),
             WebhookAttemptTriggerEnum::Bulk,
             $triggeredBy,
         );
@@ -353,6 +355,19 @@ final class WebhookDeliveryCoordinator
         }
 
         return $scheduledCount;
+    }
+
+    /**
+     * Deliveries whose body is still there and not yet expired: a body past
+     * its retention may only wait for the next prune.
+     *
+     * @param  Builder<WebhookDelivery>  $deliveriesQuery
+     */
+    private function withLiveBody(Builder $deliveriesQuery): void
+    {
+        $deliveriesQuery->whereNotNull('payload')->where(function (Builder $expiryQuery): void {
+            $expiryQuery->whereNull('payload_expires_at')->orWhere('payload_expires_at', '>', CarbonImmutable::now('UTC'));
+        });
     }
 
     /**

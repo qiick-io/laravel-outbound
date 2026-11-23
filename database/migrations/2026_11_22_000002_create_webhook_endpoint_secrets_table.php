@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Schema;
 /*
  * The signing secrets of an endpoint: a table, not a `previous_secret`
  * column, because a rotation can need up to `outbound.webhooks.max_secrets`
- * (4) secrets at once (standards review R9, Luca's Q1 of 2026-11-22).
+ * (4) secrets at once (standards review R9, the maintainer's decision Q1 of 2026-11-22).
  *
  * The signing set is the primary secret plus the non-revoked secrets whose
  * `expires_at` is still in the future. `secret` holds the `whsec_` string

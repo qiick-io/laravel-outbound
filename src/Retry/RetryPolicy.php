@@ -74,6 +74,31 @@ final class RetryPolicy
         return RetryDecision::retryIn(max($scheduledSeconds, $floorSeconds + $jitterAboveFloor));
     }
 
+    /**
+     * The longest a delivery's automatic retries can take: every retry at its
+     * schedule delay plus the most jitter, or, when Retry-After is honoured,
+     * at the cap plus its jitter if that is later. A body must be kept at
+     * least this long, or a delivery would lose it mid-schedule.
+     *
+     * @param  list<int>  $delays  the schedule; the last repeats
+     * @param  int  $maxAttempts  the first attempt included
+     */
+    public function longestPlanSeconds(array $delays, int $maxAttempts): int
+    {
+        $planSeconds = 0;
+
+        for ($attemptNumber = 1; $attemptNumber < $maxAttempts; $attemptNumber++) {
+            $scheduleDelay = $delays[min($attemptNumber, count($delays)) - 1];
+            $latestScheduled = $scheduleDelay + min($this->jitterSeconds, intdiv($scheduleDelay, 2));
+            $latestFloor = $this->respectRetryAfter
+                ? $this->retryAfterCapSeconds + min($this->jitterSeconds, intdiv($this->retryAfterCapSeconds, 2))
+                : 0;
+            $planSeconds += max($latestScheduled, $latestFloor);
+        }
+
+        return $planSeconds;
+    }
+
     private function floorSeconds(?int $httpStatus, ?int $retryAfterSeconds): int
     {
         if (! $this->respectRetryAfter || $retryAfterSeconds === null) {

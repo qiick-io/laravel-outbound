@@ -118,11 +118,19 @@ return [
 
         /*
          * Days the encrypted body of a delivery is kept after dispatch, for
-         * retries and manual redelivery; `outbound:webhooks:prune` then clears
-         * it and keeps its hash and length. At least 4, so a body outlives the
-         * 75 h retry schedule (Luca's Q3: 30).
+         * retries and manual redelivery (the maintainer's decision Q3 of
+         * 2026-11-22: 30); never less than the delivery's longest possible
+         * retry plan. `outbound:webhooks:prune` then clears it and keeps its
+         * hash and length.
          */
         'payload_retention_days' => (int) env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30),
+
+        /*
+         * Days a settled delivery row and its attempts are kept before
+         * `outbound:webhooks:prune` deletes them. At least the payload
+         * retention. Pending deliveries are never deleted.
+         */
+        'delivery_retention_days' => (int) env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90),
 
         /*
          * Let an endpoint's own `allow_private_hosts` reach private, loopback
