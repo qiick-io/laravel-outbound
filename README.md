@@ -322,11 +322,14 @@ A disabled endpoint gets no new deliveries and its pending ones wait. Each
 disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
 so a product can add its own channels. The package also emails the
 endpoint's `created_by` user, loaded with `auth.providers.users.model`
-(`WebhookEndpointDisabledNotification`, queued, naming the endpoint and its
-host, never its URL), for automatic disables only; turn that off with
-`outbound.webhooks.auto_disable.notify_owner`. The name is the tenant's text,
-so the mail shows it as plain text on one line, at most 80 characters, with
-no Markdown, link or HTML.
+(`WebhookEndpointDisabledNotification`, queued), for automatic disables only;
+turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
+carries no text a tenant wrote: a free-form name could hold a bare URL that
+mail clients turn into a link. It names the endpoint by its host (a valid
+host name or IP literal, else "an unknown host") and its public id, never
+its URL, and its only link is the product's own endpoint page,
+`outbound.webhooks.auto_disable.endpoint_url` with `{endpoint}` replaced by
+the public id (no link when unset).
 
 ```php
 $coordinator = app(WebhookDeliveryCoordinator::class);
@@ -471,6 +474,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |
 | `outbound.webhooks.auto_disable.notify_owner` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER` | `true` |
+| `outbound.webhooks.auto_disable.endpoint_url` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL` | `null` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
 | `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
 | `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |

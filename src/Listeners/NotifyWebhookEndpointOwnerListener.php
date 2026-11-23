@@ -48,14 +48,26 @@ final class NotifyWebhookEndpointOwnerListener
             return;
         }
 
-        $endpointHost = parse_url($endpoint->url, PHP_URL_HOST) ?: 'an unknown host';
+        $endpointPageUrl = $this->config->get('outbound.webhooks.auto_disable.endpoint_url');
 
         $owner->notify(new WebhookEndpointDisabledNotification(
             $endpoint->public_id,
-            $endpoint->name ?? $endpointHost,
-            $endpointHost,
+            self::hostOf($endpoint->url),
             $event->reason,
             $event->disabledAt,
+            is_string($endpointPageUrl) && $endpointPageUrl !== '' ? str_replace('{endpoint}', rawurlencode($endpoint->public_id), $endpointPageUrl) : null,
         ));
+    }
+
+    /**
+     * The URL's host, lowercased, when it is a host name or an IP literal;
+     * anything else (no host, spaces, punctuation) is "an unknown host", so
+     * the mail never carries free text from the URL.
+     */
+    private static function hostOf(string $url): string
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        return preg_match('/^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])$/D', $host) === 1 ? $host : 'an unknown host';
     }
 }

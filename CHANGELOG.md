@@ -72,7 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint's `auto_disable`), `WebhookEndpointDisabledEvent`,
   `WebhookEndpointDisabledNotification` emailed to the endpoint's
   `created_by` by `NotifyWebhookEndpointOwnerListener` (automatic disables
-  only, `notify_owner`), and `WebhookDeliveryCoordinator::disableEndpoint()` /
+  only, `notify_owner`; host, public id and a link to the product's
+  `endpoint_url`, never tenant text), and `WebhookDeliveryCoordinator::disableEndpoint()` /
   `enableEndpoint()`.
 
 ### Changed

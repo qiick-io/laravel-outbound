@@ -16,8 +16,10 @@ use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
  *
  * Standard Webhooks "Deliverability and reliability": when deliveries keep
  * failing, notify the consumer through another channel and disable future
- * delivery (standards review R8, Luca's Q2). The mail names the endpoint and
- * its host only, never its URL: a path or a query can carry a token. Queued,
+ * delivery (standards review R8, Luca's Q2). The mail carries no text a
+ * tenant wrote: the endpoint's free-form name could hold a bare URL that mail
+ * clients turn into a link. It names the endpoint by its host and public id,
+ * and its only link is the product's own endpoint page, from config. Queued,
  * so a worker run never waits on the mailer.
  *
  * @api
@@ -26,12 +28,16 @@ final class WebhookEndpointDisabledNotification extends Notification implements 
 {
     use Queueable;
 
+    /**
+     * @param  string  $endpointHost  a valid host name or IP literal, lowercased
+     * @param  string|null  $endpointPageUrl  the product's page for the endpoint
+     */
     public function __construct(
         public readonly string $endpointPublicId,
-        public readonly string $endpointName,
         public readonly string $endpointHost,
         public readonly WebhookEndpointDisabledReasonEnum $reason,
         public readonly CarbonImmutable $disabledAt,
+        public readonly ?string $endpointPageUrl,
     ) {}
 
     /**
@@ -44,39 +50,19 @@ final class WebhookEndpointDisabledNotification extends Notification implements 
 
     public function toMail(object $notifiable): MailMessage
     {
-        $endpointName = self::plainText($this->endpointName);
-
-        return (new MailMessage)
-            ->subject("Webhook endpoint \"{$endpointName}\" disabled")
-            ->line(self::markdownEscaped("Webhook deliveries to {$endpointName} ({$this->endpointHost})")." stopped at {$this->disabledAt->utc()->toDateTimeString()} UTC.")
+        $mail = (new MailMessage)
+            ->subject("Webhook endpoint disabled: {$this->endpointHost}")
+            ->line("Webhook deliveries to {$this->endpointHost} (endpoint {$this->endpointPublicId}) stopped at {$this->disabledAt->utc()->toDateTimeString()} UTC.")
             ->line(match ($this->reason) {
                 WebhookEndpointDisabledReasonEnum::GoneHttp410 => 'It answered 410 Gone, which asks the sender to stop.',
                 WebhookEndpointDisabledReasonEnum::AutoFailure => 'It has not accepted a webhook for days, and every recent attempt failed.',
                 WebhookEndpointDisabledReasonEnum::Manual => 'A user disabled it.',
-            })
-            ->line('Fix the receiving end, then enable the endpoint again: its pending deliveries resume.');
-    }
+            });
 
-    /**
-     * The name is the tenant's text: one line of at most 80 characters, with
-     * no control, format or line-break characters, so it cannot add lines to
-     * the mail or run on.
-     */
-    private static function plainText(string $text): string
-    {
-        // @phpstan-ignore argument.type (a fixed pattern on scrubbed UTF-8: preg_replace cannot fail)
-        $singleLine = trim(preg_replace('/[\s\p{Cc}\p{Cf}\p{Z}]+/u', ' ', mb_scrub($text, 'UTF-8')));
+        if ($this->endpointPageUrl !== null) {
+            $mail->action('Open the endpoint', $this->endpointPageUrl);
+        }
 
-        return mb_strlen($singleLine) > 80 ? mb_substr($singleLine, 0, 79).'…' : $singleLine;
-    }
-
-    /**
-     * Mail lines are Markdown: every ASCII punctuation mark is escaped, so a
-     * name can make no link, emphasis or HTML.
-     */
-    private static function markdownEscaped(string $text): string
-    {
-        // @phpstan-ignore return.type (a fixed pattern on valid UTF-8: preg_replace cannot fail)
-        return preg_replace('/[!-\/:-@\[-`{-~]/', '\\\\$0', $text);
+        return $mail->line('Fix the receiving end, then enable the endpoint again: its pending deliveries resume.');
     }
 }

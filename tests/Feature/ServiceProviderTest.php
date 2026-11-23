@@ -54,6 +54,7 @@ it('merges the package defaults into the outbound config', function (): void {
                 'no_success_days' => 5,
                 'min_consecutive_failures' => 10,
                 'notify_owner' => true,
+                'endpoint_url' => null,
             ],
             'allow_raw_legacy_secret' => false,
             'scope_column' => null,

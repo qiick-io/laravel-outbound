@@ -136,6 +136,9 @@ return [
             'min_consecutive_failures' => (int) env('OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES', 10),
             // Email the endpoint's `created_by` user when it is disabled automatically.
             'notify_owner' => (bool) env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER', true),
+            // The product's page for an endpoint, `{endpoint}` being its public
+            // id: the email's only link. Null sends the email without a link.
+            'endpoint_url' => env('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL'),
         ],
 
         /*
