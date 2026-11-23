@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Collection;
 use InvalidArgumentException;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookSubscription;
@@ -33,10 +34,20 @@ final class DatabaseDeliveryStore
 {
     /**
      * @param  string|null  $scopeColumn  `outbound.webhooks.scope_column`
+     * @param  int  $payloadRetentionDays  `outbound.webhooks.payload_retention_days`
+     *
+     * @throws InvalidArgumentException when the retention is shorter than the
+     *                                  75 h retry schedule: a pending delivery
+     *                                  would lose its body mid-schedule
      */
     public function __construct(
-        private readonly ?string $scopeColumn = null,
-    ) {}
+        private readonly ?string $scopeColumn,
+        private readonly int $payloadRetentionDays,
+    ) {
+        if ($payloadRetentionDays < 4) {
+            throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at least 4, longer than the 75 h retry schedule.');
+        }
+    }
 
     /**
      * Active endpoints subscribed to the type, or to every type, in the scope.
@@ -65,7 +76,7 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * A pending delivery, due now.
+     * A pending delivery, due now, whose body is kept for the retention period.
      *
      * @return WebhookDelivery|null null when the endpoint already has this event
      *
@@ -79,7 +90,10 @@ final class DatabaseDeliveryStore
             'occurred_at' => $message->timestamp,
             'payload_version' => $endpoint->payload_version,
             'max_attempts' => $maxAttempts,
-        ])->usePayload($rawBody)->forceFill(['next_attempt_at' => CarbonImmutable::now()]);
+        ])->usePayload($rawBody)->forceFill([
+            'next_attempt_at' => CarbonImmutable::now(),
+            'payload_expires_at' => CarbonImmutable::now()->addDays($this->payloadRetentionDays),
+        ]);
 
         try {
             $delivery->save();
@@ -320,6 +334,41 @@ final class DatabaseDeliveryStore
         });
 
         return $scheduledCount;
+    }
+
+    /**
+     * Clear every body whose retention has ended, keeping `payload_hash` and
+     * `payload_bytes` (standards review R5). A delivery a worker is sending
+     * keeps its body until its lease ends. A pending delivery can no longer
+     * be signed without its body, so it is exhausted (`payload_expired`).
+     *
+     * @return int the bodies cleared
+     */
+    public function pruneExpiredPayloads(): int
+    {
+        $now = CarbonImmutable::now('UTC');
+        $expiredPayloads = fn (): Builder => WebhookDelivery::query()
+            ->whereNotNull('payload')
+            ->where('payload_expires_at', '<=', $now)
+            ->where(function (Builder $leaseQuery) use ($now): void {
+                $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
+            });
+
+        /** @var int $prunedCount Laravel 12 types transaction() as mixed. */
+        $prunedCount = WebhookDelivery::query()->getConnection()->transaction(function () use ($expiredPayloads): int {
+            $pendingCount = $expiredPayloads()->where('status', DeliveryStatus::Pending->value)->update([
+                'payload' => null,
+                'status' => DeliveryStatus::Exhausted->value,
+                'exhausted_reason' => WebhookExhaustedReasonEnum::PayloadExpired->value,
+                'next_attempt_at' => null,
+                'next_attempt_trigger' => null,
+                'next_attempt_triggered_by' => null,
+            ]);
+
+            return $pendingCount + $expiredPayloads()->where('status', '!=', DeliveryStatus::Pending->value)->update(['payload' => null]);
+        });
+
+        return $prunedCount;
     }
 
     /**

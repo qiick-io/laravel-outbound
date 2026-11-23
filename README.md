@@ -41,8 +41,7 @@ One canonical path for:
 Non-goals for v1: asymmetric Standard Webhooks (`v2a`; its columns are
 reserved), global helpers, a hard dependency on `laravel/framework`. The
 rest of the delivery layer the 2026-11-22 standards review made mandatory
-before 1.0 (body retention, egress proxy) lands in the following pull
-requests.
+before 1.0 (the egress proxy) lands in a following pull request.
 
 ## Threat model
 
@@ -384,6 +383,24 @@ pull request (review M14). The attempt records `trigger = manual|bulk` and `trig
 - `exhausted_reason` is cleared when a redelivery is scheduled; `delivered_at`
   keeps the time of the last successful delivery until a new one replaces it.
 
+### Body retention
+
+```php
+// routes/console.php
+Schedule::command('outbound:webhooks:prune')->daily();
+```
+
+A delivery's body is the exact payload every attempt signs, encrypted at rest
+(`encrypted` cast). It is kept until `payload_expires_at`, 30 days after
+dispatch by default (`outbound.webhooks.payload_retention_days`, at least 4,
+so it outlives the 75 h retry schedule): long enough for the retries and a
+window of manual redelivery (Luca's Q3). `outbound:webhooks:prune` then clears
+it and keeps `payload_hash` and `payload_bytes`, so the delivery log still
+proves what was sent. A pruned delivery cannot be redelivered. A pending
+delivery whose body expires (an endpoint disabled for weeks) is exhausted
+(`payload_expired`); one a worker is sending keeps its body until its lease
+ends.
+
 ### Retry schedule and delivery records
 
 ```php
@@ -513,6 +530,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
+| `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |

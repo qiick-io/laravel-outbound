@@ -117,6 +117,14 @@ return [
         'default_max_concurrency' => (int) env('OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY', 2),
 
         /*
+         * Days the encrypted body of a delivery is kept after dispatch, for
+         * retries and manual redelivery; `outbound:webhooks:prune` then clears
+         * it and keeps its hash and length. At least 4, so a body outlives the
+         * 75 h retry schedule (Luca's Q3: 30).
+         */
+        'payload_retention_days' => (int) env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30),
+
+        /*
          * Let an endpoint's own `allow_private_hosts` reach private, loopback
          * and link-local addresses (metadata stays blocked). Off: only
          * `ssrf.allow_private_hosts` can, for every endpoint. The column is

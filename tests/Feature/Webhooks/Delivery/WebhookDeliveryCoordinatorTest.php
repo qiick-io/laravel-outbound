@@ -162,6 +162,8 @@ it('fans out only to the given scope when the product names a scope column', fun
         $table->string('project_id')->nullable();
     });
     config()->set('outbound.webhooks.scope_column', 'project_id');
+    // Boot built the store already (to check the payload retention).
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
     $inScope = deliveryEndpoint(['project_id' => 'p1']);
     deliveryEndpoint(['project_id' => 'p2']);

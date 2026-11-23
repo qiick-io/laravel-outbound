@@ -11,6 +11,7 @@ use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
+use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
@@ -118,6 +119,7 @@ final class OutboundServiceProvider extends ServiceProvider
 
             return new DatabaseDeliveryStore(
                 scopeColumn: is_string($scopeColumn) && $scopeColumn !== '' ? $scopeColumn : null,
+                payloadRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.payload_retention_days', 30),
             );
         });
 
@@ -188,8 +190,10 @@ final class OutboundServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->app->make(SecretRotator::class);
-        // Refuses auto-disable thresholds below 1 at boot too.
+        // Refuses auto-disable thresholds below 1 and a payload retention
+        // shorter than the retry schedule at boot too.
         $this->app->make(EndpointDisablePolicy::class);
+        $this->app->make(DatabaseDeliveryStore::class);
         $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
         $migrationsPath = __DIR__.'/../../database/migrations';
@@ -205,7 +209,7 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
 
-            $this->commands([WorkWebhookDeliveriesCommand::class]);
+            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class]);
         }
     }
 
