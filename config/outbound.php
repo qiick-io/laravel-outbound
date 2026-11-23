@@ -77,6 +77,13 @@ return [
         'max_secrets' => (int) env('OUTBOUND_WEBHOOK_MAX_SECRETS', 4),
 
         /*
+         * How long SecretRotator keeps the old primary signing after a
+         * rotation, so consumers can switch keys without dropping messages.
+         * A rotation may pass its own period; zero revokes the old key at once.
+         */
+        'secret_rotation_grace_seconds' => (int) env('OUTBOUND_WEBHOOK_SECRET_ROTATION_GRACE_SECONDS', 86_400),
+
+        /*
          * RetrySchedule preset: "standard" (Standard Webhooks example) or
          * "short" ([10, 30, 60], migration window only).
          */
