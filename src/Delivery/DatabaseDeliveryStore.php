@@ -210,9 +210,9 @@ final class DatabaseDeliveryStore
 
             // A redelivery asked for while this attempt was on the wire: the
             // worker claimed the delivery without it, so recording must not
-            // clear it.
-            $redeliveryAskedMeanwhile = $storedDelivery->next_attempt_trigger !== $delivery->next_attempt_trigger
-                || $storedDelivery->next_attempt_triggered_by !== $delivery->next_attempt_triggered_by;
+            // clear it. The request count, not the trigger or the user, tells
+            // it apart: the same user can ask twice.
+            $redeliveryAskedMeanwhile = $storedDelivery->redelivery_requests !== $delivery->redelivery_requests;
             $askedTrigger = $storedDelivery->next_attempt_trigger;
             $askedBy = $storedDelivery->next_attempt_triggered_by;
 
@@ -299,6 +299,7 @@ final class DatabaseDeliveryStore
             'next_attempt_at' => CarbonImmutable::now('UTC'),
             'next_attempt_trigger' => $trigger->value,
             'next_attempt_triggered_by' => $triggeredBy,
+            'redelivery_requests' => WebhookDelivery::query()->getQuery()->raw('redelivery_requests + 1'),
         ];
 
         /** @var int $scheduledCount Laravel 12 types transaction() as mixed. */

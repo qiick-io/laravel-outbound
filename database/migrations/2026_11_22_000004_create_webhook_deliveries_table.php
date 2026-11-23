@@ -30,6 +30,8 @@ use Illuminate\Support\Facades\Schema;
  * or 410 Gone; review R4). `next_attempt_trigger` and
  * `next_attempt_triggered_by` carry a manual or bulk redelivery request to
  * the worker, which records them on the attempt and clears them (review R7).
+ * `redelivery_requests` counts the requests, so a request repeated by the
+ * same user while the delivery is being sent is still told apart.
  *
  * Deleting an endpoint with deliveries is refused: the log outlives a
  * soft-deleted endpoint until retention removes it.
@@ -66,6 +68,8 @@ return new class extends Migration
             if (is_string($usersTable) && $usersTable !== '') {
                 $nextAttemptTriggeredBy->constrained($usersTable)->nullOnDelete();
             }
+
+            $table->unsignedInteger('redelivery_requests')->default(0);
 
             $table->timestamp('last_attempt_at')->nullable();
             $table->timestamp('delivered_at')->nullable();

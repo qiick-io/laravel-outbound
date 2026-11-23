@@ -262,17 +262,36 @@ final class WebhookDeliveryCoordinator
     {
         $this->assertCanRedeliverTo($delivery->endpoint);
 
+        if ($delivery->status === DeliveryStatus::Cancelled) {
+            throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
+        }
+
         if ($delivery->payload === null) {
             throw new WebhookException('Webhook delivery body has been pruned; it cannot be redelivered.');
         }
 
-        $scheduledCount = $this->store->scheduleRedelivery(WebhookDelivery::query()->whereKey($delivery->id), WebhookAttemptTriggerEnum::Manual, $triggeredBy);
+        // Checked again in the update itself: a prune or a cancel may have
+        // run since the caller loaded the delivery.
+        $scheduledCount = $this->store->scheduleRedelivery(
+            WebhookDelivery::query()
+                ->whereKey($delivery->id)
+                ->whereNotNull('payload')
+                ->where('status', '!=', DeliveryStatus::Cancelled),
+            WebhookAttemptTriggerEnum::Manual,
+            $triggeredBy,
+        );
 
         if ($scheduledCount === 0) {
             return false;
         }
 
-        $this->events->dispatch(new WebhookRedeliveryRequestedEvent($delivery->endpoint->public_id, $scheduledCount, WebhookAttemptTriggerEnum::Manual, $triggeredBy));
+        $this->events->dispatch(new WebhookRedeliveryRequestedEvent(
+            $delivery->endpoint->public_id,
+            $scheduledCount,
+            WebhookAttemptTriggerEnum::Manual,
+            $triggeredBy,
+            deliveryPublicId: $delivery->public_id,
+        ));
 
         return true;
     }
@@ -305,6 +324,10 @@ final class WebhookDeliveryCoordinator
             throw new WebhookException('A bulk redelivery needs at least one status.');
         }
 
+        if (in_array(DeliveryStatus::Cancelled, $statuses, true)) {
+            throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
+        }
+
         $scheduledCount = $this->store->scheduleRedelivery(
             WebhookDelivery::query()
                 ->where('endpoint_id', $endpoint->id)
@@ -318,7 +341,15 @@ final class WebhookDeliveryCoordinator
         );
 
         if ($scheduledCount > 0) {
-            $this->events->dispatch(new WebhookRedeliveryRequestedEvent($endpoint->public_id, $scheduledCount, WebhookAttemptTriggerEnum::Bulk, $triggeredBy));
+            $this->events->dispatch(new WebhookRedeliveryRequestedEvent(
+                $endpoint->public_id,
+                $scheduledCount,
+                WebhookAttemptTriggerEnum::Bulk,
+                $triggeredBy,
+                from: $from,
+                until: $until,
+                statuses: $statuses,
+            ));
         }
 
         return $scheduledCount;

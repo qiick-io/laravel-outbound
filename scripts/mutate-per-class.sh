@@ -56,11 +56,19 @@ shard="${MUTATE_SHARD:-1/1}"
 shard_index="${shard%/*}"
 shard_count="${shard#*/}"
 class_position=0
+classes_run=0
+
+# A malformed shard would run no class and still exit 0.
+if ! [[ "${shard_index}" =~ ^[0-9]+$ && "${shard_count}" =~ ^[0-9]+$ ]] || ((shard_index < 1 || shard_index > shard_count)); then
+  echo "MUTATE_SHARD must be i/n with 1 <= i <= n, not '${shard}'." >&2
+  exit 1
+fi
 
 # Whether the next class in the overall order belongs to this shard.
 in_this_shard() {
   class_position=$((class_position + 1))
-  [[ $(((class_position - 1) % shard_count + 1)) -eq "${shard_index}" ]]
+  [[ $(((class_position - 1) % shard_count + 1)) -eq "${shard_index}" ]] || return 1
+  classes_run=$((classes_run + 1))
 }
 
 for class in "${covered_only_classes[@]}"; do
@@ -99,5 +107,12 @@ for class in "${webhook_classes[@]}"; do
     status=1
   fi
 done
+
+echo "==> shard ${shard} ran ${classes_run} class(es)"
+
+if ((classes_run == 0)); then
+  echo "Shard ${shard} ran no class." >&2
+  exit 1
+fi
 
 exit "${status}"

@@ -49,6 +49,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property WebhookExhaustedReasonEnum|null $exhausted_reason
  * @property WebhookAttemptTriggerEnum|null $next_attempt_trigger
  * @property int|null $next_attempt_triggered_by
+ * @property int $redelivery_requests
  * @property CarbonImmutable|null $last_attempt_at
  * @property CarbonImmutable|null $delivered_at
  * @property int|null $last_http_status
@@ -150,6 +151,7 @@ class WebhookDelivery extends Model
         return [
             'status' => 'pending',
             'attempts_count' => 0,
+            'redelivery_requests' => 0,
             'trigger' => 'event',
         ];
     }

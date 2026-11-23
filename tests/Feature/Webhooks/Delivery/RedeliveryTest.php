@@ -123,7 +123,7 @@ it('gives a settled delivery exactly one more attempt: a failed redelivery is ex
         ->and($delivery->next_attempt_at)->toBeNull()
         ->and(WebhookDeliveryAttempt::query()->sole()->trigger)->toBe(WebhookAttemptTriggerEnum::Manual)
         ->and(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBeNull();
-})->with(['exhausted', 'delivered', 'refused', 'cancelled']);
+})->with(['exhausted', 'delivered', 'refused']);
 
 it('sends a pending delivery now and keeps its schedule when that attempt fails', function (): void {
     $endpoint = redeliveryEndpoint();
@@ -403,4 +403,86 @@ it('honours a second user\'s request made while the first user\'s redelivery is 
     app(WebhookDeliveryCoordinator::class)->work(50);
 
     expect(WebhookDeliveryAttempt::query()->orderBy('attempt')->pluck('triggered_by')->all())->toBe([$firstOperatorId, $secondOperatorId]);
+});
+
+/*
+ * Adversarial review of #35, B1: a request repeated by the same asker (or
+ * with no user) while the delivery is being sent must not be lost.
+ */
+it('honours a repeated request by the same asker made while the delivery is being sent', function (?bool $withUser, string $api): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'max_attempts' => 10, 'created_at' => '2026-11-23 08:00:00']);
+    $operatorId = $withUser ? redeliveryUserId() : null;
+    $ask = function () use ($api, $delivery, $endpoint, $operatorId): void {
+        if ($api === 'single') {
+            app(WebhookDeliveryCoordinator::class)->redeliver($delivery->refresh(), $operatorId);
+        } else {
+            app(WebhookDeliveryCoordinator::class)->redeliverRange($endpoint, CarbonImmutable::parse('2026-11-23 00:00:00', 'UTC'), CarbonImmutable::parse('2026-11-24 00:00:00', 'UTC'), [DeliveryStatus::Exhausted, DeliveryStatus::Pending], $operatorId);
+        }
+    };
+    $ask();
+    $this->transfer->respond(500);
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
+        $this->app->make(OutboundHttpLimits::class),
+        static fn (): float => 1_000.0,
+        function ($request, array $options) use ($ask) {
+            // The same asker clicks again while the first redelivery is on the wire.
+            if (count($this->transfer->requests) === 0) {
+                $ask();
+            }
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    app(WebhookDeliveryCoordinator::class)->work(50);
+
+    expect($delivery->refresh()->status)->toBe(DeliveryStatus::Pending)
+        ->and(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(1)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(2);
+})->with([
+    'same user, single' => [true, 'single'],
+    'no user, single' => [false, 'single'],
+    'same user, bulk' => [true, 'bulk'],
+    'no user, bulk' => [false, 'bulk'],
+]);
+
+it('reports a delivery pruned after it was loaded as not scheduled', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted']);
+    WebhookDelivery::query()->whereKey($delivery->id)->update(['payload' => null]);
+
+    expect(app(WebhookDeliveryCoordinator::class)->redeliver($delivery))->toBeFalse()
+        ->and($delivery->refresh()->status)->toBe(DeliveryStatus::Exhausted);
+    Event::assertNotDispatched(WebhookRedeliveryRequestedEvent::class);
+});
+
+it('treats a cancelled delivery as withdrawn for good', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'cancelled', 'created_at' => '2026-11-22 12:00:00']);
+
+    expect(fn () => app(WebhookDeliveryCoordinator::class)->redeliver($delivery))->toThrow(WebhookException::class, 'A cancelled delivery was withdrawn and cannot be redelivered.')
+        ->and(fn () => app(WebhookDeliveryCoordinator::class)->redeliverRange($endpoint, CarbonImmutable::parse('2026-11-22', 'UTC'), CarbonImmutable::parse('2026-11-23', 'UTC'), [DeliveryStatus::Cancelled]))->toThrow(WebhookException::class, 'A cancelled delivery was withdrawn and cannot be redelivered.')
+        ->and($delivery->refresh()->status)->toBe(DeliveryStatus::Cancelled);
+});
+
+it('says in the audit event what was redelivered', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'created_at' => '2026-11-22 12:00:00']);
+    $from = CarbonImmutable::parse('2026-11-22', 'UTC');
+    $until = CarbonImmutable::parse('2026-11-23', 'UTC');
+
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivery);
+    app(WebhookDeliveryCoordinator::class)->redeliverRange($endpoint, $from, $until, [DeliveryStatus::Exhausted, DeliveryStatus::Pending]);
+
+    Event::assertDispatched(WebhookRedeliveryRequestedEvent::class, fn (WebhookRedeliveryRequestedEvent $event): bool => $event->trigger === WebhookAttemptTriggerEnum::Manual
+        && $event->deliveryPublicId === $delivery->public_id
+        && $event->from === null && $event->until === null && $event->statuses === []);
+    Event::assertDispatched(WebhookRedeliveryRequestedEvent::class, fn (WebhookRedeliveryRequestedEvent $event): bool => $event->trigger === WebhookAttemptTriggerEnum::Bulk
+        && $event->deliveryPublicId === null
+        && $event->from?->equalTo($from) === true && $event->until?->equalTo($until) === true
+        && $event->statuses === [DeliveryStatus::Exhausted, DeliveryStatus::Pending]);
 });

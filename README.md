@@ -367,14 +367,20 @@ pull request (review M14). The attempt records `trigger = manual|bulk` and `trig
 - `redeliverRange()` takes the endpoint's deliveries created in
   [`$from`, `$until`) with the given statuses; deliveries whose body has been
   pruned are skipped. A large range does not starve other endpoints.
-- Both refuse a disabled or deleted endpoint (enable it first). A pruned body
+- Both refuse a disabled or deleted endpoint (enable it first) and a
+  cancelled delivery: the product withdrew it, for good. A pruned body
   differs: `redeliver()` refuses its one delivery, while `redeliverRange()`
   skips pruned deliveries and schedules the rest, so one old delivery does not
   block a range. Both fire `WebhookRedeliveryRequestedEvent` (endpoint public
   id, count, trigger, user) for a product's audit log.
 - Asking twice before the worker runs sends the delivery once, for the latest
-  request. A request made while the delivery is being sent is kept: that
-  attempt is recorded as it went, then the delivery is sent again.
+  request. A request made while the delivery is being sent is kept, even from
+  the same user (each request is counted): that attempt is recorded as it
+  went, then the delivery is sent again.
+- A redelivery goes to the endpoint's **current** URL (through the SSRF guard)
+  with the current signing secrets, whatever the subscriptions are now:
+  allow it only to users who may edit the endpoint. Redelivering a pending
+  delivery sends it now, before any `Retry-After` the receiver asked for.
 - `exhausted_reason` is cleared when a redelivery is scheduled; `delivered_at`
   keeps the time of the last successful delivery until a new one replaces it.
 
