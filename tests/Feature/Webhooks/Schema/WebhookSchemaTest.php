@@ -70,8 +70,8 @@ it('creates the five tables with the standard fixed names and every column of th
     ]],
     'webhook_deliveries' => ['webhook_deliveries', [
         'id', 'public_id', 'endpoint_id', 'event_id', 'event_type', 'occurred_at', 'payload_version', 'status',
-        'attempts_count', 'max_attempts', 'next_attempt_at', 'last_attempt_at', 'delivered_at', 'last_http_status',
-        'last_error', 'payload', 'payload_hash', 'payload_bytes', 'payload_expires_at', 'trigger', 'metadata',
+        'attempts_count', 'max_attempts', 'next_attempt_at', 'claimed_until', 'exhausted_reason', 'last_attempt_at',
+        'delivered_at', 'last_http_status', 'last_error', 'payload', 'payload_hash', 'payload_bytes', 'payload_expires_at', 'trigger', 'metadata',
         'created_at', 'updated_at',
     ]],
     'webhook_delivery_attempts' => ['webhook_delivery_attempts', [

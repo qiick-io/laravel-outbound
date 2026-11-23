@@ -64,7 +64,12 @@ final readonly class DeliveryAttempt
         $this->errorMessage = self::sanitiseErrorMessage($errorMessage);
     }
 
-    private static function sanitiseErrorMessage(?string $errorMessage): ?string
+    /**
+     * Strips control, C1, line-separator and bidi characters, scrubs invalid
+     * UTF-8 and caps the result at {@see MAX_ERROR_MESSAGE_BYTES}. Callers
+     * still remove URLs, tokens and secrets first.
+     */
+    public static function sanitiseErrorMessage(?string $errorMessage): ?string
     {
         if ($errorMessage === null) {
             return null;

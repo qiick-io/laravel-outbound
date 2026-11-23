@@ -23,6 +23,12 @@ use Illuminate\Support\Facades\Schema;
  * driven by `next_attempt_at` through the (`status`, `next_attempt_at`)
  * index, not by queue delays, so a retry 24 h away survives queue loss.
  *
+ * `claimed_until` is the lease of a worker that is sending an attempt: the
+ * per-endpoint concurrency counts the pending rows still leased, and a lease
+ * left behind by a crashed worker simply expires. `exhausted_reason` says why
+ * automatic retries stopped (every attempt used, a Retry-After above the cap,
+ * or 410 Gone; review R4).
+ *
  * Deleting an endpoint with deliveries is refused: the log outlives a
  * soft-deleted endpoint until retention removes it.
  */
@@ -49,6 +55,8 @@ return new class extends Migration
             $table->unsignedSmallInteger('attempts_count')->default(0);
             $table->unsignedSmallInteger('max_attempts');
             $table->dateTime('next_attempt_at')->nullable();
+            $table->dateTime('claimed_until')->nullable();
+            $table->string('exhausted_reason', 32)->nullable();
             $table->timestamp('last_attempt_at')->nullable();
             $table->timestamp('delivered_at')->nullable();
             $table->unsignedSmallInteger('last_http_status')->nullable();

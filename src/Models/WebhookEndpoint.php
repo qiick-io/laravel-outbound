@@ -85,7 +85,9 @@ class WebhookEndpoint extends Model
 
     /**
      * What a product edits. The state the package manages (`is_active`, the
-     * disable reason and the failure streak) is not mass-assignable. The
+     * disable reason and the failure streak) is not mass-assignable, nor is
+     * `allow_private_hosts`, which loosens the SSRF guard: a product sets it in
+     * its own code, never from a request. The
      * product's scope column is, when `outbound.webhooks.scope_column` names one.
      *
      * @return list<string>
@@ -101,7 +103,6 @@ class WebhookEndpoint extends Model
             'payload_version',
             'legacy_profile',
             'https_only',
-            'allow_private_hosts',
             'timeout_seconds',
             'max_concurrency',
             'rate_limit_per_minute',

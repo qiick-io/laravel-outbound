@@ -6,12 +6,19 @@ namespace Qiick\Outbound\Laravel;
 
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
+use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Retry\RetryPolicy;
+use Qiick\Outbound\Retry\SystemRandomizer;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
@@ -102,6 +109,47 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(DatabaseDeliveryStore::class, function (Application $app): DatabaseDeliveryStore {
+            $scopeColumn = $app->make(ConfigRepository::class)->get('outbound.webhooks.scope_column');
+
+            return new DatabaseDeliveryStore(
+                scopeColumn: is_string($scopeColumn) && $scopeColumn !== '' ? $scopeColumn : null,
+            );
+        });
+
+        $this->app->singleton(RetryPolicy::class, function (Application $app): RetryPolicy {
+            $config = $app->make(ConfigRepository::class);
+
+            return new RetryPolicy(
+                new SystemRandomizer,
+                jitterSeconds: self::configInt($config, 'outbound.webhooks.retry_jitter_seconds', 30),
+                respectRetryAfter: $config->get('outbound.webhooks.respect_retry_after', true) !== false,
+                retryAfterCapSeconds: self::configInt($config, 'outbound.webhooks.retry_after_cap_seconds', 86_400),
+            );
+        });
+
+        $this->app->singleton(WebhookDeliveryCoordinator::class, function (Application $app): WebhookDeliveryCoordinator {
+            $config = $app->make(ConfigRepository::class);
+            $retryPreset = $config->get('outbound.webhooks.retry_preset');
+            $maxResponseBytes = $config->get('outbound.http.max_response_bytes');
+
+            return new WebhookDeliveryCoordinator(
+                $app->make(DatabaseDeliveryStore::class),
+                $app->make(WebhookSecretResolver::class),
+                $app->make(StandardWebhookSigner::class),
+                $app->make(PinnedHttpClient::class),
+                $app->make(RetryPolicy::class),
+                $app->make(OutboundHttpLimits::class),
+                timeoutSeconds: self::configInt($config, 'outbound.webhooks.timeout_seconds', 15),
+                connectTimeoutSeconds: self::configInt($config, 'outbound.http.connect_timeout_seconds', 3),
+                defaultRetryPreset: WebhookRetryPresetEnum::tryFrom(is_string($retryPreset) ? $retryPreset : '') ?? WebhookRetryPresetEnum::Standard,
+                defaultMaxConcurrency: self::configInt($config, 'outbound.webhooks.default_max_concurrency', 2),
+                maxResponseBytes: is_int($maxResponseBytes) ? $maxResponseBytes : 1_048_576,
+                isEndpointPrivateHostsAllowed: $config->get('outbound.webhooks.allow_endpoint_private_hosts', false) === true,
+                exceptionHandler: $app->make(ExceptionHandler::class),
+            );
+        });
+
         $this->app->singleton(SecretRotator::class, function (Application $app): SecretRotator {
             $config = $app->make(ConfigRepository::class);
 
@@ -137,6 +185,8 @@ final class OutboundServiceProvider extends ServiceProvider
             ], 'outbound-config');
 
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
+
+            $this->commands([WorkWebhookDeliveriesCommand::class]);
         }
     }
 

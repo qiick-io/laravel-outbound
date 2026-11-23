@@ -33,12 +33,16 @@ One canonical path for:
 - **Webhook delivery storage** — the five delivery tables ship as package
   migrations, so every product stores endpoints, secrets, subscriptions,
   deliveries and attempts in one shape (see [Webhook tables](#webhook-tables)).
+- **Webhook delivery** — fan-out to subscribed endpoints, signed attempts
+  through the pinned client, the Standard Webhooks retry schedule with
+  `Retry-After`, and per-endpoint concurrency (see
+  [Webhook delivery](#webhook-delivery)).
 
 Non-goals for v1: asymmetric Standard Webhooks (`v2a`; its columns are
 reserved), global helpers, a hard dependency on `laravel/framework`. The
-delivery layer the 2026-11-22 standards review made mandatory before 1.0
-(delivery coordinator, Retry-After, auto-disable, redelivery, secret
-lifecycle) lands in the following pull requests.
+rest of the delivery layer the 2026-11-22 standards review made mandatory
+before 1.0 (auto-disable, redelivery, body retention, egress proxy) lands in
+the following pull requests.
 
 ## Threat model
 
@@ -56,10 +60,10 @@ user-supplied fetch target) must not reach:
   timestamps, tolerance window, `hash_equals`); consumers must also dedupe
   `webhook-id` within the tolerance window
 
-Products that adopt this package must still enforce per-endpoint concurrency
-caps, timeouts, circuit-break / auto-disable after repeated failures, and
-honour `Retry-After` / 410 / 429. The package documents that duty; it does not
-ship auto-disable.
+`WebhookDeliveryCoordinator` enforces per-endpoint concurrency, the webhook
+timeout, `Retry-After` and 410. Until the auto-disable PR lands, products
+still own circuit-break / auto-disable after repeated failures; the endpoint
+failure streak is already recorded.
 
 ## Requirements
 
@@ -234,6 +238,73 @@ flagged `is_legacy_raw` may hold a non-`whsec_` secret only while
 `outbound.webhooks.allow_raw_legacy_secret` is on. A product that keeps its
 secrets elsewhere binds its own `WebhookSecretResolver`.
 
+### Webhook delivery
+
+```php
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Webhooks\WebhookMessage;
+
+app(WebhookDeliveryCoordinator::class)->dispatch(
+    new WebhookMessage('msg_'.Str::ulid(), 'invoice.paid', now()->toDateTimeImmutable(), ['invoice' => $invoice->public_id]),
+    scope: $project->public_id, // the product's scope column value; omit for instance scope
+);
+
+// routes/console.php
+Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
+```
+
+`dispatch()` stores one pending delivery per active endpoint subscribed to the
+type (or to `*`), with the exact body every attempt signs; dispatching the same
+message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
+(50) due deliveries, leases each one on its own right before its send, signs
+each attempt with the endpoint's signing set
+and a fresh `webhook-timestamp`, and POSTs it through `PinnedHttpClient`
+only: SSRF guard, pinned address, no proxy, never a redirect. Retries are
+driven by `next_attempt_at`, so the first retry is as punctual as the
+schedule above, and a retry 24 h away survives a queue loss.
+
+- **Timeout:** `outbound.webhooks.timeout_seconds` (15 s, Standard Webhooks
+  "Request timeouts"); an endpoint's `timeout_seconds` overrides it, never
+  above `http.max_timeout_seconds`, and the 30 s chain deadline still applies.
+  Other outbound calls keep `http.timeout_seconds` (5 s).
+- **Failures:** every non-2xx answer (3xx included: redirects are never
+  followed), timeout and connection error is retried on the schedule: the
+  endpoint's `retry_preset` or the configured one, `max_attempts` (10 for
+  `standard`: 75 h 35 min) snapshotted at dispatch. A guard or signer refusal
+  is recorded as `refused` and retried the same way, and so is an endpoint row
+  the request cannot be built from (`internal_error`). 410 Gone stops the
+  delivery at once (`exhausted`, `gone`); disabling the endpoint itself
+  arrives with auto-disable.
+- **Retry-After** (429, 502, 503, 504): jitter is applied to the schedule
+  first, then the retry never comes before the header's delay, plus up to
+  min(jitter, delay / 2). A delay above `retry_after_cap_seconds` (24 h) stops
+  automatic retries (`exhausted`, `retry_after_exceeds_cap`) instead of being
+  shortened; values above 30 days read as 30 days, so a cap above that is
+  never reached. Only the first `Retry-After` counts. All three HTTP-date
+  formats are read (`RetryAfter::parse()`).
+- **Concurrency and fairness:** at most the endpoint's `max_concurrency`
+  (`default_max_concurrency`, 2) attempts in flight per endpoint, across
+  workers. Each delivery is leased atomically just before its send, for the
+  chain deadline plus a minute, so overlapping runs never send one twice, and
+  a crashed worker's lease simply expires. A run takes at most each
+  endpoint's concurrency from its backlog, so one busy endpoint (or tenant)
+  cannot starve the others.
+- **Private hosts:** an endpoint's `allow_private_hosts` loosens the SSRF
+  guard, so it is not mass-assignable and counts only when the product sets
+  `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
+  `ssrf.allow_private_hosts` decides, for every endpoint.
+- **Records:** each attempt row keeps the status, HTTP status, error code
+  (`http_status`, `gone`, `transport`, `ssrf_refused`, `signing`,
+  `request_refused`, `internal_error`), sanitised message, the secrets that
+  signed, duration, `Retry-After`, and only the `content-type`,
+  `retry-after`, `x-request-id` and `date` response headers, as valid UTF-8
+  without control characters, at most 255 characters each; `request_id` keeps
+  only `A-Z a-z 0-9 . _ : -`, at most 64. The response body is never stored.
+  If the database still refuses the receiver's text, the attempt is stored
+  without it: a delivered webhook is never sent again because of it. The
+  endpoint's failure streak (`consecutive_failures`, `failing_since`,
+  `last_success_at`) moves with every attempt.
+
 ### Retry schedule and delivery records
 
 ```php
@@ -361,6 +432,11 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.secret_rotation_grace_seconds` | `OUTBOUND_WEBHOOK_SECRET_ROTATION_GRACE_SECONDS` | `86400` |
 | `outbound.webhooks.retry_preset` | `OUTBOUND_WEBHOOK_RETRY_PRESET` | `standard` |
 | `outbound.webhooks.retry_jitter_seconds` | `OUTBOUND_WEBHOOK_RETRY_JITTER` | `30` |
+| `outbound.webhooks.timeout_seconds` | `OUTBOUND_WEBHOOK_TIMEOUT_SECONDS` | `15` |
+| `outbound.webhooks.respect_retry_after` | `OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER` | `true` |
+| `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
+| `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
+| `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
 | `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
 | `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |

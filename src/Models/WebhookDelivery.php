@@ -13,6 +13,7 @@ use Qiick\Outbound\Delivery\DeliveryStatus;
 use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
 use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
 
 /**
@@ -43,6 +44,8 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int $attempts_count
  * @property int $max_attempts
  * @property CarbonImmutable|null $next_attempt_at
+ * @property CarbonImmutable|null $claimed_until
+ * @property WebhookExhaustedReasonEnum|null $exhausted_reason
  * @property CarbonImmutable|null $last_attempt_at
  * @property CarbonImmutable|null $delivered_at
  * @property int|null $last_http_status
@@ -157,6 +160,8 @@ class WebhookDelivery extends Model
             'occurred_at' => 'immutable_datetime',
             'status' => DeliveryStatus::class,
             'next_attempt_at' => 'immutable_datetime',
+            'claimed_until' => 'immutable_datetime',
+            'exhausted_reason' => WebhookExhaustedReasonEnum::class,
             'last_attempt_at' => 'immutable_datetime',
             'delivered_at' => 'immutable_datetime',
             'payload' => 'encrypted',

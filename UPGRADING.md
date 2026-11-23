@@ -36,6 +36,12 @@ and the approved design before adopting a commit from `develop`.
   and hidden from arrays and JSON: recreate the database. Like `secret` and
   `payload`, it is unreadable after an `APP_KEY` rotation unless the old key
   is in `APP_PREVIOUS_KEYS`.
+- Schedule `outbound:webhooks:work` (for example `everyFiveSeconds()`) and
+  dispatch events with `WebhookDeliveryCoordinator::dispatch()` instead of a
+  product job. Webhook POSTs now time out after 15 s
+  (`OUTBOUND_WEBHOOK_TIMEOUT_SECONDS`): a scheduler or queue timeout around
+  the command must be longer. `webhook_deliveries` gains `claimed_until` and
+  `exhausted_reason`: recreate the database.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

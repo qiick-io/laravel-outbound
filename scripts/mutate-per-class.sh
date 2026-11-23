@@ -11,7 +11,7 @@ min="${MUTATE_MIN:-95}"
 # every class races php -S ports under parallel mutate workers.
 unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
 pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
-webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Feature/Webhooks}"
+webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Unit/Retry tests/Feature/Webhooks}"
 
 # Classes from before the 1.0 completeness work still run with --covered-only.
 covered_only_classes=(
@@ -37,6 +37,12 @@ webhook_classes=(
   'Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver'
   'Qiick\Outbound\Webhooks\SecretRotator'
   'Qiick\Outbound\Delivery\WebhookDeliveryStorageException'
+  'Qiick\Outbound\Retry\RetryAfter'
+  'Qiick\Outbound\Retry\RetryPolicy'
+  'Qiick\Outbound\Retry\RetryDecision'
+  'Qiick\Outbound\Delivery\DatabaseDeliveryStore'
+  'Qiick\Outbound\Delivery\WebhookDeliveryCoordinator'
+  'Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand'
 )
 
 status=0

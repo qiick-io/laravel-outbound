@@ -46,8 +46,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PinnedHttpClient` says which kind of transport error it hit, read from the
   curl errno on Guzzle 7 and 8, without the host or address in the message.
 
+- Webhook delivery (standards review M5, M6, M9, R4, R9, S2):
+  `WebhookDeliveryCoordinator` (`dispatch()`, `work()`) and the
+  `outbound:webhooks:work` command, sending every attempt through
+  `PinnedHttpClient` with a 15 s webhook timeout
+  (`outbound.webhooks.timeout_seconds`); `RetryAfter::parse()` (delay-seconds
+  and all three HTTP-date formats); `RetryPolicy` and `RetryDecision`
+  (jitter first, never below a 429/502/503/504 `Retry-After`, a delay above
+  `retry_after_cap_seconds` stops retries, 410 stops at once);
+  `WebhookRetryPresetEnum`, `WebhookExhaustedReasonEnum`; per-endpoint
+  concurrency (`default_max_concurrency`) through a per-delivery
+  `claimed_until` lease taken just before each send, and fair selection
+  across endpoints; `webhook_deliveries.claimed_until` and `exhausted_reason`;
+  `outbound.webhooks.allow_endpoint_private_hosts` (off), without which an
+  endpoint's `allow_private_hosts` is ignored.
+- `DeliveryAttempt::sanitiseErrorMessage()` is public.
+
 ### Changed
 
+- `webhook_endpoints.allow_private_hosts` is no longer mass-assignable.
 - A transport timeout, TLS or DNS failure now reads `Outbound request failed:
   timeout.` / `TLS error.` / `DNS error.` instead of `connection error.`.
 - The package models store and read every date as UTC, whatever

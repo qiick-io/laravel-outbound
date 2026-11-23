@@ -11,6 +11,7 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
@@ -226,6 +227,8 @@ it('encrypts the body at rest and casts every delivery attempt', function (): vo
         'attempts_count' => '3',
         'max_attempts' => '10',
         'next_attempt_at' => '2026-11-23 10:00:00',
+        'claimed_until' => '2026-11-22 10:06:30',
+        'exhausted_reason' => 'retry_after_exceeds_cap',
         'last_attempt_at' => '2026-11-22 10:05:00',
         'delivered_at' => '2026-11-22 10:06:00',
         'last_http_status' => '503',
@@ -247,6 +250,8 @@ it('encrypts the body at rest and casts every delivery attempt', function (): vo
         ->and($delivery->attempts_count)->toBe(3)
         ->and($delivery->max_attempts)->toBe(10)
         ->and($delivery->next_attempt_at)->toBeInstanceOf(CarbonImmutable::class)
+        ->and($delivery->claimed_until)->toBeInstanceOf(CarbonImmutable::class)
+        ->and($delivery->exhausted_reason)->toBe(WebhookExhaustedReasonEnum::RetryAfterExceedsCap)
         ->and($delivery->last_attempt_at)->toBeInstanceOf(CarbonImmutable::class)
         ->and($delivery->delivered_at)->toBeInstanceOf(CarbonImmutable::class)
         ->and($delivery->last_http_status)->toBe(503)
