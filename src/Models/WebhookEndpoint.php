@@ -14,7 +14,9 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
 /**
  * A webhook destination registered by a product (`webhook_endpoints`).
  *
- * Nullable policy attributes mean "use the config value". A product's scope
+ * Nullable policy attributes mean "use the config value". `headers` (static
+ * request headers, often a token) is encrypted at rest and hidden from arrays
+ * and JSON, like a secret. A product's scope
  * column (named in `outbound.webhooks.scope_column`) is an ordinary attribute
  * the product added with its own migration; the package defines none.
  *
@@ -118,7 +120,7 @@ class WebhookEndpoint extends Model
      */
     protected function privateAttributes(): array
     {
-        return ['created_by'];
+        return ['created_by', 'headers'];
     }
 
     /**
@@ -149,7 +151,7 @@ class WebhookEndpoint extends Model
             'allow_private_hosts' => 'boolean',
             'auto_disable' => 'boolean',
             'verified_at' => 'immutable_datetime',
-            'headers' => 'array',
+            'headers' => 'encrypted:array',
             'metadata' => 'array',
             'created_at' => 'immutable_datetime',
             'updated_at' => 'immutable_datetime',

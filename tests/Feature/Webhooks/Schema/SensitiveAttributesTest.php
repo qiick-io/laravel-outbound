@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookEndpointSecret;
 use Qiick\Outbound\Models\WebhookSubscription;
+use Qiick\Outbound\Webhooks\WebhookException;
 use Qiick\Outbound\Webhooks\WebhookSecret;
 
 /*
@@ -102,3 +104,26 @@ it('stores a body only through usePayload, with its SHA-256 hash and byte length
         ->and($delivery->payload_bytes)->not->toBe(mb_strlen($rawBody))
         ->and($delivery->isFillable('payload_bytes'))->toBeFalse();
 });
+
+it('encrypts the custom request headers at rest and never shows them', function (): void {
+    $endpoint = WebhookEndpoint::query()->create([
+        'url' => 'https://hooks.example.com/receive',
+        'headers' => ['Authorization' => 'Bearer TOKEN123'],
+    ]);
+    $storedHeaders = (string) DB::table('webhook_endpoints')->value('headers');
+
+    expect($storedHeaders)->not->toContain('TOKEN123')
+        ->and(WebhookEndpoint::query()->findOrFail($endpoint->id)->headers)->toBe(['Authorization' => 'Bearer TOKEN123'])
+        ->and($endpoint->toArray())->not->toHaveKey('headers')
+        ->and($endpoint->toJson())->not->toContain('TOKEN123');
+});
+
+it('refuses to replicate a signing secret, which would copy the key and the primary flag', function (string $replicateMethod): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $secret = $endpoint->secrets()->make()->useSecret(WebhookSecret::generate())->forceFill(['is_primary' => true]);
+    $secret->save();
+
+    expect(fn () => $secret->{$replicateMethod}())
+        ->toThrow(WebhookException::class, 'Webhook secrets cannot be replicated; issue or rotate them with SecretRotator.')
+        ->and(WebhookEndpointSecret::query()->count())->toBe(1);
+})->with(['replicate', 'replicateQuietly']);

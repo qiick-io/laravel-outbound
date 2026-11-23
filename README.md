@@ -301,9 +301,11 @@ Eloquent models live in `Qiick\Outbound\Models` (`WebhookEndpoint`,
 `WebhookEndpointSecret`, `WebhookSubscription`, `WebhookDelivery`,
 `WebhookDeliveryAttempt`). Each has a UUID v7 `public_id`, which is its route
 key and the only id that leaves the database; the bigint `id`, foreign keys,
-`secret` and `payload` are hidden from arrays and JSON. `secret` and `payload`
-use Laravel's `encrypted` cast, so rotating `APP_KEY` needs
-`APP_PREVIOUS_KEYS`. `created_by` and `triggered_by` reference
+`secret`, `payload` and the endpoint's custom `headers` (often a token) are
+hidden from arrays and JSON. Those three use Laravel's `encrypted` cast, so
+rotating `APP_KEY` needs `APP_PREVIOUS_KEYS`. `payload_hash` is hidden too but
+is not a secret: it shows among a failed query's bindings, and a short body
+can be guessed from it. `created_by` and `triggered_by` reference
 `outbound.webhooks.users_table` (`users`) with null-on-delete.
 
 **Scope column.** The package defines no tenancy column and no morph. A product

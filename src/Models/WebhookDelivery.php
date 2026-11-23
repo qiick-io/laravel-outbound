@@ -21,6 +21,11 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * review R5). The body, its hash and its length are set together, only
  * through {@see usePayload()}; the retry state is the package's to write.
  *
+ * `payload_hash` is an integrity fingerprint, not a secret: it is hidden from
+ * arrays, but it shows among the bindings of a failed query's
+ * `QueryException`, and a short, guessable body (`{"type":"ping"}`) can be
+ * found from it. Never treat it as protecting the body.
+ *
  * @property int $id
  * @property string $public_id
  * @property int $endpoint_id
