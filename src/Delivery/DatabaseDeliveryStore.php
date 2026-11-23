@@ -8,6 +8,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use InvalidArgumentException;
+use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookSubscription;
@@ -189,15 +190,21 @@ final class DatabaseDeliveryStore
      *
      * @param  array<string, mixed>  $attemptAttributes
      * @param  array<string, mixed>  $deliveryChanges
+     * @param  bool  $isReceiverOutcome  false for a refusal on the package's side
+     *                                   (signing, SSRF guard, internal error):
+     *                                   it says nothing about the receiver, so
+     *                                   the streak stays as it is
+     * @return bool whether the attempt was recorded
      */
-    public function recordAttempt(WebhookDelivery $delivery, array $attemptAttributes, array $deliveryChanges, bool $isSuccess): void
+    public function recordAttempt(WebhookDelivery $delivery, array $attemptAttributes, array $deliveryChanges, bool $isSuccess, bool $isReceiverOutcome): bool
     {
-        WebhookDelivery::query()->getConnection()->transaction(function () use ($delivery, $attemptAttributes, $deliveryChanges, $isSuccess): void {
+        /** @var bool $isRecorded Laravel 12 types transaction() as mixed. */
+        $isRecorded = WebhookDelivery::query()->getConnection()->transaction(function () use ($delivery, $attemptAttributes, $deliveryChanges, $isSuccess, $isReceiverOutcome): bool {
             $storedDelivery = WebhookDelivery::query()->whereKey($delivery->id)->lockForUpdate()->first();
 
             // Gone (deleted while it was sent) or recorded by another worker.
             if ($storedDelivery?->attempts_count !== $delivery->attempts_count) {
-                return;
+                return false;
             }
 
             $storedDelivery->attempts()->make()->forceFill($attemptAttributes)->save();
@@ -206,8 +213,60 @@ final class DatabaseDeliveryStore
                 'attempts_count' => $delivery->attempts_count + 1,
                 'claimed_until' => null,
             ])->save();
-            $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+            if ($isReceiverOutcome) {
+                $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+            }
+
+            return true;
         });
+
+        return $isRecorded;
+    }
+
+    /**
+     * Switch an active endpoint off. Only one caller wins, so the disable is
+     * reported once. An automatic disable also requires the streak it was
+     * decided on to be there still, in the same statement: a success another
+     * worker recorded meanwhile cancels it.
+     *
+     * @param  array{minConsecutiveFailures: int, failingSinceAtLatest: CarbonImmutable|null}|null  $streakStillRequired
+     * @return bool whether this call disabled it
+     */
+    public function disableEndpoint(int $endpointId, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt, ?array $streakStillRequired = null): bool
+    {
+        $endpointQuery = WebhookEndpoint::withTrashed()->whereKey($endpointId)->where('is_active', true);
+
+        if ($streakStillRequired !== null) {
+            $endpointQuery->where('consecutive_failures', '>=', $streakStillRequired['minConsecutiveFailures']);
+
+            if ($streakStillRequired['failingSinceAtLatest'] !== null) {
+                $endpointQuery->where('failing_since', '<=', $streakStillRequired['failingSinceAtLatest']->utc());
+            }
+        }
+
+        return $endpointQuery->update([
+            'is_active' => false,
+            'disabled_at' => $disabledAt->utc(),
+            'disabled_reason' => $reason->value,
+        ]) === 1;
+    }
+
+    /**
+     * Switch a disabled endpoint back on with a clean failure streak, so the
+     * next failure does not disable it again at once. Its pending deliveries
+     * resume on their schedule.
+     *
+     * @return bool whether this call enabled it
+     */
+    public function enableEndpoint(int $endpointId): bool
+    {
+        return WebhookEndpoint::query()->whereKey($endpointId)->where('is_active', false)->update([
+            'is_active' => true,
+            'disabled_at' => null,
+            'disabled_reason' => null,
+            'consecutive_failures' => 0,
+            'failing_since' => null,
+        ]) === 1;
     }
 
     /**

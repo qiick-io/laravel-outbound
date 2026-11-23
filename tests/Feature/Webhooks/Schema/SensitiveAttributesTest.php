@@ -50,7 +50,7 @@ it('allows mass assignment of the listed attributes only', function (string $mod
     'endpoint' => [WebhookEndpoint::class, [
         'name', 'description', 'url', 'payload_version', 'legacy_profile', 'https_only',
         'timeout_seconds', 'max_concurrency', 'rate_limit_per_minute',
-        'retry_preset', 'max_attempts', 'auto_disable', 'headers', 'metadata', 'created_by',
+        'retry_preset', 'max_attempts', 'headers', 'metadata',
     ]],
     'endpoint secret' => [WebhookEndpointSecret::class, ['metadata']],
     'subscription' => [WebhookSubscription::class, ['event_type']],

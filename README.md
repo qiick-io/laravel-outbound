@@ -41,8 +41,8 @@ One canonical path for:
 Non-goals for v1: asymmetric Standard Webhooks (`v2a`; its columns are
 reserved), global helpers, a hard dependency on `laravel/framework`. The
 rest of the delivery layer the 2026-11-22 standards review made mandatory
-before 1.0 (auto-disable, redelivery, body retention, egress proxy) lands in
-the following pull requests.
+before 1.0 (redelivery, body retention, egress proxy) lands in the following
+pull requests.
 
 ## Threat model
 
@@ -61,9 +61,7 @@ user-supplied fetch target) must not reach:
   `webhook-id` within the tolerance window
 
 `WebhookDeliveryCoordinator` enforces per-endpoint concurrency, the webhook
-timeout, `Retry-After` and 410. Until the auto-disable PR lands, products
-still own circuit-break / auto-disable after repeated failures; the endpoint
-failure streak is already recorded.
+timeout, `Retry-After`, 410 and auto-disable after repeated failures.
 
 ## Requirements
 
@@ -273,8 +271,8 @@ schedule above, and a retry 24 h away survives a queue loss.
   `standard`: 75 h 35 min) snapshotted at dispatch. A guard or signer refusal
   is recorded as `refused` and retried the same way, and so is an endpoint row
   the request cannot be built from (`internal_error`). 410 Gone stops the
-  delivery at once (`exhausted`, `gone`); disabling the endpoint itself
-  arrives with auto-disable.
+  delivery at once (`exhausted`, `gone`) and disables the endpoint (see
+  [Auto-disable](#auto-disable)).
 - **Retry-After** (429, 502, 503, 504): jitter is applied to the schedule
   first, then the retry never comes before the header's delay, plus up to
   min(jitter, delay / 2). A delay above `retry_after_cap_seconds` (24 h) stops
@@ -304,6 +302,44 @@ schedule above, and a retry 24 h away survives a queue loss.
   without it: a delivered webhook is never sent again because of it. The
   endpoint's failure streak (`consecutive_failures`, `failing_since`,
   `last_success_at`) moves with every attempt.
+
+### Auto-disable
+
+On by default (standards review R8): an endpoint that answers **410 Gone** is
+disabled at once; otherwise it is disabled after **5 days without a
+successful attempt and at least 10 failed attempts in a row**. Five days is
+longer than one full 75 h schedule, so at least one delivery has used every
+retry first. Thresholds below 1 are refused when the application boots. An
+endpoint's `auto_disable` (null = inherit) overrides
+`outbound.webhooks.auto_disable.enabled`; like `created_by`, it is not
+mass-assignable, so only the product's own code sets it, never a request.
+Only the receiver's failures count (an HTTP error or a transport error): a
+refusal on the package's side (signing, the SSRF guard, an internal error)
+leaves the streak as it is. A success another worker records while a
+disable is being decided cancels it.
+
+A disabled endpoint gets no new deliveries and its pending ones wait. Each
+disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
+so a product can add its own channels. The package also emails the
+endpoint's `created_by` user, loaded with `auth.providers.users.model`
+(`WebhookEndpointDisabledNotification`, queued), for automatic disables only;
+turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
+carries no text a tenant wrote: a free-form name could hold a bare URL that
+mail clients turn into a link. It names the endpoint by its host (a valid
+host name or IP literal, else "an unknown host") and its public id, never
+its URL, and its only link is the product's own endpoint page,
+`outbound.webhooks.auto_disable.endpoint_url` with `{endpoint}` replaced by
+the public id (no link when unset).
+
+```php
+$coordinator = app(WebhookDeliveryCoordinator::class);
+
+$coordinator->disableEndpoint($endpoint); // reason "manual", no email
+$coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliveries resume
+```
+
+`enableEndpoint()` is the only supported way back: setting `is_active` by
+hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
 
 ### Retry schedule and delivery records
 
@@ -341,11 +377,8 @@ Prefer `standard` delays (5s, 5m, 30m, 2h, 5h, 10h, 14h, 20h, 24h — about
 Bound `short` (`[10, 30, 60]`) to a migration window. Jitter is capped
 (configured and ±floor(delay/2)) so a positive delay is never immediate.
 `DeliveryAttempt` strips control characters and caps `errorMessage` length.
-Until the delivery coordinator lands (the next PRs of the 1.0 work), products
-still enforce per-endpoint concurrency, timeouts, circuit-break / auto-disable,
-and honour `Retry-After` / 410 / 429: the tables already hold the columns
-(`failing_since`, `consecutive_failures`, `disabled_reason`), but no package
-code applies the auto-disable policy yet.
+These pieces are what `WebhookDeliveryCoordinator` uses; call them directly
+only for a delivery loop of your own.
 
 ## Webhook tables
 
@@ -437,6 +470,11 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
+| `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
+| `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
+| `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |
+| `outbound.webhooks.auto_disable.notify_owner` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER` | `true` |
+| `outbound.webhooks.auto_disable.endpoint_url` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL` | `null` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
 | `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
 | `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |

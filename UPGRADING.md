@@ -42,6 +42,16 @@ and the approved design before adopting a commit from `develop`.
   (`OUTBOUND_WEBHOOK_TIMEOUT_SECONDS`): a scheduler or queue timeout around
   the command must be longer. `webhook_deliveries` gains `claimed_until` and
   `exhausted_reason`: recreate the database.
+- Auto-disable is on by default (410 at once; otherwise 5 days without a
+  success and at least 10 consecutive failures), and the endpoint's
+  `created_by` user is emailed through the application's user model, which
+  must use `Notifiable`. Set `OUTBOUND_WEBHOOK_AUTO_DISABLE=false` or
+  `OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER=false` to opt out, and offer
+  users a way to re-enable an endpoint (`enableEndpoint()`, the only
+  supported way). `created_by` and `auto_disable` are no longer
+  mass-assignable: set them in your own code (`created_by` from
+  `auth()->id()`), never from request input, since the disable email goes
+  to `created_by`.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

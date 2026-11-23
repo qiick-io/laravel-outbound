@@ -125,6 +125,23 @@ return [
         'allow_endpoint_private_hosts' => (bool) env('OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS', false),
 
         /*
+         * Disable an endpoint at once on 410 Gone, and after
+         * `no_success_days` without a success with at least
+         * `min_consecutive_failures` failed attempts in a row. On by default
+         * (standards review R8); an endpoint's `auto_disable` overrides it.
+         */
+        'auto_disable' => [
+            'enabled' => (bool) env('OUTBOUND_WEBHOOK_AUTO_DISABLE', true),
+            'no_success_days' => (int) env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS', 5),
+            'min_consecutive_failures' => (int) env('OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES', 10),
+            // Email the endpoint's `created_by` user when it is disabled automatically.
+            'notify_owner' => (bool) env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER', true),
+            // The product's page for an endpoint, `{endpoint}` being its public
+            // id: the email's only link. Null sends the email without a link.
+            'endpoint_url' => env('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL'),
+        ],
+
+        /*
          * Allow WebhookSecret::parseAllowingLegacyRaw to accept non-whsec_
          * secrets. Off by default; products turn it on only during migration.
          */

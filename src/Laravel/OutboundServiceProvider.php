@@ -7,16 +7,20 @@ namespace Qiick\Outbound\Laravel;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
+use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener;
 use Qiick\Outbound\Retry\RetryPolicy;
 use Qiick\Outbound\Retry\SystemRandomizer;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
@@ -128,6 +132,16 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(EndpointDisablePolicy::class, function (Application $app): EndpointDisablePolicy {
+            $config = $app->make(ConfigRepository::class);
+
+            return new EndpointDisablePolicy(
+                isEnabled: $config->get('outbound.webhooks.auto_disable.enabled', true) !== false,
+                noSuccessDays: self::configInt($config, 'outbound.webhooks.auto_disable.no_success_days', 5),
+                minConsecutiveFailures: self::configInt($config, 'outbound.webhooks.auto_disable.min_consecutive_failures', 10),
+            );
+        });
+
         $this->app->singleton(WebhookDeliveryCoordinator::class, function (Application $app): WebhookDeliveryCoordinator {
             $config = $app->make(ConfigRepository::class);
             $retryPreset = $config->get('outbound.webhooks.retry_preset');
@@ -147,6 +161,8 @@ final class OutboundServiceProvider extends ServiceProvider
                 maxResponseBytes: is_int($maxResponseBytes) ? $maxResponseBytes : 1_048_576,
                 isEndpointPrivateHostsAllowed: $config->get('outbound.webhooks.allow_endpoint_private_hosts', false) === true,
                 exceptionHandler: $app->make(ExceptionHandler::class),
+                disablePolicy: $app->make(EndpointDisablePolicy::class),
+                events: $app->make(EventDispatcher::class),
             );
         });
 
@@ -172,6 +188,9 @@ final class OutboundServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->app->make(SecretRotator::class);
+        // Refuses auto-disable thresholds below 1 at boot too.
+        $this->app->make(EndpointDisablePolicy::class);
+        $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
         $migrationsPath = __DIR__.'/../../database/migrations';
 
