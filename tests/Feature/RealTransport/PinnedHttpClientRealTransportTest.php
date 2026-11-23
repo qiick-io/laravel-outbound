@@ -529,8 +529,11 @@ it('names a real timeout, TLS failure and refused connection without the address
         // single-threaded, and /slow keeps it busy afterwards.
         $tls = $failureOf('https://app.test:'.$server->port.'/ok');
         $timeout = $failureOf($server->url('app.test', '/slow'), timeoutSeconds: 1);
-        $server->stop();
-        $refused = $failureOf($server->url('app.test', '/ok'));
+        // A loopback port with no listener: bound, read, closed again.
+        $probe = stream_socket_server('tcp://127.0.0.1:0');
+        $closedPort = (int) substr((string) stream_socket_get_name($probe, false), strrpos((string) stream_socket_get_name($probe, false), ':') + 1);
+        fclose($probe);
+        $refused = $failureOf("http://app.test:{$closedPort}/ok");
     } finally {
         $server->stop();
     }
