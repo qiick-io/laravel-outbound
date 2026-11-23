@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\DeliveryStatus;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
@@ -121,3 +122,30 @@ it('refuses a retention shorter than the retry schedule when the application boo
     $this->configBeforeBoot = [];
     $this->refreshApplication();
 })->with([0, 3]);
+
+it('boots with a retention of exactly four days', function (): void {
+    $this->configBeforeBoot = ['outbound.webhooks.payload_retention_days' => 4];
+    $this->refreshApplication();
+
+    expect(app(DatabaseDeliveryStore::class))->toBeInstanceOf(DatabaseDeliveryStore::class);
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+});
+
+it('drops a pending redelivery request when the body expires', function (): void {
+    retentionEndpoint();
+    $operatorId = (int) DB::table('users')->insertGetId(['name' => 'Operator', 'email' => 'op@example.com', 'password' => 'x']);
+    $pending = retainedDelivery('msg_asked', [
+        'payload_expires_at' => '2026-11-23 09:00:00',
+        'next_attempt_trigger' => 'manual',
+        'next_attempt_triggered_by' => $operatorId,
+    ]);
+
+    $this->artisan('outbound:webhooks:prune')->assertSuccessful();
+    $pending->refresh();
+
+    expect($pending->status)->toBe(DeliveryStatus::Exhausted)
+        ->and($pending->next_attempt_trigger)->toBeNull()
+        ->and($pending->next_attempt_triggered_by)->toBeNull();
+});
