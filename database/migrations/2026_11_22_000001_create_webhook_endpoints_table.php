@@ -21,6 +21,10 @@ use Illuminate\Support\Facades\Schema;
  * it is also the Standard Webhooks `v2a` endpoint id (review M15), so it never
  * changes.
  *
+ * `headers` holds the endpoint's static request headers, which often carry an
+ * `Authorization` token or an API key, so it is `text` under Laravel's
+ * `encrypted:array` cast rather than `json`: ciphertext is not valid JSON.
+ *
  * Until the package's 1.0.0, schema changes edit this create migration
  * (2026-11-22 package-migrations-before-stable decision).
  */
@@ -55,7 +59,7 @@ return new class extends Migration
             $table->boolean('auto_disable')->nullable();
             $table->timestamp('verified_at')->nullable();
             // JSON columns carry no literal default: MySQL and MariaDB reject one.
-            $table->json('headers')->nullable();
+            $table->text('headers')->nullable();
             $table->json('metadata')->nullable();
 
             $createdBy = $table->foreignId('created_by')->nullable();

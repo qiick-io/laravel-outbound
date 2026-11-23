@@ -28,7 +28,14 @@ and the approved design before adopting a commit from `develop`.
 - Mass assignment takes an explicit allow-list per model. Set a secret with
   `WebhookEndpointSecret::useSecret()` and a body with
   `WebhookDelivery::usePayload()`; lifecycle and retry columns are written by
-  the package.
+  the package. `Model::unguard()` / `Model::unguarded()` (common in seeders)
+  turns the allow-lists off: seed secrets with `SecretRotator`, never with
+  `create([... 'is_primary' => true])`, or the endpoint ends up with two
+  primaries and stops signing. A secret cannot be `replicate()`d.
+- `webhook_endpoints.headers` is now `text` under the `encrypted:array` cast,
+  and hidden from arrays and JSON: recreate the database. Like `secret` and
+  `payload`, it is unreadable after an `APP_KEY` rotation unless the old key
+  is in `APP_PREVIOUS_KEYS`.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

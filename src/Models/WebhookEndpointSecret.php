@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
+use Qiick\Outbound\Webhooks\SecretRotator;
+use Qiick\Outbound\Webhooks\WebhookException;
 use Qiick\Outbound\Webhooks\WebhookSecret;
 
 /**
@@ -53,6 +55,21 @@ class WebhookEndpointSecret extends Model
     public function endpoint(): BelongsTo
     {
         return $this->belongsTo(WebhookEndpoint::class, 'endpoint_id');
+    }
+
+    /**
+     * A copy would carry the key and the primary flag past
+     * {@see SecretRotator}'s lock and leave the
+     * endpoint with two primaries, which stops it signing. `replicateQuietly()`
+     * goes through here too.
+     *
+     * @param  array<int, string>|null  $except
+     *
+     * @throws WebhookException always
+     */
+    public function replicate(?array $except = null): never
+    {
+        throw new WebhookException('Webhook secrets cannot be replicated; issue or rotate them with SecretRotator.');
     }
 
     /**

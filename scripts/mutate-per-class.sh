@@ -36,6 +36,7 @@ webhook_classes=(
   'Qiick\Outbound\Webhooks\WebhookSigningSet'
   'Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver'
   'Qiick\Outbound\Webhooks\SecretRotator'
+  'Qiick\Outbound\Delivery\WebhookDeliveryStorageException'
 )
 
 status=0
