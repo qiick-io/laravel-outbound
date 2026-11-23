@@ -182,6 +182,8 @@ final class WebhookDeliveryCoordinator
         // A missing header reads as '', which parses to null.
         $retryAfterSeconds = $response === null ? null : RetryAfter::parse($this->firstHeaderValue($response, 'Retry-After'), $attemptedAt);
         $isSuccess = $outcome['status'] === WebhookAttemptStatusEnum::Delivered;
+        // A refusal (signing, guard, internal error) is the package's, not the receiver's.
+        $isReceiverOutcome = $outcome['status'] !== WebhookAttemptStatusEnum::Refused;
         $deliveryChanges = $isSuccess
             ? ['status' => DeliveryStatus::Delivered, 'delivered_at' => $attemptedAt, 'next_attempt_at' => null]
             : $this->scheduleAfterFailure($delivery, $endpoint, $attemptNumber, $httpStatus, $retryAfterSeconds, $attemptedAt);
@@ -215,20 +217,21 @@ final class WebhookDeliveryCoordinator
         ];
 
         try {
-            $isRecorded = $this->store->recordAttempt($delivery, $attemptAttributes, $deliveryChanges, $isSuccess);
+            $isRecorded = $this->store->recordAttempt($delivery, $attemptAttributes, $deliveryChanges, $isSuccess, $isReceiverOutcome);
         } catch (Throwable) {
             // The response text is the receiver's: should the database refuse
             // it, the outcome still counts, so a delivered webhook is never
             // sent again and a failing one still moves towards exhausted.
-            $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess);
+            $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess, $isReceiverOutcome);
         }
 
-        // An attempt another worker already recorded decides nothing.
-        if ($isRecorded && ! $isSuccess) {
+        // An attempt another worker already recorded, or a refusal on the
+        // package's side, decides nothing.
+        if ($isRecorded && $isReceiverOutcome && ! $isSuccess) {
             $disableReason = $this->disablePolicy->reasonToDisable($endpoint->refresh(), $httpStatus, $attemptedAt);
 
             if ($disableReason !== null) {
-                $this->disable($endpoint, $disableReason, $attemptedAt);
+                $this->disable($endpoint, $disableReason, $attemptedAt, $this->disablePolicy->streakStillRequired($disableReason, $attemptedAt));
             }
         }
     }
@@ -258,9 +261,12 @@ final class WebhookDeliveryCoordinator
         return $this->store->enableEndpoint($endpoint->id);
     }
 
-    private function disable(WebhookEndpoint $endpoint, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt): bool
+    /**
+     * @param  array{minConsecutiveFailures: int, failingSinceAtLatest: CarbonImmutable|null}|null  $streakStillRequired
+     */
+    private function disable(WebhookEndpoint $endpoint, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt, ?array $streakStillRequired = null): bool
     {
-        if (! $this->store->disableEndpoint($endpoint->id, $reason, $disabledAt)) {
+        if (! $this->store->disableEndpoint($endpoint->id, $reason, $disabledAt, $streakStillRequired)) {
             return false;
         }
 

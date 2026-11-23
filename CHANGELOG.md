@@ -77,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `webhook_endpoints.allow_private_hosts` is no longer mass-assignable.
+- `webhook_endpoints.allow_private_hosts`, `auto_disable` and `created_by`
+  are no longer mass-assignable.
 - A transport timeout, TLS or DNS failure now reads `Outbound request failed:
   timeout.` / `TLS error.` / `DNS error.` instead of `connection error.`.
 - The package models store and read every date as UTC, whatever

@@ -64,7 +64,7 @@ it('emails the owner of an endpoint disabled automatically', function (WebhookEn
 
     Notification::assertSentTo(NotifiableUser::query()->findOrFail($ownerId), WebhookEndpointDisabledNotification::class, function (WebhookEndpointDisabledNotification $notification, array $channels) use ($endpoint, $reason, $reasonLine): bool {
         $mail = $notification->toMail(new stdClass);
-        $mailText = implode("\n", [...$mail->introLines, ...$mail->outroLines]);
+        $mailText = (string) $mail->render();
 
         return $channels === ['mail']
             && $notification->endpointPublicId === $endpoint->public_id
@@ -176,3 +176,50 @@ final class HiddenUser extends User
         });
     }
 }
+
+/*
+ * Review of #31, B1: the endpoint name is tenant text. It reaches the mail as
+ * plain text on one line: no Markdown, no link, a bounded length.
+ */
+it('puts the endpoint name in the mail as plain text, never as a link', function (): void {
+    $notification = new WebhookEndpointDisabledNotification(
+        'id',
+        "[Verify your account](https://evil.example/login)\nSecond **line** <b>x</b> ".str_repeat('a', 200),
+        'hooks.example.com',
+        WebhookEndpointDisabledReasonEnum::GoneHttp410,
+        CarbonImmutable::parse('2026-11-23 10:00:00', 'UTC'),
+    );
+
+    $mail = $notification->toMail(new stdClass);
+    $renderedMail = (string) $mail->render();
+
+    expect($mail->subject)->not->toContain("\n")
+        ->and($mail->subject)->toStartWith('Webhook endpoint "[Verify your account](https://evil.example/login) Second **line** <b>x</b> aaa')
+        ->and(mb_strlen($mail->subject))->toBeLessThanOrEqual(130)
+        ->and($renderedMail)->not->toContain('href="https://evil.example')
+        ->and($renderedMail)->not->toContain('<strong>line</strong>')
+        ->and($renderedMail)->not->toContain('<b>x</b>')
+        ->and($renderedMail)->toContain('Verify your account')
+        ->and($mail->introLines[0])->toContain('…');
+});
+
+it('keeps a short, ordinary name as it is', function (): void {
+    $notification = new WebhookEndpointDisabledNotification('id', 'Billing sync', 'hooks.example.com', WebhookEndpointDisabledReasonEnum::GoneHttp410, CarbonImmutable::parse('2026-11-23 10:00:00', 'UTC'));
+
+    expect((string) $notification->toMail(new stdClass)->render())->toContain('Billing sync (hooks.example.com)');
+});
+
+it('writes the first line in reading order, with the name and host escaped', function (): void {
+    $notification = new WebhookEndpointDisabledNotification('id', '  Billing sync  ', 'hooks.example.com', WebhookEndpointDisabledReasonEnum::GoneHttp410, CarbonImmutable::parse('2026-11-23 10:00:00', 'UTC'));
+    $mail = $notification->toMail(new stdClass);
+
+    expect($mail->subject)->toBe('Webhook endpoint "Billing sync" disabled')
+        ->and($mail->introLines[0])->toBe('Webhook deliveries to Billing sync \\(hooks\\.example\\.com\\) stopped at 2026-11-23 10:00:00 UTC.');
+});
+
+it('keeps a name of 80 characters whole and cuts a longer one to 80 with an ellipsis', function (): void {
+    $subjectOf = fn (string $name): string => (new WebhookEndpointDisabledNotification('id', $name, 'hooks.example.com', WebhookEndpointDisabledReasonEnum::GoneHttp410, CarbonImmutable::now()))->toMail(new stdClass)->subject;
+
+    expect($subjectOf(str_repeat('a', 80)))->toBe('Webhook endpoint "'.str_repeat('a', 80).'" disabled')
+        ->and($subjectOf(str_repeat('a', 81)))->toBe('Webhook endpoint "'.str_repeat('a', 79).'…" disabled');
+});

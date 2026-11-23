@@ -309,8 +309,14 @@ On by default (standards review R8): an endpoint that answers **410 Gone** is
 disabled at once; otherwise it is disabled after **5 days without a
 successful attempt and at least 10 failed attempts in a row**. Five days is
 longer than one full 75 h schedule, so at least one delivery has used every
-retry first. An endpoint's `auto_disable` (null = inherit) overrides
-`outbound.webhooks.auto_disable.enabled`.
+retry first. Thresholds below 1 are refused when the application boots. An
+endpoint's `auto_disable` (null = inherit) overrides
+`outbound.webhooks.auto_disable.enabled`; like `created_by`, it is not
+mass-assignable, so only the product's own code sets it, never a request.
+Only the receiver's failures count (an HTTP error or a transport error): a
+refusal on the package's side (signing, the SSRF guard, an internal error)
+leaves the streak as it is. A success another worker records while a
+disable is being decided cancels it.
 
 A disabled endpoint gets no new deliveries and its pending ones wait. Each
 disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
@@ -318,7 +324,9 @@ so a product can add its own channels. The package also emails the
 endpoint's `created_by` user, loaded with `auth.providers.users.model`
 (`WebhookEndpointDisabledNotification`, queued, naming the endpoint and its
 host, never its URL), for automatic disables only; turn that off with
-`outbound.webhooks.auto_disable.notify_owner`.
+`outbound.webhooks.auto_disable.notify_owner`. The name is the tenant's text,
+so the mail shows it as plain text on one line, at most 80 characters, with
+no Markdown, link or HTML.
 
 ```php
 $coordinator = app(WebhookDeliveryCoordinator::class);
@@ -326,6 +334,9 @@ $coordinator = app(WebhookDeliveryCoordinator::class);
 $coordinator->disableEndpoint($endpoint); // reason "manual", no email
 $coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliveries resume
 ```
+
+`enableEndpoint()` is the only supported way back: setting `is_active` by
+hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
 
 ### Retry schedule and delivery records
 

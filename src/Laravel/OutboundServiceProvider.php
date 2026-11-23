@@ -188,6 +188,8 @@ final class OutboundServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->app->make(SecretRotator::class);
+        // Refuses auto-disable thresholds below 1 at boot too.
+        $this->app->make(EndpointDisablePolicy::class);
         $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
         $migrationsPath = __DIR__.'/../../database/migrations';

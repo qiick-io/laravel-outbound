@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Delivery;
 
 use Carbon\CarbonImmutable;
+use InvalidArgumentException;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Models\WebhookEndpoint;
 
@@ -24,11 +25,24 @@ use Qiick\Outbound\Models\WebhookEndpoint;
  */
 final class EndpointDisablePolicy
 {
+    /**
+     * @throws InvalidArgumentException when a threshold is below 1: a typo
+     *                                  in an env value would otherwise disable
+     *                                  every endpoint at its first failure
+     */
     public function __construct(
         private readonly bool $isEnabled,
         private readonly int $noSuccessDays,
         private readonly int $minConsecutiveFailures,
-    ) {}
+    ) {
+        if ($noSuccessDays < 1) {
+            throw new InvalidArgumentException('outbound.webhooks.auto_disable.no_success_days must be at least 1.');
+        }
+
+        if ($minConsecutiveFailures < 1) {
+            throw new InvalidArgumentException('outbound.webhooks.auto_disable.min_consecutive_failures must be at least 1.');
+        }
+    }
 
     /**
      * @param  WebhookEndpoint  $endpoint  with its failure streak after the attempt
@@ -51,5 +65,19 @@ final class EndpointDisablePolicy
         }
 
         return $failingSince <= $now->subDays($this->noSuccessDays) ? WebhookEndpointDisabledReasonEnum::AutoFailure : null;
+    }
+
+    /**
+     * The streak the endpoint must still have when the switch is made, so a
+     * success another worker records meanwhile cancels the disable: the full
+     * thresholds for the failure streak, at least the one failure for 410.
+     *
+     * @return array{minConsecutiveFailures: int, failingSinceAtLatest: CarbonImmutable|null}
+     */
+    public function streakStillRequired(WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $now): array
+    {
+        return $reason === WebhookEndpointDisabledReasonEnum::AutoFailure
+            ? ['minConsecutiveFailures' => $this->minConsecutiveFailures, 'failingSinceAtLatest' => $now->subDays($this->noSuccessDays)]
+            : ['minConsecutiveFailures' => 1, 'failingSinceAtLatest' => null];
     }
 }

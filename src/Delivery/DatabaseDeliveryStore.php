@@ -190,12 +190,16 @@ final class DatabaseDeliveryStore
      *
      * @param  array<string, mixed>  $attemptAttributes
      * @param  array<string, mixed>  $deliveryChanges
+     * @param  bool  $isReceiverOutcome  false for a refusal on the package's side
+     *                                   (signing, SSRF guard, internal error):
+     *                                   it says nothing about the receiver, so
+     *                                   the streak stays as it is
      * @return bool whether the attempt was recorded
      */
-    public function recordAttempt(WebhookDelivery $delivery, array $attemptAttributes, array $deliveryChanges, bool $isSuccess): bool
+    public function recordAttempt(WebhookDelivery $delivery, array $attemptAttributes, array $deliveryChanges, bool $isSuccess, bool $isReceiverOutcome): bool
     {
         /** @var bool $isRecorded Laravel 12 types transaction() as mixed. */
-        $isRecorded = WebhookDelivery::query()->getConnection()->transaction(function () use ($delivery, $attemptAttributes, $deliveryChanges, $isSuccess): bool {
+        $isRecorded = WebhookDelivery::query()->getConnection()->transaction(function () use ($delivery, $attemptAttributes, $deliveryChanges, $isSuccess, $isReceiverOutcome): bool {
             $storedDelivery = WebhookDelivery::query()->whereKey($delivery->id)->lockForUpdate()->first();
 
             // Gone (deleted while it was sent) or recorded by another worker.
@@ -209,7 +213,9 @@ final class DatabaseDeliveryStore
                 'attempts_count' => $delivery->attempts_count + 1,
                 'claimed_until' => null,
             ])->save();
-            $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+            if ($isReceiverOutcome) {
+                $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+            }
 
             return true;
         });
@@ -219,13 +225,26 @@ final class DatabaseDeliveryStore
 
     /**
      * Switch an active endpoint off. Only one caller wins, so the disable is
-     * reported once.
+     * reported once. An automatic disable also requires the streak it was
+     * decided on to be there still, in the same statement: a success another
+     * worker recorded meanwhile cancels it.
      *
+     * @param  array{minConsecutiveFailures: int, failingSinceAtLatest: CarbonImmutable|null}|null  $streakStillRequired
      * @return bool whether this call disabled it
      */
-    public function disableEndpoint(int $endpointId, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt): bool
+    public function disableEndpoint(int $endpointId, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt, ?array $streakStillRequired = null): bool
     {
-        return WebhookEndpoint::withTrashed()->whereKey($endpointId)->where('is_active', true)->update([
+        $endpointQuery = WebhookEndpoint::withTrashed()->whereKey($endpointId)->where('is_active', true);
+
+        if ($streakStillRequired !== null) {
+            $endpointQuery->where('consecutive_failures', '>=', $streakStillRequired['minConsecutiveFailures']);
+
+            if ($streakStillRequired['failingSinceAtLatest'] !== null) {
+                $endpointQuery->where('failing_since', '<=', $streakStillRequired['failingSinceAtLatest']->utc());
+            }
+        }
+
+        return $endpointQuery->update([
             'is_active' => false,
             'disabled_at' => $disabledAt->utc(),
             'disabled_reason' => $reason->value,

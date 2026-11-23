@@ -85,9 +85,11 @@ class WebhookEndpoint extends Model
 
     /**
      * What a product edits. The state the package manages (`is_active`, the
-     * disable reason and the failure streak) is not mass-assignable, nor is
-     * `allow_private_hosts`, which loosens the SSRF guard: a product sets it in
-     * its own code, never from a request. The
+     * disable reason and the failure streak) is not mass-assignable. Nor are
+     * the columns a request must never choose, which the product sets in its
+     * own code: `allow_private_hosts` loosens the SSRF guard, `auto_disable`
+     * can opt an endpoint out of auto-disable, and `created_by` is the user
+     * the disable email goes to. The
      * product's scope column is, when `outbound.webhooks.scope_column` names one.
      *
      * @return list<string>
@@ -108,10 +110,8 @@ class WebhookEndpoint extends Model
             'rate_limit_per_minute',
             'retry_preset',
             'max_attempts',
-            'auto_disable',
             'headers',
             'metadata',
-            'created_by',
             ...(is_string($scopeColumn) && $scopeColumn !== '' ? [$scopeColumn] : []),
         ];
     }

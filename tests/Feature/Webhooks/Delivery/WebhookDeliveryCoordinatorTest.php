@@ -403,7 +403,9 @@ it('refuses an attempt the guard or the signer stops, sends nothing, and retries
         ->and($attempt->secret_public_ids)->toBe($hasSecret ? [$endpoint->secrets()->sole()->public_id] : null)
         ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Pending)
         ->and(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
-        ->and($endpoint->refresh()->consecutive_failures)->toBe(1);
+        // A refusal on the package's side is not the receiver's failure.
+        ->and($endpoint->refresh()->consecutive_failures)->toBe(0)
+        ->and($endpoint->failing_since)->toBeNull();
 })->with([
     'private address' => [['url' => 'https://internal.example.com/hook'], true, 'ssrf_refused', 'Host resolves to a disallowed address.'],
     'no signing secret' => [[], false, 'signing', 'Webhook endpoint has no active primary signing secret.'],
