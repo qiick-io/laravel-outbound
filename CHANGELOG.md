@@ -16,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migrations may still change: recreate the database after an upgrade.
 - **`DeliveryStatus` has three new cases** (`Pending`, `Exhausted`,
   `Cancelled`); an exhaustive `match` over it needs the new arms.
-- **New dependency:** `illuminate/database` (already part of every Laravel app).
+- **New dependencies:** `illuminate/database` and `illuminate/notifications`
+  (already part of every Laravel app).
+- **Auto-disable is on by default:** an endpoint that answers 410, or has no
+  success for 5 days with at least 10 consecutive failures, stops receiving
+  deliveries, and its creator is emailed. Re-enable it with
+  `WebhookDeliveryCoordinator::enableEndpoint()`.
 
 ### Added
 
@@ -61,6 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `outbound.webhooks.allow_endpoint_private_hosts` (off), without which an
   endpoint's `allow_private_hosts` is ignored.
 - `DeliveryAttempt::sanitiseErrorMessage()` is public.
+- Auto-disable (standards review M10, R8, S5): `EndpointDisablePolicy` (410
+  Gone at once; otherwise 5 days without a success and at least 10
+  consecutive failures, `outbound.webhooks.auto_disable.*`, overridden by an
+  endpoint's `auto_disable`), `WebhookEndpointDisabledEvent`,
+  `WebhookEndpointDisabledNotification` emailed to the endpoint's
+  `created_by` by `NotifyWebhookEndpointOwnerListener` (automatic disables
+  only, `notify_owner`), and `WebhookDeliveryCoordinator::disableEndpoint()` /
+  `enableEndpoint()`.
 
 ### Changed
 

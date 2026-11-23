@@ -43,6 +43,9 @@ webhook_classes=(
   'Qiick\Outbound\Delivery\DatabaseDeliveryStore'
   'Qiick\Outbound\Delivery\WebhookDeliveryCoordinator'
   'Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand'
+  'Qiick\Outbound\Delivery\EndpointDisablePolicy'
+  'Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener'
+  'Qiick\Outbound\Notifications\WebhookEndpointDisabledNotification'
 )
 
 status=0

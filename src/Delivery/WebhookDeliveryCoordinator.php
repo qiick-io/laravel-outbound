@@ -7,12 +7,15 @@ namespace Qiick\Outbound\Delivery;
 use Carbon\CarbonImmutable;
 use Closure;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
+use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
@@ -75,6 +78,8 @@ final class WebhookDeliveryCoordinator
         private readonly ?int $maxResponseBytes,
         private readonly bool $isEndpointPrivateHostsAllowed,
         private readonly ExceptionHandler $exceptionHandler,
+        private readonly EndpointDisablePolicy $disablePolicy,
+        private readonly EventDispatcher $events,
         private readonly ?Closure $nanosecondClock = null,
     ) {}
 
@@ -210,13 +215,58 @@ final class WebhookDeliveryCoordinator
         ];
 
         try {
-            $this->store->recordAttempt($delivery, $attemptAttributes, $deliveryChanges, $isSuccess);
+            $isRecorded = $this->store->recordAttempt($delivery, $attemptAttributes, $deliveryChanges, $isSuccess);
         } catch (Throwable) {
             // The response text is the receiver's: should the database refuse
             // it, the outcome still counts, so a delivered webhook is never
             // sent again and a failing one still moves towards exhausted.
-            $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess);
+            $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess);
         }
+
+        // An attempt another worker already recorded decides nothing.
+        if ($isRecorded && ! $isSuccess) {
+            $disableReason = $this->disablePolicy->reasonToDisable($endpoint->refresh(), $httpStatus, $attemptedAt);
+
+            if ($disableReason !== null) {
+                $this->disable($endpoint, $disableReason, $attemptedAt);
+            }
+        }
+    }
+
+    /**
+     * Stop deliveries to an endpoint by hand (`disabled_reason = manual`).
+     * Its pending deliveries wait; new events are not stored for it.
+     *
+     * Side effect: fires {@see WebhookEndpointDisabledEvent} once.
+     *
+     * @return bool false when the endpoint was already disabled
+     */
+    public function disableEndpoint(WebhookEndpoint $endpoint): bool
+    {
+        return $this->disable($endpoint, WebhookEndpointDisabledReasonEnum::Manual, CarbonImmutable::now('UTC'));
+    }
+
+    /**
+     * Resume deliveries to a disabled endpoint, with a clean failure streak,
+     * so the next failure does not disable it again at once. Its pending
+     * deliveries resume on their schedule.
+     *
+     * @return bool false when the endpoint was already active
+     */
+    public function enableEndpoint(WebhookEndpoint $endpoint): bool
+    {
+        return $this->store->enableEndpoint($endpoint->id);
+    }
+
+    private function disable(WebhookEndpoint $endpoint, WebhookEndpointDisabledReasonEnum $reason, CarbonImmutable $disabledAt): bool
+    {
+        if (! $this->store->disableEndpoint($endpoint->id, $reason, $disabledAt)) {
+            return false;
+        }
+
+        $this->events->dispatch(new WebhookEndpointDisabledEvent($endpoint->public_id, $reason, $disabledAt));
+
+        return true;
     }
 
     /**

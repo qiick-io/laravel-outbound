@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Schema;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
@@ -588,6 +590,8 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
         maxResponseBytes: 1_048_576,
         isEndpointPrivateHostsAllowed: false,
         exceptionHandler: app(ExceptionHandler::class),
+        disablePolicy: app(EndpointDisablePolicy::class),
+        events: app(Dispatcher::class),
         nanosecondClock: function () use (&$readings): int {
             return (int) array_shift($readings);
         },
