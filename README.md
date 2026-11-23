@@ -135,6 +135,27 @@ or `connection`, read from the curl errno. Neither the message nor the
 exception chain names the host, the pinned address or the URL. Refusals the
 client makes itself (response size, redirect rules) have no kind.
 
+**Egress proxy.** Set `outbound.http.egress_proxy` (`OUTBOUND_EGRESS_PROXY`,
+for example `http://user:secret@egress.internal:3128`) to send every request
+through a filtering forward proxy, as Standard Webhooks "Server side request
+forgery (SSRF)" recommends. It is deployment config, never set per endpoint
+or per call; null (the default) sends directly, and the `HTTP(S)_PROXY`
+environment variables are never read either way.
+
+- The guard still authorises and pins every destination, so the proxy adds a
+  network-layer control without replacing the application one. curl is
+  forced into tunnel mode, also for plain `http://`: the proxy receives
+  `CONNECT <guard-approved address>:<port>`, never a URL or a host name to
+  resolve, so it cannot be steered to an internal address the guard refused.
+  A refused destination never reaches the proxy.
+- Only `http://` and `https://` proxies with a host and nothing after the
+  port are accepted, checked at boot; a SOCKS proxy could resolve names
+  itself. The proxy's own address is trusted infrastructure, not checked by
+  the guard.
+- `EgressProxy` keeps the credentials out of string casts, dumps,
+  serialization and exception messages; a proxy refusal surfaces as a
+  transport error with the fixed messages above.
+
 
 ### Testing `PinnedHttpClient`
 
@@ -528,6 +549,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.http.total_deadline_seconds` | `OUTBOUND_TOTAL_DEADLINE_SECONDS` | `30` |
 | `outbound.http.max_response_bytes` | `OUTBOUND_MAX_RESPONSE_BYTES` | `1048576` |
 | `outbound.http.max_redirects` | `OUTBOUND_MAX_REDIRECTS` | `0` |
+| `outbound.http.egress_proxy` | `OUTBOUND_EGRESS_PROXY` | `null` |
 | `outbound.webhooks.replay_tolerance_seconds` | `OUTBOUND_WEBHOOK_TOLERANCE_SECONDS` | `300` |
 | `outbound.webhooks.max_payload_bytes` | `OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES` | `1048576` |
 | `outbound.webhooks.max_signatures` | `OUTBOUND_WEBHOOK_MAX_SIGNATURES` | `8` |

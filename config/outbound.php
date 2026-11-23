@@ -64,6 +64,16 @@ return [
          */
         'max_redirects' => (int) env('OUTBOUND_MAX_REDIRECTS', 0),
 
+        /*
+         * A filtering forward proxy every outbound request goes through
+         * (http:// or https://, optionally with credentials), as Standard
+         * Webhooks recommends against SSRF. Null sends directly. Ambient
+         * HTTP(S)_PROXY variables are never read. The guard still authorises
+         * and pins each destination: the proxy only receives CONNECT to that
+         * address. It is deployment config, never set per endpoint or call.
+         */
+        'egress_proxy' => env('OUTBOUND_EGRESS_PROXY'),
+
     ],
 
     'webhooks' => [

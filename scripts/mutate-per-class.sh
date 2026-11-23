@@ -89,6 +89,7 @@ done
 # Classes added since whose tests are unit tests: no --covered-only either.
 unit_classes=(
   'Qiick\Outbound\Http\OutboundHttpException'
+  'Qiick\Outbound\Http\EgressProxy'
 )
 
 for class in "${unit_classes[@]}"; do

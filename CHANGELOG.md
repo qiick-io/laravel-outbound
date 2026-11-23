@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Egress proxy (standards review R3, S1): `outbound.http.egress_proxy` and
+  `EgressProxy` route `PinnedHttpClient` through an http(s) forward proxy in
+  forced tunnel mode, so the proxy only receives `CONNECT` to the address
+  the guard approved; credentials never appear as text. Real-transport tests
+  run through a CONNECT proxy on Guzzle 7 and 8.
 - Package migrations and Eloquent models for the five webhook delivery tables
   (standards review M1, M2, M15), loaded by the provider unless
   `outbound.migrations.load` is off, and publishable with

@@ -9,12 +9,14 @@ use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Http;
 use Psr\Http\Message\RequestInterface;
 use Qiick\Outbound\Enums\OutboundTransportErrorKindEnum;
+use Qiick\Outbound\Http\EgressProxy;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\OutboundRequest;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Ssrf\UnsafeUrl;
 use Qiick\Outbound\Ssrf\UrlGuardOptions;
 use Qiick\Outbound\Testing\FakeHostResolver;
 
@@ -545,5 +547,132 @@ it('names a real timeout, TLS failure and refused connection without the address
     foreach ([$timeout, $tls, $refused] as $exception) {
         expect($exception->getMessage())->not->toContain('127.0.0.1')->not->toContain('app.test')
             ->and($exception->getPrevious()?->getMessage())->toBe('Underlying transport error.');
+    }
+})->group('real-transport');
+
+/**
+ * The test forward proxy (tests/Support/real-transport-proxy.php) on a free
+ * loopback port, with the request lines it saw.
+ */
+final class RealTransportProxy
+{
+    public int $port;
+
+    public string $logFile;
+
+    /** @var resource */
+    private $process;
+
+    public function __construct(?string $credentials = null)
+    {
+        $probe = stream_socket_server('tcp://127.0.0.1:0');
+        $this->port = (int) substr((string) stream_socket_get_name($probe, false), strrpos((string) stream_socket_get_name($probe, false), ':') + 1);
+        fclose($probe);
+        $this->logFile = (string) tempnam(sys_get_temp_dir(), 'outbound-proxy-');
+        // exec: the proxy itself is the process stopped later, not a shell around it.
+        $command = sprintf(
+            'exec %s %s %d %s %s',
+            escapeshellarg(PHP_BINARY),
+            escapeshellarg(dirname(__DIR__, 2).'/Support/real-transport-proxy.php'),
+            $this->port,
+            escapeshellarg($this->logFile),
+            $credentials === null ? '' : escapeshellarg($credentials),
+        );
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+
+        if (! is_resource($process)) {
+            throw new RuntimeException('Failed to start the test proxy.');
+        }
+
+        $this->process = $process;
+        $deadline = microtime(true) + 5;
+
+        while (microtime(true) < $deadline && @fsockopen('127.0.0.1', $this->port, $errorNumber, $errorMessage, 0.2) === false) {
+            usleep(50_000);
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function requestLines(): array
+    {
+        return array_values(array_filter(explode("\n", (string) file_get_contents($this->logFile))));
+    }
+
+    public function stop(): void
+    {
+        proc_terminate($this->process);
+        proc_close($this->process);
+        @unlink($this->logFile);
+    }
+}
+
+function clientThroughProxy(RealTransportServer $server, RealTransportProxy $proxy, ?string $credentials = null): PinnedHttpClient
+{
+    return new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard((new FakeHostResolver)->with('app.test', ['127.0.0.1'])->with('metadata.test', ['169.254.169.254']), allowPrivateHosts: true),
+        new OutboundHttpLimits,
+        null,
+        null,
+        EgressProxy::fromUrl('http://'.($credentials === null ? '' : $credentials.'@').'127.0.0.1:'.$proxy->port),
+    );
+}
+
+it('tunnels through the egress proxy to the pinned address, never naming the host', function (): void {
+    $server = new RealTransportServer;
+    $proxy = new RealTransportProxy;
+
+    try {
+        $response = clientThroughProxy($server, $proxy)->send('GET', $server->url('app.test', '/ok'), static function (OutboundRequest $request): void {}, realTransportOptions());
+
+        expect($response->status())->toBe(200)
+            ->and($response->body())->toBe('pinned-ok:app.test:'.$server->port)
+            ->and($proxy->requestLines())->toBe(["CONNECT 127.0.0.1:{$server->port} HTTP/1.1"]);
+    } finally {
+        $proxy->stop();
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('authenticates to the egress proxy, and keeps its credentials out of a refusal', function (): void {
+    $server = new RealTransportServer;
+    $proxy = new RealTransportProxy('outbound:s3cret');
+
+    try {
+        $response = clientThroughProxy($server, $proxy, 'outbound:s3cret')->send('GET', $server->url('app.test', '/ok'), static function (OutboundRequest $request): void {}, realTransportOptions());
+
+        try {
+            clientThroughProxy($server, $proxy, 'outbound:wrong-s3cret')->send('GET', $server->url('app.test', '/ok'), static function (OutboundRequest $request): void {}, realTransportOptions());
+            $chain = 'not refused';
+        } catch (OutboundHttpException $exception) {
+            $chain = '';
+            for ($link = $exception; $link !== null; $link = $link->getPrevious()) {
+                $chain .= $link->getMessage()."\n";
+            }
+        }
+
+        expect($response->status())->toBe(200)
+            ->and($chain)->toContain('Outbound request failed:')
+            ->and($chain)->not->toContain('s3cret')
+            ->and($chain)->not->toContain('outbound:');
+    } finally {
+        $proxy->stop();
+        $server->stop();
+    }
+})->group('real-transport');
+
+it('never reaches the egress proxy for a destination the guard refuses', function (): void {
+    $server = new RealTransportServer;
+    $proxy = new RealTransportProxy;
+
+    try {
+        expect(fn () => clientThroughProxy($server, $proxy)->send('GET', 'http://metadata.test/latest/meta-data/', static function (OutboundRequest $request): void {}, realTransportOptions()))
+            ->toThrow(UnsafeUrl::class)
+            ->and($proxy->requestLines())->toBe([]);
+    } finally {
+        $proxy->stop();
+        $server->stop();
     }
 })->group('real-transport');
