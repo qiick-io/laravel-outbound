@@ -382,7 +382,7 @@ it('records a connection error as a failure without an HTTP status', function ()
 
     expect($attempt->status)->toBe(WebhookAttemptStatusEnum::Failed)
         ->and($attempt->http_status)->toBeNull()
-        ->and($attempt->error_code)->toBe('transport')
+        ->and($attempt->error_code)->toBe('connection')
         ->and($attempt->error_message)->toBe('Outbound request failed: connection error.')
         ->and(onlyDelivery()->last_http_status)->toBeNull()
         ->and(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05');
@@ -954,4 +954,35 @@ it('sends equally due deliveries of two endpoints in delivery id order', functio
 
     expect(array_map(static fn ($request): string => $request->getUri()->getHost(), $this->transfer->requests))
         ->toBe(['other.example.com', 'hooks.example.com']);
+});
+
+it('records the kind of a transport error as the attempt error code', function (int $curlErrno, string $errorCode, string $errorMessage): void {
+    deliveryEndpoint();
+    $this->transfer->failWithCurlError($curlErrno);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($attempt->status)->toBe(WebhookAttemptStatusEnum::Failed)
+        ->and($attempt->error_code)->toBe($errorCode)
+        ->and($attempt->error_message)->toBe($errorMessage);
+})->with([
+    'connection refused' => [7, 'connection', 'Outbound request failed: connection error.'],
+    'timeout' => [28, 'timeout', 'Outbound request failed: timeout.'],
+    'TLS' => [35, 'tls', 'Outbound request failed: TLS error.'],
+    'DNS' => [6, 'dns', 'Outbound request failed: DNS error.'],
+]);
+
+it('keeps "transport" for a client refusal that has no transport kind', function (): void {
+    config()->set('outbound.http.max_response_bytes', 10);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    deliveryEndpoint();
+    $this->transfer->respond(200, ['Content-Length' => '100'], str_repeat('a', 100));
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('transport')
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_message)->toBe('Response exceeds max_response_bytes.');
 });

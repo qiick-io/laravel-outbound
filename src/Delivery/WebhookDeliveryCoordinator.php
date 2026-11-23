@@ -306,7 +306,11 @@ final class WebhookDeliveryCoordinator
         } catch (InvalidArgumentException $exception) {
             return $this->outcome(WebhookAttemptStatusEnum::Refused, 'request_refused', $exception->getMessage(), null, $secretPublicIds);
         } catch (OutboundHttpException $exception) {
-            return $this->outcome(WebhookAttemptStatusEnum::Failed, 'transport', $exception->getMessage(), null, $secretPublicIds);
+            // timeout, tls, dns or connection; "transport" for a refusal of the
+            // client's own without a kind (a response over max_response_bytes).
+            $errorCode = $exception->transportErrorKind()->value ?? 'transport';
+
+            return $this->outcome(WebhookAttemptStatusEnum::Failed, $errorCode, $exception->getMessage(), null, $secretPublicIds);
         }
 
         if ($response->successful()) {

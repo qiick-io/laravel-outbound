@@ -25,7 +25,7 @@ final class RecordingTransferHandler
     /** @var list<array<string, mixed>> */
     public array $transportOptions = [];
 
-    /** @var list<Psr7Response|string> */
+    /** @var list<Psr7Response|int> responses, or curl errnos for failures */
     private array $answers = [];
 
     /**
@@ -40,7 +40,15 @@ final class RecordingTransferHandler
 
     public function failToConnect(): self
     {
-        $this->answers[] = 'connect';
+        return $this->failWithCurlError(7);
+    }
+
+    /**
+     * Fail the next request the way curl does, with this errno in the message.
+     */
+    public function failWithCurlError(int $curlErrno): self
+    {
+        $this->answers[] = $curlErrno;
 
         return $this;
     }
@@ -54,8 +62,8 @@ final class RecordingTransferHandler
         $this->transportOptions[] = $options;
         $answer = array_shift($this->answers) ?? new Psr7Response(200);
 
-        if ($answer === 'connect') {
-            return PromiseCreate::rejectionFor(new ConnectException('cURL error 7: Failed to connect', $request));
+        if (is_int($answer)) {
+            return PromiseCreate::rejectionFor(new ConnectException("cURL error {$answer}: transfer failed", $request));
         }
 
         return PromiseCreate::promiseFor($answer);
