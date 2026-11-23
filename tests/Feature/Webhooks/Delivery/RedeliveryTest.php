@@ -275,3 +275,104 @@ it('reports a delivery deleted before the redelivery as not scheduled', function
     expect(app(WebhookDeliveryCoordinator::class)->redeliver($delivery))->toBeFalse();
     Event::assertNotDispatched(WebhookRedeliveryRequestedEvent::class);
 });
+
+/*
+ * Review of #35 (docs-versus-code check): the edge cases below.
+ */
+
+it('refuses a bulk redelivery to a deleted endpoint and a range that ends before it starts', function (bool $isDeleted, string $from, string $until, string $message): void {
+    $endpoint = redeliveryEndpoint();
+
+    if ($isDeleted) {
+        $endpoint->delete();
+    }
+
+    expect(fn () => app(WebhookDeliveryCoordinator::class)->redeliverRange($endpoint, CarbonImmutable::parse($from, 'UTC'), CarbonImmutable::parse($until, 'UTC'), [DeliveryStatus::Exhausted]))
+        ->toThrow(WebhookException::class, $message);
+})->with([
+    'deleted endpoint' => [true, '2026-11-22', '2026-11-23', 'Webhook endpoint is disabled; enable it before redelivering.'],
+    'inverted range' => [false, '2026-11-23', '2026-11-22', 'The redelivery range must end after it starts.'],
+]);
+
+it('sends a delivery asked for twice before the worker runs only once, for the latest request', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'max_attempts' => 10]);
+    $firstOperatorId = redeliveryUserId();
+    $secondOperatorId = redeliveryUserId();
+
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivery, $firstOperatorId);
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivery->refresh(), $secondOperatorId);
+
+    expect($delivery->refresh()->max_attempts)->toBe(11)
+        ->and(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(1)
+        ->and(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(0)
+        ->and(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBe($secondOperatorId);
+});
+
+it('honours a redelivery asked for while the delivery is being sent', function (int $status): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = sentDelivery($endpoint);
+    $operatorId = redeliveryUserId();
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
+        $this->app->make(OutboundHttpLimits::class),
+        static fn (): float => 1_000.0,
+        function ($request, array $options) use ($delivery, $operatorId, $status) {
+            // A user asks for it again while this attempt is on the wire.
+            if (count($this->transfer->requests) === 0) {
+                app(WebhookDeliveryCoordinator::class)->redeliver($delivery->refresh(), $operatorId);
+                $this->transfer->respond($status);
+            }
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    app(WebhookDeliveryCoordinator::class)->work(50);
+    $delivery->refresh();
+
+    expect($delivery->status)->toBe(DeliveryStatus::Pending)
+        ->and($delivery->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
+        ->and($delivery->next_attempt_trigger)->toBe(WebhookAttemptTriggerEnum::Manual)
+        ->and($delivery->next_attempt_triggered_by)->toBe($operatorId)
+        ->and(WebhookDeliveryAttempt::query()->sole()->trigger)->toBe(WebhookAttemptTriggerEnum::Schedule);
+
+    expect(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(1)
+        ->and(WebhookDeliveryAttempt::query()->orderBy('attempt')->pluck('trigger')->all())->toBe([WebhookAttemptTriggerEnum::Schedule, WebhookAttemptTriggerEnum::Manual]);
+})->with([
+    'the in-flight attempt is delivered' => [200],
+    'the in-flight attempt fails' => [500],
+]);
+
+it('keeps the time of the last delivery and clears the exhausted reason when redelivering', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivered = settledDelivery($endpoint, 'msg_delivered', ['status' => 'delivered', 'delivered_at' => '2026-11-22 10:00:00']);
+    $exhausted = settledDelivery($endpoint, 'msg_exhausted', ['status' => 'exhausted', 'exhausted_reason' => 'gone']);
+
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivered);
+    app(WebhookDeliveryCoordinator::class)->redeliver($exhausted);
+
+    expect($delivered->refresh()->status)->toBe(DeliveryStatus::Pending)
+        ->and($delivered->delivered_at?->toDateTimeString())->toBe('2026-11-22 10:00:00')
+        ->and($exhausted->refresh()->status)->toBe(DeliveryStatus::Pending)
+        ->and($exhausted->exhausted_reason)->toBeNull();
+
+    $this->transfer->respond(200)->respond(500);
+    app(WebhookDeliveryCoordinator::class)->work(50);
+
+    expect($delivered->refresh()->delivered_at?->toDateTimeString())->toBe('2026-11-23 10:00:00');
+});
+
+it('forgets who asked for a redelivery when that user is deleted', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted']);
+    $operatorId = redeliveryUserId();
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivery, $operatorId);
+
+    DB::table('users')->where('id', $operatorId)->delete();
+
+    expect($delivery->refresh()->next_attempt_triggered_by)->toBeNull()
+        ->and($delivery->next_attempt_trigger)->toBe(WebhookAttemptTriggerEnum::Manual);
+});

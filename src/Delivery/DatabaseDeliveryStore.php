@@ -208,6 +208,14 @@ final class DatabaseDeliveryStore
                 return false;
             }
 
+            // A redelivery asked for while this attempt was on the wire: the
+            // worker claimed the delivery without it, so recording must not
+            // clear it.
+            $redeliveryAskedMeanwhile = $storedDelivery->next_attempt_trigger !== $delivery->next_attempt_trigger
+                || $storedDelivery->next_attempt_triggered_by !== $delivery->next_attempt_triggered_by;
+            $askedTrigger = $storedDelivery->next_attempt_trigger;
+            $askedBy = $storedDelivery->next_attempt_triggered_by;
+
             $storedDelivery->attempts()->make()->forceFill($attemptAttributes)->save();
             $storedDelivery->forceFill([
                 ...$deliveryChanges,
@@ -216,6 +224,10 @@ final class DatabaseDeliveryStore
             ])->save();
             if ($isReceiverOutcome) {
                 $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+            }
+
+            if ($redeliveryAskedMeanwhile && $askedTrigger !== null) {
+                $this->scheduleRedelivery(WebhookDelivery::query()->whereKey($delivery->id), $askedTrigger, $askedBy);
             }
 
             return true;
