@@ -61,6 +61,9 @@ and the approved design before adopting a commit from `develop`.
   until their retry plan ends if later, then cleared; settled delivery rows
   are deleted after 90 days (`OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS`). `WebhookExhaustedReasonEnum` gains
   `PayloadExpired`: add it to any exhaustive `match`.
+- `SeenWebhookIdStore` gains `release()`: a custom implementation must add
+  it. Webhook ids with a `.` and event types outside dot-separated
+  `[A-Za-z0-9_]` segments (for example `invoice-paid`) are now refused.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

@@ -90,6 +90,7 @@ done
 unit_classes=(
   'Qiick\Outbound\Http\OutboundHttpException'
   'Qiick\Outbound\Http\EgressProxy'
+  'Qiick\Outbound\Webhooks\WebhookMessage'
 )
 
 for class in "${unit_classes[@]}"; do

@@ -417,6 +417,8 @@ it('claims with TTL equal to timestamp + tolerance - now + 1', function (): void
     $recorded = [];
     $store = new class($recorded) implements SeenWebhookIdStore
     {
+        public function release(string $scope, string $webhookId): void {}
+
         /** @param list<int> $ttls */
         public function __construct(private array &$ttls) {}
 

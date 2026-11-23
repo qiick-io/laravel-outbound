@@ -54,6 +54,11 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
         return true;
     }
 
+    public function release(string $scope, string $webhookId): void
+    {
+        unset($this->entries[hash('sha256', $scope."\0".$webhookId)]);
+    }
+
     private function now(): int
     {
         if (is_callable($this->clock)) {

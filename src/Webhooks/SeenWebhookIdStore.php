@@ -23,4 +23,14 @@ interface SeenWebhookIdStore
      * @throws WebhookException when the store cannot record the claim (fail closed)
      */
     public function claim(string $scope, string $webhookId, int $ttlSeconds): bool;
+
+    /**
+     * Give a claim back, so the same `(scope, webhookId)` can be processed
+     * again: for a consumer whose processing failed after the claim, which
+     * the sender's redelivery will retry with the same `webhook-id`
+     * (standards review M14, R7). Releasing an id never claimed does nothing.
+     *
+     * @throws WebhookException when the store cannot release the claim (fail closed)
+     */
+    public function release(string $scope, string $webhookId): void;
 }

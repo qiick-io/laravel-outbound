@@ -5,10 +5,12 @@ declare(strict_types=1);
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Promise\Create as PromiseCreate;
 use GuzzleHttp\Psr7\Response as Psr7Response;
+use Illuminate\Events\Dispatcher;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Http;
 use Psr\Http\Message\RequestInterface;
+use Qiick\Outbound\Events\OutboundRequestBlockedEvent;
 use Qiick\Outbound\Http\EgressProxy;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
@@ -1099,4 +1101,42 @@ it('keeps the proxy credentials out of a transport error', function (): void {
     expect($chain)->toContain('Outbound request failed: connection error.')
         ->and($chain)->not->toContain('s3cret')
         ->and($chain)->not->toContain('proxy.internal');
+});
+
+/*
+ * Standards review M13: a request the guard refuses is announced, with the
+ * destination's host and the reason only (no path, no query, no body).
+ */
+it('announces a request the guard refuses, without the path or query', function (): void {
+    $events = new Dispatcher;
+    $seen = [];
+    $events->listen(OutboundRequestBlockedEvent::class, function ($event) use (&$seen): void {
+        $seen[] = $event;
+    });
+    $client = new PinnedHttpClient(
+        app(HttpFactory::class),
+        new RemoteUrlGuard(new FakeHostResolver(answers: ['internal.test' => ['10.0.0.7']])),
+        new OutboundHttpLimits,
+        events: $events,
+    );
+
+    expect(fn () => $client->send('POST', 'https://internal.test:8443/admin?token=s3cret', noopConfigure()))->toThrow(UnsafeUrl::class)
+        ->and($seen)->toHaveCount(1)
+        ->and($seen[0]->host)->toBe('internal.test')
+        ->and($seen[0]->reason)->toBe('Host resolves to a disallowed address.')
+        ->and(serialize($seen[0]))->not->toContain('s3cret')->not->toContain('/admin');
+});
+
+it('announces nothing for a request the guard allows', function (): void {
+    Http::fake(['https://example.test/*' => Http::response('ok')]);
+    $events = new Dispatcher;
+    $seen = 0;
+    $events->listen(OutboundRequestBlockedEvent::class, function () use (&$seen): void {
+        $seen++;
+    });
+
+    (new PinnedHttpClient(app(HttpFactory::class), new RemoteUrlGuard(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']])), new OutboundHttpLimits, events: $events))
+        ->send('GET', 'https://example.test/x', noopConfigure());
+
+    expect($seen)->toBe(0);
 });

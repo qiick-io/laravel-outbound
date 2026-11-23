@@ -53,7 +53,7 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
 
     public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
     {
-        $key = $this->keyPrefix.hash('sha256', $scope."\0".$webhookId);
+        $key = $this->keyFor($scope, $webhookId);
         $ttl = max(1, $ttlSeconds);
 
         try {
@@ -64,6 +64,20 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
         } catch (Throwable $e) {
             throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, $e); // @pest-mutate-ignore: DecrementInteger,IncrementInteger
         }
+    }
+
+    public function release(string $scope, string $webhookId): void
+    {
+        try {
+            $this->cache->forget($this->keyFor($scope, $webhookId));
+        } catch (Throwable $exception) {
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $exception);
+        }
+    }
+
+    private function keyFor(string $scope, string $webhookId): string
+    {
+        return $this->keyPrefix.hash('sha256', $scope."\0".$webhookId);
     }
 
     /**

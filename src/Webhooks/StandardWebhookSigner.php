@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Webhooks;
 
+use Illuminate\Contracts\Events\Dispatcher;
+use Qiick\Outbound\Events\WebhookSignedEvent;
+
 /**
  * Symmetric Standard Webhooks `v1` signer over exact raw body bytes.
  *
@@ -14,10 +17,35 @@ namespace Qiick\Outbound\Webhooks;
  */
 final class StandardWebhookSigner
 {
+    /**
+     * @param  Dispatcher|null  $events  receives {@see WebhookSignedEvent} after each signing
+     */
     public function __construct(
         private readonly int $maxPayloadBytes = 1_048_576,
         private readonly int $maxSecrets = 4,
+        private readonly ?Dispatcher $events = null,
     ) {}
+
+    /**
+     * Standard Webhooks "Signature scheme": the id and the timestamp must not
+     * include a `.`, which separates the signed fields (standards review M4).
+     *
+     * @throws WebhookException when the id is empty or has a dot or a control character
+     */
+    public static function assertValidWebhookId(string $msgId): void
+    {
+        if ($msgId === '') {
+            throw new WebhookException('Webhook id must not be empty.');
+        }
+
+        if (str_contains($msgId, '.')) {
+            throw new WebhookException('Webhook id must not contain a dot.');
+        }
+
+        if (preg_match('/[\x00-\x1F\x7F]/', $msgId) === 1) {
+            throw new WebhookException('Webhook id must not contain control characters.');
+        }
+    }
 
     /**
      * @param  list<WebhookSecret>  $secrets
@@ -32,13 +60,7 @@ final class StandardWebhookSigner
         string $rawBody,
         array $secrets,
     ): SignedWebhook {
-        if ($msgId === '') {
-            throw new WebhookException('Webhook id must not be empty.');
-        }
-
-        if (preg_match('/[\x00-\x1F\x7F]/', $msgId) === 1) {
-            throw new WebhookException('Webhook id must not contain control characters.');
-        }
+        self::assertValidWebhookId($msgId);
 
         if ($timestampUnix <= 0) {
             throw new WebhookException('Webhook timestamp must be a positive unix second.');
@@ -67,6 +89,9 @@ final class StandardWebhookSigner
 
             $signatures[] = self::signV1($msgId, $timestamp, $rawBody, $secret->signingKey());
         }
+
+        // Ids and counts only: never a secret or the body (design §3.5).
+        $this->events?->dispatch(new WebhookSignedEvent($msgId, $timestampUnix, $secretCount, strlen($rawBody)));
 
         return new SignedWebhook(
             rawBody: $rawBody,

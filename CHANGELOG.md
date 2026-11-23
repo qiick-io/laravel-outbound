@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standards review gaps: `SeenWebhookIdStore::release()` (M14), implemented by
+  `CacheSeenWebhookIdStore` and `FakeSeenWebhookIdStore`; the events
+  `WebhookSignedEvent` and `OutboundRequestBlockedEvent` (M13), with no
+  secrets or bodies.
 - Egress proxy (standards review R3, S1): `outbound.http.egress_proxy` and
   `EgressProxy` route `PinnedHttpClient` through an http(s) forward proxy in
   forced tunnel mode, so the proxy only receives `CONNECT` to the address
@@ -105,6 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `StandardWebhookSigner` refuses a `webhook-id` containing `.` (M4), and
+  `WebhookMessage` validates its id (no `.`, no control characters, at most
+  191 bytes) and its event type (dot-separated `[A-Za-z0-9_]` segments, S3).
 - `webhook_endpoints.allow_private_hosts`, `auto_disable` and `created_by`
   are no longer mass-assignable.
 - A transport timeout, TLS or DNS failure now reads `Outbound request failed:
