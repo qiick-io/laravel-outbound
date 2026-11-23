@@ -79,7 +79,9 @@ class WebhookDelivery extends Model
 
     /**
      * A failed write is rethrown without its bindings, so `payload_hash`
-     * never reaches an exception message or a log.
+     * never reaches an exception message or a log. The write runs in its own
+     * transaction, a savepoint inside the caller's: on PostgreSQL a refused
+     * duplicate would otherwise abort the product's whole transaction.
      *
      * @param  array{touch?: bool|null}  $options
      *
@@ -88,7 +90,10 @@ class WebhookDelivery extends Model
     public function save(array $options = []): bool
     {
         try {
-            return parent::save($options);
+            /** @var bool $isSaved Laravel 12 types transaction() as mixed. */
+            $isSaved = $this->getConnection()->transaction(fn (): bool => parent::save($options));
+
+            return $isSaved;
         } catch (QueryException $queryException) {
             throw WebhookDeliveryStorageException::withoutBindings($queryException);
         }

@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Qiick\Outbound\Delivery\DuplicateWebhookDeliveryException;
 use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Models\WebhookDelivery;
@@ -185,6 +187,30 @@ it('reports a second delivery of the same event to the same endpoint as a duplic
         ->and($thrown?->getMessage())->toMatch('/^Webhook delivery could not be saved \(SQLSTATE \w{5}\)\.$/')
         ->and($thrown?->getPrevious())->toBeNull()
         ->and(WebhookDelivery::query()->count())->toBe(1);
+});
+
+it('refuses a duplicate inside a product transaction without aborting it', function (): void {
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $transactionsBegun = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactionsBegun): void {
+        $transactionsBegun++;
+    });
+
+    $deliveriesAfterTheDuplicate = DB::transaction(function () use ($endpoint): int {
+        unsavedDelivery($endpoint, '{"type":"ping"}')->save();
+
+        try {
+            unsavedDelivery($endpoint, '{"type":"ping"}')->save();
+        } catch (DuplicateWebhookDeliveryException) {
+            // The product carries on with its own transaction.
+        }
+
+        return WebhookDelivery::query()->count();
+    });
+
+    // One for the product's transaction, one savepoint per save.
+    expect($deliveriesAfterTheDuplicate)->toBe(1)
+        ->and($transactionsBegun)->toBe(3);
 });
 
 it('saves and updates a delivery normally', function (): void {
