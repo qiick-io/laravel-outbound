@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Schema;
@@ -386,6 +387,7 @@ it('records a connection error as a failure without an HTTP status', function ()
 });
 
 it('refuses an attempt the guard or the signer stops, sends nothing, and retries it on the schedule', function (array $endpointAttributes, bool $hasSecret, string $errorCode, string $errorMessage): void {
+    // Signed attempts record their secrets even when the guard stops them.
     $endpoint = deliveryEndpoint($endpointAttributes, hasSecret: $hasSecret);
     coordinator()->dispatch(invoicePaidMessage());
 
@@ -396,7 +398,7 @@ it('refuses an attempt the guard or the signer stops, sends nothing, and retries
         ->and($attempt->status)->toBe(WebhookAttemptStatusEnum::Refused)
         ->and($attempt->error_code)->toBe($errorCode)
         ->and($attempt->error_message)->toBe($errorMessage)
-        ->and($attempt->secret_public_ids)->toBeNull()
+        ->and($attempt->secret_public_ids)->toBe($hasSecret ? [$endpoint->secrets()->sole()->public_id] : null)
         ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Pending)
         ->and(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
         ->and($endpoint->refresh()->consecutive_failures)->toBe(1);
@@ -433,6 +435,8 @@ it('posts with a 15 s timeout, an endpoint override, and never above the configu
 ]);
 
 it('applies the endpoint https and private-host overrides to the guard', function (): void {
+    config()->set('outbound.webhooks.allow_endpoint_private_hosts', true);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
     deliveryEndpoint(['url' => 'http://hooks.example.com/plain', 'https_only' => true]);
     deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => true]);
     coordinator()->dispatch(invoicePaidMessage());
@@ -582,6 +586,8 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
         defaultRetryPreset: WebhookRetryPresetEnum::Standard,
         defaultMaxConcurrency: 2,
         maxResponseBytes: 1_048_576,
+        isEndpointPrivateHostsAllowed: false,
+        exceptionHandler: app(ExceptionHandler::class),
         nanosecondClock: function () use (&$readings): int {
             return (int) array_shift($readings);
         },
@@ -684,4 +690,262 @@ it('sends to a plain-http URL when neither the endpoint nor the config asks for 
 
     expect((string) $this->transfer->requests[0]->getUri())->toBe('http://hooks.example.com/plain')
         ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+/*
+ * Review of #25 (2026-11-23): receiver-controlled text, overlapping workers,
+ * fairness between endpoints, and the per-endpoint private-host switch.
+ */
+
+it('stores a receiver\'s request id and header values as valid, bounded text', function (string $requestId, ?string $expectedRequestId): void {
+    deliveryEndpoint();
+    $this->transfer->respond(500, ['X-Request-Id' => $requestId, 'Content-Type' => str_repeat('é', 254)."\xff\u{202E}é", 'Date' => "Mon\u{202E}day\xff"]);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+    $contentType = (string) ($attempt->response_headers['content-type'] ?? '');
+
+    expect($attempt->request_id)->toBe($expectedRequestId)
+        ->and(mb_check_encoding($contentType, 'UTF-8'))->toBeTrue()
+        ->and(mb_strlen($contentType))->toBe(255)
+        ->and($contentType)->toBe(str_repeat('é', 254).'?')
+        ->and($attempt->response_headers['date'] ?? null)->toBe('Monday?')
+        ->and(onlyDelivery()->attempts_count)->toBe(1);
+})->with([
+    'cut inside a two-byte character' => [str_repeat('a', 63).'é', str_repeat('a', 63)],
+    'invalid bytes' => ["req-\xff\xfe-1", 'req--1'],
+    'markup' => ['<script>alert(1)</script>', 'scriptalert1script'],
+    'nothing usable' => ['é', null],
+]);
+
+it('keeps a 2xx delivered when the full attempt row cannot be stored', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(204, ['X-Request-Id' => 'req-1']);
+    coordinator()->dispatch(invoicePaidMessage());
+    WebhookDeliveryAttempt::creating(function (WebhookDeliveryAttempt $attempt): void {
+        if ($attempt->request_id !== null) {
+            throw new RuntimeException('Incorrect string value for column request_id');
+        }
+    });
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered)
+        ->and(onlyDelivery()->attempts_count)->toBe(1)
+        ->and(WebhookDeliveryAttempt::query()->sole()->status)->toBe(WebhookAttemptStatusEnum::Delivered)
+        ->and(WebhookDeliveryAttempt::query()->sole()->http_status)->toBe(204)
+        ->and(WebhookDeliveryAttempt::query()->sole()->response_headers)->toBeNull();
+});
+
+it('records an unexpected error as a refused attempt and carries on with the batch', function (): void {
+    $broken = deliveryEndpoint(['headers' => ['X-List' => ['a', 'b']]]);
+    $healthy = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    expect(coordinator()->work(50))->toBe(2);
+
+    $brokenDelivery = WebhookDelivery::query()->where('endpoint_id', $broken->id)->sole();
+    $brokenAttempt = $brokenDelivery->attempts()->sole();
+
+    expect($brokenAttempt->status)->toBe(WebhookAttemptStatusEnum::Refused)
+        ->and($brokenAttempt->error_code)->toBe('internal_error')
+        ->and($brokenAttempt->error_message)->toBe('The attempt could not be prepared.')
+        ->and($brokenDelivery->attempts_count)->toBe(1)
+        ->and($brokenDelivery->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and(WebhookDelivery::query()->where('endpoint_id', $healthy->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('never sends a delivery twice when a second worker starts while the first is still sending', function (): void {
+    $endpointNames = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    $resolverAnswers = [];
+    foreach ($endpointNames as $endpointName) {
+        $resolverAnswers["{$endpointName}.example.com"] = ['93.184.216.34'];
+    }
+    $sentHosts = [];
+    $secondWorkerHasRun = false;
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard(new FakeHostResolver(answers: $resolverAnswers)),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use (&$sentHosts, &$secondWorkerHasRun) {
+            $sentHosts[] = explode('.', $request->getUri()->getHost())[0];
+            // Every send takes the full 15 s webhook timeout.
+            CarbonImmutable::setTestNow(CarbonImmutable::now()->addSeconds(15));
+
+            if (count($sentHosts) === 7 && ! $secondWorkerHasRun) {
+                $secondWorkerHasRun = true;
+                app(WebhookDeliveryCoordinator::class)->work(50);
+            }
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    foreach ($endpointNames as $endpointName) {
+        deliveryEndpoint(['url' => "https://{$endpointName}.example.com/receive"]);
+    }
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($sentHosts)->toEqualCanonicalizing($endpointNames)
+        ->and(WebhookDelivery::query()->where('status', 'delivered')->count())->toBe(8)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(8);
+});
+
+it('gives every endpoint its turn when another has a large backlog', function (): void {
+    $busy = deliveryEndpoint();
+    $quiet = deliveryEndpoint(['url' => 'https://other.example.com/receive'], ['invoice.voided']);
+    foreach (range(1, 60) as $messageNumber) {
+        coordinator()->dispatch(invoicePaidMessage("msg_{$messageNumber}"));
+    }
+    WebhookDelivery::query()->update(['next_attempt_at' => '2026-11-23 09:00:00']);
+    coordinator()->dispatch(new WebhookMessage('msg_quiet', 'invoice.voided', new DateTimeImmutable('2026-11-23 09:59:00'), []));
+
+    expect(coordinator()->work(50))->toBe(3)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $quiet->id)->sole()->status)->toBe(DeliveryStatus::Delivered)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $busy->id)->where('status', 'delivered')->count())->toBe(2);
+});
+
+it('does not send to an endpoint disabled after the batch was selected', function (): void {
+    $first = deliveryEndpoint();
+    $second = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use ($second) {
+            WebhookEndpoint::query()->whereKey($second->id)->update(['is_active' => false]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(coordinator()->work(50))->toBe(1)
+        ->and($this->transfer->requests)->toHaveCount(1)
+        ->and(WebhookDelivery::query()->where('endpoint_id', $first->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('never lets input switch private hosts on for an endpoint, and honours the switch only when the product allows it', function (bool $isAllowedByProduct): void {
+    config()->set('outbound.webhooks.allow_endpoint_private_hosts', $isAllowedByProduct);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
+    $endpoint->fill(['allow_private_hosts' => true])->save();
+    $isFillable = $endpoint->refresh()->allow_private_hosts === true;
+    $endpoint->forceFill(['allow_private_hosts' => true])->save();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($isFillable)->toBeFalse()
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($isAllowedByProduct ? null : 'ssrf_refused');
+})->with(['product allows endpoint switches' => [true], 'product does not' => [false]]);
+
+it('honours the first Retry-After when the header is repeated', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(503, ['Retry-After' => ['120', '120']]);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->next_attempt_at?->toDateTimeString())->toBe('2026-11-23 10:02:00');
+});
+
+it('records which secrets signed an attempt whose transport failed after sending', function (): void {
+    $endpoint = deliveryEndpoint();
+    $this->transfer->failToConnect();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->secret_public_ids)->toBe([$endpoint->secrets()->sole()->public_id]);
+});
+
+/**
+ * An exception handler that only remembers what it was asked to report.
+ */
+function reportingSpy(): ExceptionHandler
+{
+    return new class implements ExceptionHandler
+    {
+        /** @var list<Throwable> */
+        public array $reported = [];
+
+        public function report(Throwable $e): void
+        {
+            $this->reported[] = $e;
+        }
+
+        public function shouldReport(Throwable $e): bool
+        {
+            return true;
+        }
+
+        public function render($request, Throwable $e)
+        {
+            throw $e;
+        }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+}
+
+it('reports a delivery whose attempt cannot be stored at all, and carries on with the batch', function (): void {
+    $spy = reportingSpy();
+    $this->app->instance(ExceptionHandler::class, $spy);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    $unrecordable = deliveryEndpoint();
+    $healthy = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    coordinator()->dispatch(invoicePaidMessage());
+    WebhookDeliveryAttempt::creating(function (WebhookDeliveryAttempt $attempt) use ($unrecordable): void {
+        if ($attempt->delivery->endpoint_id === $unrecordable->id) {
+            throw new RuntimeException('The database is gone.');
+        }
+    });
+
+    expect(coordinator()->work(50))->toBe(2)
+        ->and($spy->reported)->toHaveCount(1)
+        ->and($spy->reported[0]->getMessage())->toBe('The database is gone.')
+        ->and(WebhookDelivery::query()->where('endpoint_id', $healthy->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('reports nothing for a delivery deleted while it was being sent', function (): void {
+    $spy = reportingSpy();
+    $this->app->instance(ExceptionHandler::class, $spy);
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            WebhookDelivery::query()->delete();
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect($spy->reported)->toBe([]);
+});
+
+it('sends equally due deliveries of two endpoints in delivery id order', function (): void {
+    deliveryEndpoint(eventTypes: ['invoice.voided']);
+    deliveryEndpoint(['url' => 'https://other.example.com/receive']);
+    // The second endpoint's delivery is created first, so it has the lower id.
+    coordinator()->dispatch(invoicePaidMessage());
+    coordinator()->dispatch(new WebhookMessage('msg_voided', 'invoice.voided', new DateTimeImmutable('2026-11-23 09:59:00'), []));
+    WebhookDelivery::query()->update(['next_attempt_at' => '2026-11-23 09:00:00']);
+
+    coordinator()->work(50);
+
+    expect(array_map(static fn ($request): string => $request->getUri()->getHost(), $this->transfer->requests))
+        ->toBe(['other.example.com', 'hooks.example.com']);
 });

@@ -107,6 +107,7 @@ return [
          */
         'respect_retry_after' => (bool) env('OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER', true),
 
+        // Effective ceiling 30 days: longer Retry-After values are read as 30 days.
         'retry_after_cap_seconds' => (int) env('OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS', 86_400),
 
         /*
@@ -114,6 +115,14 @@ return [
          * `max_concurrency`.
          */
         'default_max_concurrency' => (int) env('OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY', 2),
+
+        /*
+         * Let an endpoint's own `allow_private_hosts` reach private, loopback
+         * and link-local addresses (metadata stays blocked). Off: only
+         * `ssrf.allow_private_hosts` can, for every endpoint. The column is
+         * never mass-assignable; a product sets it in its own code.
+         */
+        'allow_endpoint_private_hosts' => (bool) env('OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS', false),
 
         /*
          * Allow WebhookSecret::parseAllowingLegacyRaw to accept non-whsec_

@@ -6,6 +6,7 @@ namespace Qiick\Outbound\Laravel;
 
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
@@ -144,6 +145,8 @@ final class OutboundServiceProvider extends ServiceProvider
                 defaultRetryPreset: WebhookRetryPresetEnum::tryFrom(is_string($retryPreset) ? $retryPreset : '') ?? WebhookRetryPresetEnum::Standard,
                 defaultMaxConcurrency: self::configInt($config, 'outbound.webhooks.default_max_concurrency', 2),
                 maxResponseBytes: is_int($maxResponseBytes) ? $maxResponseBytes : 1_048_576,
+                isEndpointPrivateHostsAllowed: $config->get('outbound.webhooks.allow_endpoint_private_hosts', false) === true,
+                exceptionHandler: $app->make(ExceptionHandler::class),
             );
         });
 

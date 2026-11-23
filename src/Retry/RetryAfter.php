@@ -38,9 +38,15 @@ final class RetryAfter
     {
         $headerValue = trim($headerValue, " \t");
 
-        if (preg_match('/^\d+$/', $headerValue) === 1) {
-            // A digit string beyond PHP_INT_MAX casts to PHP_INT_MAX: still capped.
-            return self::capped((int) $headerValue);
+        // D: `$` must not accept a trailing newline.
+        if (preg_match('/^\d+$/D', $headerValue) === 1) {
+            $digits = ltrim($headerValue, '0');
+
+            // Longer than the cap's own digits is above it; a cast would
+            // overflow, and past ~308 digits even become 0 through INF.
+            return strlen($digits) > strlen((string) RetrySchedule::MAX_DELAY_SECONDS)
+                ? RetrySchedule::MAX_DELAY_SECONDS
+                : self::capped((int) $digits);
         }
 
         $retryAt = self::httpDate($headerValue, $now);
@@ -63,11 +69,11 @@ final class RetryAfter
     {
         $time = self::TIME;
 
-        if (preg_match('/^'.self::WEEKDAY.', (\d{2}) '.self::MONTH." (\\d{4}) {$time} GMT$/", $headerValue, $parts) === 1) {
+        if (preg_match('/^'.self::WEEKDAY.', (\d{2}) '.self::MONTH." (\\d{4}) {$time} GMT$/D", $headerValue, $parts) === 1) {
             return self::utcDate((int) $parts[3], $parts[2], (int) $parts[1], (int) $parts[4], (int) $parts[5], (int) $parts[6]);
         }
 
-        if (preg_match('/^'.self::LONG_WEEKDAY.', (\d{2})-'.self::MONTH."-(\\d{2}) {$time} GMT$/", $headerValue, $parts) === 1) {
+        if (preg_match('/^'.self::LONG_WEEKDAY.', (\d{2})-'.self::MONTH."-(\\d{2}) {$time} GMT$/D", $headerValue, $parts) === 1) {
             $date = self::utcDate(self::fullYear($parts[3], $now), $parts[2], (int) $parts[1], (int) $parts[4], (int) $parts[5], (int) $parts[6]);
 
             // RFC 9110 §5.6.7: a two-digit year that appears to be more than 50
@@ -79,7 +85,7 @@ final class RetryAfter
             return $date;
         }
 
-        if (preg_match('/^'.self::WEEKDAY.' '.self::MONTH." ( \\d|\\d{2}) {$time} (\\d{4})$/", $headerValue, $parts) === 1) {
+        if (preg_match('/^'.self::WEEKDAY.' '.self::MONTH." ( \\d|\\d{2}) {$time} (\\d{4})$/D", $headerValue, $parts) === 1) {
             // A space-padded day (" 3") casts like "3".
             return self::utcDate((int) $parts[6], $parts[1], (int) $parts[2], (int) $parts[3], (int) $parts[4], (int) $parts[5]);
         }

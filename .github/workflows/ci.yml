@@ -206,7 +206,7 @@ jobs:
         with:
           php-version: '8.4'
           coverage: none
-          extensions: curl, intl, pdo_mysql, pdo_pgsql
+          extensions: curl, intl, pdo_mysql, pdo_pgsql, pcntl, posix
           tools: composer:v2
 
       - name: Install dependencies

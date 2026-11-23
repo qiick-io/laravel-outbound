@@ -13,8 +13,8 @@ use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
  * Run it from the scheduler, for example
  * `Schedule::command('outbound:webhooks:work')->everyFiveSeconds()`:
  * retries are driven by `next_attempt_at`, so the first retry (5 s) is only
- * as punctual as this schedule. Overlapping runs are safe; deliveries are
- * leased.
+ * as punctual as this schedule. Overlapping runs are safe: each delivery is
+ * leased on its own, right before its send.
  *
  * @api
  */

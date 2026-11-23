@@ -55,12 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (jitter first, never below a 429/502/503/504 `Retry-After`, a delay above
   `retry_after_cap_seconds` stops retries, 410 stops at once);
   `WebhookRetryPresetEnum`, `WebhookExhaustedReasonEnum`; per-endpoint
-  concurrency (`default_max_concurrency`) through a `claimed_until` lease;
-  `webhook_deliveries.claimed_until` and `exhausted_reason`.
+  concurrency (`default_max_concurrency`) through a per-delivery
+  `claimed_until` lease taken just before each send, and fair selection
+  across endpoints; `webhook_deliveries.claimed_until` and `exhausted_reason`;
+  `outbound.webhooks.allow_endpoint_private_hosts` (off), without which an
+  endpoint's `allow_private_hosts` is ignored.
 - `DeliveryAttempt::sanitiseErrorMessage()` is public.
 
 ### Changed
 
+- `webhook_endpoints.allow_private_hosts` is no longer mass-assignable.
 - A transport timeout, TLS or DNS failure now reads `Outbound request failed:
   timeout.` / `TLS error.` / `DNS error.` instead of `connection error.`.
 - The package models store and read every date as UTC, whatever

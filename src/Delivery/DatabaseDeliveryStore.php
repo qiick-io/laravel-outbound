@@ -89,32 +89,96 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * Lease up to `$limit` due deliveries, oldest first, within each
-     * endpoint's concurrency. Each comes with its endpoint loaded.
+     * Ids of due, unleased deliveries of active endpoints, oldest first, at
+     * most each endpoint's concurrency per endpoint: one endpoint's backlog
+     * cannot fill the batch and starve every other endpoint (or tenant).
+     * Nothing is leased here; {@see claim()} leases each one just before its
+     * send.
      *
-     * @return list<WebhookDelivery>
+     * @return list<int>
      */
-    public function claimDue(int $limit, int $leaseSeconds, int $defaultMaxConcurrency): array
+    public function dueCandidates(int $limit, int $defaultMaxConcurrency): array
     {
         $now = CarbonImmutable::now('UTC');
 
-        $dueDeliveries = $this->claimable(WebhookDelivery::query(), $now)
-            ->where('next_attempt_at', '<=', $now)
-            ->whereHas('endpoint', function (Builder $endpointQuery): void {
-                $endpointQuery->where('is_active', true)->whereNull('deleted_at');
-            })
-            ->orderBy('next_attempt_at')
-            ->orderBy('id')
+        // The endpoints whose oldest due delivery waits longest, at most `$limit` of them.
+        $endpointsWithDueDeliveries = $this->claimable(WebhookDelivery::query(), $now)
+            ->join('webhook_endpoints', 'webhook_endpoints.id', '=', 'webhook_deliveries.endpoint_id')
+            ->where('webhook_endpoints.is_active', true)
+            ->whereNull('webhook_endpoints.deleted_at')
+            ->where('webhook_deliveries.next_attempt_at', '<=', $now)
+            ->groupBy('webhook_deliveries.endpoint_id', 'webhook_endpoints.max_concurrency')
+            ->select(['webhook_deliveries.endpoint_id', 'webhook_endpoints.max_concurrency'])
+            ->selectRaw('min(next_attempt_at) as oldest_due_at')
+            ->orderBy('oldest_due_at')
+            ->orderBy('webhook_deliveries.endpoint_id')
             ->limit($limit)
+            ->toBase()
             ->get();
 
-        $claimedDeliveries = [];
+        /** @var \Illuminate\Support\Collection<int, WebhookDelivery> $candidateDeliveries */
+        $candidateDeliveries = new \Illuminate\Support\Collection;
 
-        foreach ($dueDeliveries->groupBy('endpoint_id') as $endpointDeliveries) {
-            array_push($claimedDeliveries, ...$this->claimForEndpoint($endpointDeliveries, $now, $leaseSeconds, $defaultMaxConcurrency));
+        /** @var object{endpoint_id: int, max_concurrency: int|null} $endpointWithDueDeliveries */
+        foreach ($endpointsWithDueDeliveries as $endpointWithDueDeliveries) {
+            $candidateDeliveries->push(...$this->claimable(WebhookDelivery::query(), $now)
+                ->where('endpoint_id', $endpointWithDueDeliveries->endpoint_id)
+                ->where('next_attempt_at', '<=', $now)
+                ->orderBy('next_attempt_at')
+                ->orderBy('id')
+                ->limit($endpointWithDueDeliveries->max_concurrency ?? $defaultMaxConcurrency)
+                ->get(['id', 'next_attempt_at']));
         }
 
-        return $claimedDeliveries;
+        // Oldest first across endpoints, the id breaking ties. The stored UTC
+        // "Y-m-d H:i:s" strings sort chronologically as they are.
+        $orderedCandidates = $candidateDeliveries->all();
+        usort($orderedCandidates, static fn (WebhookDelivery $first, WebhookDelivery $second): int => [$first->getRawOriginal('next_attempt_at'), $first->id] <=> [$second->getRawOriginal('next_attempt_at'), $second->id]);
+
+        return array_map(static fn (WebhookDelivery $delivery): int => $delivery->id, array_slice($orderedCandidates, 0, $limit));
+    }
+
+    /**
+     * Lease one delivery for one send, with its endpoint loaded, or null when
+     * it is no longer due, another worker holds it, its endpoint is disabled
+     * or deleted, or the endpoint has no free slot. The endpoint row is locked
+     * while the slots are counted, so two workers cannot both take the last.
+     */
+    public function claim(int $deliveryId, int $leaseSeconds, int $defaultMaxConcurrency): ?WebhookDelivery
+    {
+        /** @var WebhookDelivery|null $claimedDelivery Laravel 12 types transaction() as mixed. */
+        $claimedDelivery = WebhookDelivery::query()->getConnection()->transaction(function () use ($deliveryId, $leaseSeconds, $defaultMaxConcurrency): ?WebhookDelivery {
+            $now = CarbonImmutable::now('UTC');
+            $endpoint = WebhookEndpoint::query()
+                ->whereKey(WebhookDelivery::query()->whereKey($deliveryId)->select('endpoint_id'))
+                ->where('is_active', true)
+                ->lockForUpdate()
+                ->first();
+
+            if ($endpoint === null) {
+                return null;
+            }
+
+            $leasedCount = WebhookDelivery::query()
+                ->where('endpoint_id', $endpoint->id)
+                ->where('status', DeliveryStatus::Pending->value)
+                ->where('claimed_until', '>', $now)
+                ->count();
+
+            if ($leasedCount >= ($endpoint->max_concurrency ?? $defaultMaxConcurrency)) {
+                return null;
+            }
+
+            $leasedRows = $this->claimable(WebhookDelivery::query()->whereKey($deliveryId), $now)
+                ->where('next_attempt_at', '<=', $now)
+                ->update(['claimed_until' => $now->addSeconds($leaseSeconds)]);
+
+            return $leasedRows === 1
+                ? WebhookDelivery::query()->findOrFail($deliveryId)->setRelation('endpoint', $endpoint)
+                : null;
+        });
+
+        return $claimedDelivery;
     }
 
     /**
@@ -144,43 +208,6 @@ final class DatabaseDeliveryStore
             ])->save();
             $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
         });
-    }
-
-    /**
-     * @param  \Illuminate\Support\Collection<int, WebhookDelivery>  $endpointDeliveries  due, oldest first
-     * @return list<WebhookDelivery>
-     */
-    private function claimForEndpoint(\Illuminate\Support\Collection $endpointDeliveries, CarbonImmutable $now, int $leaseSeconds, int $defaultMaxConcurrency): array
-    {
-        $endpointId = $endpointDeliveries->firstOrFail()->endpoint_id;
-
-        /** @var list<WebhookDelivery> $claimedDeliveries Laravel 12 types transaction() as mixed. */
-        $claimedDeliveries = WebhookEndpoint::query()->getConnection()->transaction(function () use ($endpointId, $endpointDeliveries, $now, $leaseSeconds, $defaultMaxConcurrency): array {
-            $endpoint = WebhookEndpoint::query()->whereKey($endpointId)->lockForUpdate()->firstOrFail();
-            $leasedCount = WebhookDelivery::query()
-                ->where('endpoint_id', $endpointId)
-                ->where('status', DeliveryStatus::Pending->value)
-                ->where('claimed_until', '>', $now)
-                ->count();
-            $freeSlots = ($endpoint->max_concurrency ?? $defaultMaxConcurrency) - $leasedCount;
-            $leasedUntil = $now->addSeconds($leaseSeconds);
-            $claimedDeliveries = [];
-
-            // take() counts from the end for a negative number: no free slot is zero.
-            foreach ($endpointDeliveries->take(max(0, $freeSlots)) as $delivery) {
-                // Another worker may have leased it since it was read.
-                $leasedRows = $this->claimable(WebhookDelivery::query()->whereKey($delivery->id), $now)
-                    ->update(['claimed_until' => $leasedUntil]);
-
-                if ($leasedRows === 1) {
-                    $claimedDeliveries[] = $delivery->setRelation('endpoint', $endpoint);
-                }
-            }
-
-            return $claimedDeliveries;
-        });
-
-        return $claimedDeliveries;
     }
 
     /**

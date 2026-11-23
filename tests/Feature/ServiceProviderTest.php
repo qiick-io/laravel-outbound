@@ -48,6 +48,7 @@ it('merges the package defaults into the outbound config', function (): void {
             'respect_retry_after' => true,
             'retry_after_cap_seconds' => 86_400,
             'default_max_concurrency' => 2,
+            'allow_endpoint_private_hosts' => false,
             'allow_raw_legacy_secret' => false,
             'scope_column' => null,
             'users_table' => 'users',

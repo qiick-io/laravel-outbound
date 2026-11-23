@@ -27,6 +27,7 @@ it('reads delay-seconds', function (string $headerValue, int $expectedSeconds): 
     'at the cap' => ['2592000', RetrySchedule::MAX_DELAY_SECONDS],
     'above the cap' => ['2592001', RetrySchedule::MAX_DELAY_SECONDS],
     'beyond PHP_INT_MAX' => ['99999999999999999999999', RetrySchedule::MAX_DELAY_SECONDS],
+    'beyond the float range' => ['1'.str_repeat('0', 400), RetrySchedule::MAX_DELAY_SECONDS],
 ]);
 
 it('reads the three HTTP-date formats as seconds from now', function (string $headerValue): void {
@@ -93,6 +94,8 @@ it('refuses malformed values, so the plain schedule applies', function (string $
     expect(RetryAfter::parse($headerValue, retryAfterNow()))->toBeNull();
 })->with([
     'empty' => [''],
+    'delay with a trailing newline' => ["120\n"],
+    'date with a trailing newline' => ["Mon, 23 Nov 2026 11:02:03 GMT\n"],
     'blank' => ['   '],
     'negative' => ['-5'],
     'fraction' => ['1.5'],

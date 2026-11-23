@@ -255,8 +255,9 @@ Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
 
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
-message again creates nothing. `outbound:webhooks:work` leases due deliveries
-(`--limit`, 50 by default), signs each attempt with the endpoint's signing set
+message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
+(50) due deliveries, leases each one on its own right before its send, signs
+each attempt with the endpoint's signing set
 and a fresh `webhook-timestamp`, and POSTs it through `PinnedHttpClient`
 only: SSRF guard, pinned address, no proxy, never a redirect. Retries are
 driven by `next_attempt_at`, so the first retry is as punctual as the
@@ -270,22 +271,37 @@ schedule above, and a retry 24 h away survives a queue loss.
   followed), timeout and connection error is retried on the schedule: the
   endpoint's `retry_preset` or the configured one, `max_attempts` (10 for
   `standard`: 75 h 35 min) snapshotted at dispatch. A guard or signer refusal
-  is recorded as `refused` and retried the same way. 410 Gone stops at once
-  (`exhausted`, `gone`).
+  is recorded as `refused` and retried the same way, and so is an endpoint row
+  the request cannot be built from (`internal_error`). 410 Gone stops the
+  delivery at once (`exhausted`, `gone`); disabling the endpoint itself
+  arrives with auto-disable.
 - **Retry-After** (429, 502, 503, 504): jitter is applied to the schedule
   first, then the retry never comes before the header's delay, plus up to
   min(jitter, delay / 2). A delay above `retry_after_cap_seconds` (24 h) stops
   automatic retries (`exhausted`, `retry_after_exceeds_cap`) instead of being
-  shortened. All three HTTP-date formats are read (`RetryAfter::parse()`).
-- **Concurrency:** at most the endpoint's `max_concurrency`
+  shortened; values above 30 days read as 30 days, so a cap above that is
+  never reached. Only the first `Retry-After` counts. All three HTTP-date
+  formats are read (`RetryAfter::parse()`).
+- **Concurrency and fairness:** at most the endpoint's `max_concurrency`
   (`default_max_concurrency`, 2) attempts in flight per endpoint, across
-  workers; a crashed worker's lease expires after the chain deadline plus a
-  minute.
+  workers. Each delivery is leased atomically just before its send, for the
+  chain deadline plus a minute, so overlapping runs never send one twice, and
+  a crashed worker's lease simply expires. A run takes at most each
+  endpoint's concurrency from its backlog, so one busy endpoint (or tenant)
+  cannot starve the others.
+- **Private hosts:** an endpoint's `allow_private_hosts` loosens the SSRF
+  guard, so it is not mass-assignable and counts only when the product sets
+  `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
+  `ssrf.allow_private_hosts` decides, for every endpoint.
 - **Records:** each attempt row keeps the status, HTTP status, error code
   (`http_status`, `gone`, `transport`, `ssrf_refused`, `signing`,
-  `request_refused`), sanitised message, the secrets that signed, duration,
-  `Retry-After`, and only the `content-type`, `retry-after`, `x-request-id`
-  and `date` response headers. The response body is never stored. The
+  `request_refused`, `internal_error`), sanitised message, the secrets that
+  signed, duration, `Retry-After`, and only the `content-type`,
+  `retry-after`, `x-request-id` and `date` response headers, as valid UTF-8
+  without control characters, at most 255 characters each; `request_id` keeps
+  only `A-Z a-z 0-9 . _ : -`, at most 64. The response body is never stored.
+  If the database still refuses the receiver's text, the attempt is stored
+  without it: a delivered webhook is never sent again because of it. The
   endpoint's failure streak (`consecutive_failures`, `failing_since`,
   `last_success_at`) moves with every attempt.
 
@@ -420,6 +436,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.respect_retry_after` | `OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER` | `true` |
 | `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
+| `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
 | `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
 | `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |
