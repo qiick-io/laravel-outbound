@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `outbound.webhooks.allow_endpoint_private_hosts` (off), without which an
   endpoint's `allow_private_hosts` is ignored.
 - `DeliveryAttempt::sanitiseErrorMessage()` is public.
+- A failed attempt's `error_code` names the transport error kind (`timeout`,
+  `tls`, `dns`, `connection`); `transport` remains for a client refusal
+  without one.
 - Auto-disable (standards review M10, R8, S5): `EndpointDisablePolicy` (410
   Gone at once; otherwise 5 days without a success and at least 10
   consecutive failures, `outbound.webhooks.auto_disable.*`, overridden by an

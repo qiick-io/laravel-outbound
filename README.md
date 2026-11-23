@@ -292,8 +292,10 @@ schedule above, and a retry 24 h away survives a queue loss.
   `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
   `ssrf.allow_private_hosts` decides, for every endpoint.
 - **Records:** each attempt row keeps the status, HTTP status, error code
-  (`http_status`, `gone`, `transport`, `ssrf_refused`, `signing`,
-  `request_refused`, `internal_error`), sanitised message, the secrets that
+  (`http_status`, `gone`, `timeout`, `tls`, `dns`, `connection`, `transport`
+  for a client refusal without a transport kind such as a response over
+  `max_response_bytes`, `ssrf_refused`, `signing`, `request_refused`,
+  `internal_error`), sanitised message, the secrets that
   signed, duration, `Retry-After`, and only the `content-type`,
   `retry-after`, `x-request-id` and `date` response headers, as valid UTF-8
   without control characters, at most 255 characters each; `request_id` keeps
