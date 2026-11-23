@@ -376,3 +376,31 @@ it('forgets who asked for a redelivery when that user is deleted', function (): 
     expect($delivery->refresh()->next_attempt_triggered_by)->toBeNull()
         ->and($delivery->next_attempt_trigger)->toBe(WebhookAttemptTriggerEnum::Manual);
 });
+
+it('honours a second user\'s request made while the first user\'s redelivery is being sent', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'max_attempts' => 10]);
+    $firstOperatorId = redeliveryUserId();
+    $secondOperatorId = redeliveryUserId();
+    app(WebhookDeliveryCoordinator::class)->redeliver($delivery, $firstOperatorId);
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
+        $this->app->make(OutboundHttpLimits::class),
+        static fn (): float => 1_000.0,
+        function ($request, array $options) use ($delivery, $secondOperatorId) {
+            // Same trigger, another user: only the asker differs.
+            if (count($this->transfer->requests) === 0) {
+                app(WebhookDeliveryCoordinator::class)->redeliver($delivery->refresh(), $secondOperatorId);
+            }
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    app(WebhookDeliveryCoordinator::class)->work(50);
+    app(WebhookDeliveryCoordinator::class)->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->orderBy('attempt')->pluck('triggered_by')->all())->toBe([$firstOperatorId, $secondOperatorId]);
+});
