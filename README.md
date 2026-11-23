@@ -128,6 +128,12 @@ cannot bypass the pin. Environment proxies are disabled so they cannot bypass
 CONNECT_TO. Timeout caps and the total redirect deadline come from
 `outbound.http.*` config and cannot be raised per call.
 
+A transport failure throws `OutboundHttpException` with a fixed message and
+`transportErrorKind()`: `timeout` (curl or the chain deadline), `tls`, `dns`
+or `connection`, read from the curl errno. Neither the message nor the
+exception chain names the host, the pinned address or the URL. Refusals the
+client makes itself (response size, redirect rules) have no kind.
+
 
 ### Testing `PinnedHttpClient`
 

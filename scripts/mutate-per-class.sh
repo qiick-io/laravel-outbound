@@ -54,6 +54,19 @@ for class in "${covered_only_classes[@]}"; do
   fi
 done
 
+# Classes added since whose tests are unit tests: no --covered-only either.
+unit_classes=(
+  'Qiick\Outbound\Http\OutboundHttpException'
+)
+
+for class in "${unit_classes[@]}"; do
+  echo "==> mutate ${class} (min=${min})"
+  # shellcheck disable=SC2086
+  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${unit_paths} "$@"; then
+    status=1
+  fi
+done
+
 for class in "${webhook_classes[@]}"; do
   echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086

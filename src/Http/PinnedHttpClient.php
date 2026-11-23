@@ -15,6 +15,7 @@ use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Qiick\Outbound\Enums\OutboundTransportErrorKindEnum;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
@@ -91,7 +92,7 @@ final class PinnedHttpClient
             $remaining = $deadlineAt - $this->now();
 
             if ($remaining < 1.0) {
-                throw new OutboundHttpException('Outbound request total deadline exceeded.');
+                throw OutboundHttpException::forTransport(OutboundTransportErrorKindEnum::Timeout, 'Outbound request total deadline exceeded.');
             }
 
             $destination = $this->guard->authorize($currentUrl, $options->urlOptions);
@@ -210,12 +211,47 @@ final class PinnedHttpClient
                 }
             }
 
-            throw new OutboundHttpException(
-                'Outbound request failed: connection error.',
-                0, // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+            $transportErrorKind = self::transportErrorKindOf($exception);
+
+            // A fixed message per kind: the transport's own text names the
+            // host, the pinned address and the URL.
+            throw OutboundHttpException::forTransport(
+                $transportErrorKind,
+                match ($transportErrorKind) {
+                    OutboundTransportErrorKindEnum::Timeout => 'Outbound request failed: timeout.',
+                    OutboundTransportErrorKindEnum::Tls => 'Outbound request failed: TLS error.',
+                    OutboundTransportErrorKindEnum::Dns => 'Outbound request failed: DNS error.',
+                    OutboundTransportErrorKindEnum::Connection => 'Outbound request failed: connection error.',
+                },
                 new RuntimeException('Underlying transport error.'),
             );
         }
+    }
+
+    /**
+     * The curl errno decides. Guzzle 7 and 8 both start the message with
+     * "cURL error N:" (8 no longer has a handler context), and Laravel's
+     * wrapper keeps that message. Anything without one (a reset socket, a
+     * stray exception) is a connection error.
+     */
+    private static function transportErrorKindOf(\Throwable $exception): OutboundTransportErrorKindEnum
+    {
+        $curlErrno = null;
+
+        for ($link = $exception; $link !== null && $curlErrno === null; $link = $link->getPrevious()) {
+            if (preg_match('/^cURL error (\d+):/', $link->getMessage(), $errnoMatch) === 1) {
+                $curlErrno = (int) $errnoMatch[1];
+            }
+        }
+
+        return match ($curlErrno) {
+            28 => OutboundTransportErrorKindEnum::Timeout,
+            6 => OutboundTransportErrorKindEnum::Dns,
+            // SSL connect, peer verification, client certificate, cipher, CA
+            // certificate, CA bundle, certificate status.
+            35, 51, 58, 59, 60, 77, 91 => OutboundTransportErrorKindEnum::Tls,
+            default => OutboundTransportErrorKindEnum::Connection,
+        };
     }
 
     /**

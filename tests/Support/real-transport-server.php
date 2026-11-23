@@ -58,6 +58,14 @@ if ($path === '/ok') {
     return true;
 }
 
+if ($path === '/slow') {
+    // Longer than the 1 s client timeout of the transport-error test.
+    sleep(3);
+    echo 'too late';
+
+    return true;
+}
+
 if ($path === '/big') {
     $record('big');
     $size = (int) ($_GET['n'] ?? 2_000_000);
