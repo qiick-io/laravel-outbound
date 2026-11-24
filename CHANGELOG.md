@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp and signatures, record `trigger = manual|bulk` and `triggered_by`
   on the attempt, and fire `WebhookRedeliveryRequestedEvent`;
   `webhook_deliveries.next_attempt_trigger` and `next_attempt_triggered_by`.
+- Body retention (standards review M12, R5): deliveries keep their encrypted
+  body until `payload_expires_at`, `outbound.webhooks.payload_retention_days`
+  (30, at least 1) after dispatch or the end of their longest retry plan if
+  later, and `outbound:webhooks:prune` clears it in blocks, keeping
+  `payload_hash` and `payload_bytes`, then deletes settled deliveries older
+  than `outbound.webhooks.delivery_retention_days` (90) with their attempts;
+  a pending delivery whose body expires is exhausted with the new reason
+  `payload_expired`.
 - A failed attempt's `error_code` names the transport error kind (`timeout`,
   `tls`, `dns`, `connection`); `transport` remains for a client refusal
   without one.

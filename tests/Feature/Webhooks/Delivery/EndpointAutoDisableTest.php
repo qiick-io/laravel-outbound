@@ -24,7 +24,7 @@ use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\WebhookMessage;
 
 /*
- * Standards review R8 and M10 (Luca's Q2 of 2026-11-22): 410 Gone disables
+ * Standards review R8 and M10 (the maintainer's decision Q2 of 2026-11-22): 410 Gone disables
  * an endpoint at once; otherwise it is disabled after 5 days without a
  * success and at least 10 consecutive failed attempts. The owner hears of it
  * through WebhookEndpointDisabledEvent.

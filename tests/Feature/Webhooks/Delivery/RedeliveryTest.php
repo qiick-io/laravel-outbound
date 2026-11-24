@@ -167,7 +167,7 @@ it('refuses to redeliver to a disabled endpoint or a body that has been pruned',
     Event::assertNotDispatched(WebhookRedeliveryRequestedEvent::class);
 })->with([
     'disabled endpoint' => [['is_active' => false], [], 'Webhook endpoint is disabled; enable it before redelivering.'],
-    'pruned body' => [[], ['payload' => null], 'Webhook delivery body has been pruned; it cannot be redelivered.'],
+    'pruned body' => [[], ['payload' => null], 'Webhook delivery body has been pruned or has expired; it cannot be redelivered.'],
 ]);
 
 it('refuses to redeliver to a deleted endpoint', function (): void {

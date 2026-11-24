@@ -12,7 +12,7 @@ use Qiick\Outbound\Models\WebhookEndpoint;
 /**
  * Decides, after a failed attempt, whether an endpoint is disabled.
  *
- * Standards review R8 (Luca's Q2 of 2026-11-22), on by default in every
+ * Standards review R8 (the maintainer's decision Q2 of 2026-11-22), on by default in every
  * product: 410 Gone disables at once (Standard Webhooks "Delivery success
  * and failure": the sender should disable the endpoint); otherwise an
  * endpoint is disabled once it has had no successful attempt for

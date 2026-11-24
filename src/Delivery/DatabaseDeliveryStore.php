@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Collection;
 use InvalidArgumentException;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookSubscription;
@@ -33,10 +34,26 @@ final class DatabaseDeliveryStore
 {
     /**
      * @param  string|null  $scopeColumn  `outbound.webhooks.scope_column`
+     * @param  int  $payloadRetentionDays  `outbound.webhooks.payload_retention_days`
+     * @param  int  $deliveryRetentionDays  `outbound.webhooks.delivery_retention_days`
+     *
+     * @throws InvalidArgumentException when the body retention is under a day
+     *                                  or the rows would outlast it less
      */
     public function __construct(
-        private readonly ?string $scopeColumn = null,
-    ) {}
+        private readonly ?string $scopeColumn,
+        private readonly int $payloadRetentionDays,
+        private readonly int $deliveryRetentionDays,
+    ) {
+        if ($payloadRetentionDays < 1) {
+            throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at least 1.');
+        }
+
+        // A row deleted earlier would take its body with it before its time.
+        if ($deliveryRetentionDays < $payloadRetentionDays) {
+            throw new InvalidArgumentException('outbound.webhooks.delivery_retention_days must be at least outbound.webhooks.payload_retention_days.');
+        }
+    }
 
     /**
      * Active endpoints subscribed to the type, or to every type, in the scope.
@@ -65,13 +82,16 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * A pending delivery, due now.
+     * A pending delivery, due now. Its body is kept for the retention period,
+     * or until its longest possible retry plan ends, plus an hour for the
+     * worker's own schedule, if that is later: a body must never expire
+     * mid-schedule.
      *
      * @return WebhookDelivery|null null when the endpoint already has this event
      *
      * @throws WebhookDeliveryStorageException when the row cannot be written
      */
-    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts): ?WebhookDelivery
+    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts, int $retryPlanSeconds): ?WebhookDelivery
     {
         $delivery = $endpoint->deliveries()->make([
             'event_id' => $message->id,
@@ -79,7 +99,10 @@ final class DatabaseDeliveryStore
             'occurred_at' => $message->timestamp,
             'payload_version' => $endpoint->payload_version,
             'max_attempts' => $maxAttempts,
-        ])->usePayload($rawBody)->forceFill(['next_attempt_at' => CarbonImmutable::now()]);
+        ])->usePayload($rawBody)->forceFill([
+            'next_attempt_at' => CarbonImmutable::now(),
+            'payload_expires_at' => CarbonImmutable::now()->addSeconds(max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
+        ]);
 
         try {
             $delivery->save();
@@ -320,6 +343,87 @@ final class DatabaseDeliveryStore
         });
 
         return $scheduledCount;
+    }
+
+    /**
+     * Clear every body whose retention has ended, keeping `payload_hash` and
+     * `payload_bytes` (standards review R5). A delivery a worker is sending
+     * keeps its body until its lease ends. A pending delivery can no longer
+     * be signed without its body, so it is exhausted (`payload_expired`).
+     * Works in blocks of 500, each its own short transaction, so a large
+     * backlog never holds the table the worker writes to.
+     *
+     * @return int the bodies cleared
+     */
+    public function pruneExpiredPayloads(): int
+    {
+        $now = CarbonImmutable::now('UTC');
+        $prunedCount = 0;
+
+        do {
+            $expiredBlock = WebhookDelivery::query()
+                ->whereNotNull('payload')
+                ->where('payload_expires_at', '<=', $now)
+                ->where(function (Builder $leaseQuery) use ($now): void {
+                    $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
+                })
+                ->orderBy('id')
+                ->limit(500)
+                ->get(['id', 'status']);
+            $pendingIds = $expiredBlock->filter(static fn (WebhookDelivery $delivery): bool => $delivery->status === DeliveryStatus::Pending)->modelKeys();
+            $settledIds = $expiredBlock->reject(static fn (WebhookDelivery $delivery): bool => $delivery->status === DeliveryStatus::Pending)->modelKeys();
+
+            WebhookDelivery::query()->getConnection()->transaction(function () use ($pendingIds, $settledIds): void {
+                if ($pendingIds !== []) {
+                    WebhookDelivery::query()->whereKey($pendingIds)->update([
+                        'payload' => null,
+                        'status' => DeliveryStatus::Exhausted->value,
+                        'exhausted_reason' => WebhookExhaustedReasonEnum::PayloadExpired->value,
+                        'next_attempt_at' => null,
+                        'next_attempt_trigger' => null,
+                        'next_attempt_triggered_by' => null,
+                    ]);
+                }
+
+                if ($settledIds !== []) {
+                    WebhookDelivery::query()->whereKey($settledIds)->update(['payload' => null]);
+                }
+            });
+            $prunedCount += $expiredBlock->count();
+        } while ($expiredBlock->count() === 500);
+
+        return $prunedCount;
+    }
+
+    /**
+     * Delete settled deliveries created `delivery_retention_days` ago or
+     * more, with their attempts (cascade). Pending ones are kept: they still
+     * have attempts to make. So are rows whose body has not expired: a long
+     * retry plan can keep a body past `delivery_retention_days`, and until
+     * then it can still be redelivered. Works in blocks of 500.
+     *
+     * @return int the deliveries deleted
+     */
+    public function deleteExpiredDeliveries(): int
+    {
+        $now = CarbonImmutable::now('UTC');
+        $cutoff = $now->subDays($this->deliveryRetentionDays);
+        $deletedCount = 0;
+
+        do {
+            $expiredIds = WebhookDelivery::query()
+                ->where('status', '!=', DeliveryStatus::Pending->value)
+                ->where('created_at', '<=', $cutoff)
+                ->where('payload_expires_at', '<=', $now)
+                ->orderBy('id')
+                ->limit(500)
+                ->pluck('id')
+                ->all();
+            WebhookDelivery::query()->whereKey($expiredIds)->delete();
+            $deletedCount += count($expiredIds);
+        } while (count($expiredIds) === 500);
+
+        return $deletedCount;
     }
 
     /**
