@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
@@ -16,6 +17,7 @@ use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
 use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookSecret;
 use Qiick\Outbound\Webhooks\WebhookSecretResolver;
 
 it('merges the package defaults into the outbound config', function (): void {
@@ -172,3 +174,35 @@ it('refuses to boot with an egress proxy that is not an http(s) proxy URL', func
     'a boolean' => [true],
     'an array from a published config' => [['http' => 'http://proxy.internal:3128']],
 ]);
+
+it('refuses to boot with a config value of the wrong type, naming the key', function (string $key, mixed $value, string $message): void {
+    $this->configBeforeBoot = [$key => $value];
+
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $message);
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+})->with([
+    'an integer as a string' => ['outbound.webhooks.payload_retention_days', '30', 'outbound.webhooks.payload_retention_days must be an integer.'],
+    'a boolean as a string' => ['outbound.migrations.load', 'yes', 'outbound.migrations.load must be true or false.'],
+]);
+
+it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {
+    config()->set('outbound.webhooks.retry_preset', $preset);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(fn () => $this->app->make(WebhookDeliveryCoordinator::class))->toThrow(InvalidArgumentException::class, $message);
+})->with([
+    'not a string' => [5, 'outbound.webhooks.retry_preset must be a string.'],
+    'an unknown name' => ['fast', 'outbound.webhooks.retry_preset must be standard or short.'],
+]);
+
+it('uses the package default for a key a published config lacks', function (): void {
+    config()->set('outbound.webhooks.max_secrets', null);
+    $this->app->forgetInstance(StandardWebhookSigner::class);
+    $secrets = array_map(fn (): WebhookSecret => WebhookSecret::generate(), range(1, 5));
+
+    expect(fn () => $this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', $secrets))
+        ->toThrow(WebhookException::class, 'Too many webhook secrets.')
+        ->and($this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', array_slice($secrets, 0, 4))->headers['webhook-signature'])->toContain('v1,');
+});
