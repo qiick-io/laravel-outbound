@@ -22,14 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success for 5 days with at least 10 consecutive failures, stops receiving
   deliveries, and its creator is emailed. Re-enable it with
   `WebhookDeliveryCoordinator::enableEndpoint()`.
+- **Guzzle 7.12 is the minimum on the 7 line** (`^7.12 || ^8.0`): older 7.x
+  leave `CURLOPT_NOPROXY` unset, so `NO_PROXY` in the environment could send
+  requests around the egress proxy.
 
 ### Added
 
 - Egress proxy (standards review R3, S1): `outbound.http.egress_proxy` and
   `EgressProxy` route `PinnedHttpClient` through an http(s) forward proxy in
   forced tunnel mode, so the proxy only receives `CONNECT` to the address
-  the guard approved; credentials never appear as text. Real-transport tests
-  run through a CONNECT proxy on Guzzle 7 and 8.
+  the guard approved; credentials never appear as text, in a dump or in an
+  exception trace, and `NO_PROXY` cannot bypass it. A value other than an
+  http(s) proxy URL, null or an empty string stops the boot. Real-transport
+  tests run through a CONNECT proxy on Guzzle 7 and 8.
 - Package migrations and Eloquent models for the five webhook delivery tables
   (standards review M1, M2, M15), loaded by the provider unless
   `outbound.migrations.load` is off, and publishable with
