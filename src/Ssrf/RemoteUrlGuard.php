@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Ssrf;
 
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Contracts\MetadataPolicy;
 use Symfony\Component\HttpFoundation\IpUtils;
 
 /**
@@ -22,6 +23,7 @@ final class RemoteUrlGuard
         private HostResolver $hostResolver,
         private bool $allowPrivateHosts = false,
         private bool $httpsOnly = false,
+        private ?MetadataPolicy $metadataPolicy = null,
     ) {}
 
     /**
@@ -260,7 +262,21 @@ final class RemoteUrlGuard
      */
     private function isMetadataHost(string $host): bool
     {
-        return in_array($this->comparableForm($host), self::metadataHosts(), true);
+        return in_array($this->comparableForm($host), [...self::metadataHosts(), ...$this->additionalMetadataHosts()], true);
+    }
+
+    /**
+     * The policy's hosts in the form the guard compares: a canonical IP
+     * address, or a lowercased name without its trailing dot.
+     *
+     * @return list<string>
+     */
+    private function additionalMetadataHosts(): array
+    {
+        return array_map(
+            static fn (string $host): string => filter_var($host, FILTER_VALIDATE_IP) !== false ? self::canonicalIp($host) : rtrim(strtolower($host), '.'),
+            $this->metadataPolicy?->additionalMetadataHosts() ?? [],
+        );
     }
 
     /**

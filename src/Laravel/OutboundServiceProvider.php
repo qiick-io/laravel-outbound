@@ -15,6 +15,7 @@ use InvalidArgumentException;
 use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Contracts\MetadataPolicy;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
@@ -58,6 +59,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 hostResolver: $resolver,
                 allowPrivateHosts: self::configBool($config, 'outbound.ssrf.allow_private_hosts'),
                 httpsOnly: self::configBool($config, 'outbound.ssrf.https_only'),
+                metadataPolicy: $app->bound(MetadataPolicy::class) ? $app->make(MetadataPolicy::class) : null,
             );
         });
 
