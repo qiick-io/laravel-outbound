@@ -24,10 +24,6 @@ final class WebhookSecret
 {
     private const string PREFIX = 'whsec_';
 
-    private const int MIN_BYTES = 24;
-
-    private const int MAX_BYTES = 64;
-
     /**
      * @param  non-empty-string  $key  Raw HMAC key bytes (24–64).
      */
@@ -41,9 +37,7 @@ final class WebhookSecret
      */
     public static function generate(int $byteLength = 32): self
     {
-        if ($byteLength < self::MIN_BYTES || $byteLength > self::MAX_BYTES) {
-            throw new WebhookException('Webhook secret length must be between 24 and 64 bytes.');
-        }
+        self::assertKeyLength($byteLength);
 
         return new self(random_bytes($byteLength));
     }
@@ -85,11 +79,7 @@ final class WebhookSecret
             throw new WebhookException('Webhook secret must use the whsec_ prefix.');
         }
 
-        // Empty falls through to fromBase64Payload with the same message.
-        if ($serialized === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
-            throw new WebhookException('Webhook secret must not be empty.');
-        }
-
+        // An empty value is refused by fromBase64Payload() with its own message.
         return self::fromBase64Payload($serialized);
     }
 
@@ -177,10 +167,24 @@ final class WebhookSecret
         }
 
         $length = strlen($decoded);
-        if ($length < self::MIN_BYTES || $length > self::MAX_BYTES) {
-            throw new WebhookException('Webhook secret length must be between 24 and 64 bytes.');
-        }
+        self::assertKeyLength($length);
 
         return new self($decoded);
+    }
+
+    /**
+     * Standard Webhooks keys are 24 to 64 bytes. A method rather than two
+     * constants: a constant's line has no coverage, so mutation testing
+     * could not check the bounds.
+     *
+     * @phpstan-assert int<24, 64> $byteLength
+     *
+     * @throws WebhookException
+     */
+    private static function assertKeyLength(int $byteLength): void
+    {
+        if ($byteLength < 24 || $byteLength > 64) {
+            throw new WebhookException('Webhook secret length must be between 24 and 64 bytes.');
+        }
     }
 }

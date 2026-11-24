@@ -30,19 +30,6 @@ use Throwable;
  */
 final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
 {
-    /**
-     * Store classes whose `add()` is atomic enough for webhook-id claims.
-     *
-     * @var list<class-string<Store>>
-     */
-    private const ATOMIC_STORE_CLASSES = [
-        DatabaseStore::class,
-        RedisStore::class,
-        MemcachedStore::class,
-        DynamoDbStore::class,
-        FileStore::class,
-    ];
-
     public function __construct(
         private readonly CacheRepository $cache,
         private readonly string $keyPrefix = 'outbound:whid:',
@@ -61,7 +48,7 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
         } catch (WebhookException $e) {
             throw $e;
         } catch (Throwable $e) {
-            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, $e); // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $e);
         }
     }
 
@@ -102,14 +89,32 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
             return;
         }
 
-        foreach (self::ATOMIC_STORE_CLASSES as $allowedClass) {
+        foreach (self::atomicStoreClasses() as $allowedClass) {
             if ($store instanceof $allowedClass) {
                 return;
             }
         }
 
         throw new UnsupportedWebhookIdCacheStoreException(
-            'CacheSeenWebhookIdStore refuses cache store '.$store::class.'; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.', // @pest-mutate-ignore: ConcatRemoveLeft,ConcatRemoveRight,ConcatSwitchSides
+            'CacheSeenWebhookIdStore refuses cache store '.$store::class.'; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.',
         );
+    }
+
+    /**
+     * Store classes whose `add()` is atomic enough for webhook-id claims. A
+     * method rather than a constant: a constant's lines have no coverage, so
+     * mutation testing could not check that each entry is needed.
+     *
+     * @return list<class-string<Store>>
+     */
+    private static function atomicStoreClasses(): array
+    {
+        return [
+            DatabaseStore::class,
+            RedisStore::class,
+            MemcachedStore::class,
+            DynamoDbStore::class,
+            FileStore::class,
+        ];
     }
 }

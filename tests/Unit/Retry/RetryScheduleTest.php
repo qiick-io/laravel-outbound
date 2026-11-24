@@ -138,3 +138,8 @@ it('refuses SystemRandomizer when min exceeds max', function (): void {
     expect(fn () => (new SystemRandomizer)->intBetween(5, 1))
         ->toThrow(InvalidArgumentException::class);
 });
+
+it('pins the public caps', function (): void {
+    expect(RetrySchedule::MAX_DELAY_SECONDS)->toBe(2_592_000)
+        ->and(RetrySchedule::MAX_JITTER_SECONDS)->toBe(3_600);
+});

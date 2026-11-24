@@ -573,3 +573,58 @@ it('refuses webhook ids with control characters', function (): void {
     expect(fn () => swVerifier()->verify('{}', "msg\nid", '1', 'v1,'.base64_encode('x'), [$secret], $now))
         ->toThrow(WebhookException::class, 'Webhook id must not contain control characters.');
 });
+
+/*
+ * The defaults themselves: the helper above always passes every limit.
+ */
+
+it('accepts by default a timestamp 300 s off, 1 MiB, 8 signatures and 4 secrets, and refuses one more of each', function (): void {
+    $verifier = new StandardWebhookVerifier;
+    $secrets = [WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate()];
+    $now = 1_700_000_000;
+    $signedAt = fn (int $timestamp, string $body) => (new StandardWebhookSigner(2_000_000))->sign('msg_1', $timestamp, $body, $secrets);
+    $verify = fn (string $body, int $timestamp, string $header, array $verifySecrets) => $verifier->verify($body, 'msg_1', (string) $timestamp, $header, $verifySecrets, new DateTimeImmutable('@'.$now));
+    $padding = str_repeat(' v1,'.base64_encode(str_repeat('x', 32)), 4);
+
+    $oldest = $signedAt($now - 300, '{}');
+    $largest = $signedAt($now, str_repeat('a', 1_048_576));
+
+    expect($verify('{}', $now - 300, $oldest->headers['webhook-signature'].$padding, $secrets))->toBeNull()
+        ->and($verify($largest->rawBody, $now, $largest->headers['webhook-signature'], $secrets))->toBeNull()
+        ->and(fn () => $verify('{}', $now - 301, $signedAt($now - 301, '{}')->headers['webhook-signature'], $secrets))->toThrow(WebhookException::class, 'Webhook timestamp is outside the replay tolerance window.')
+        ->and(fn () => $verify(str_repeat('a', 1_048_577), $now, 'v1,x', $secrets))->toThrow(WebhookException::class, 'Webhook payload exceeds the configured size limit.')
+        ->and(fn () => $verify('{}', $now, $oldest->headers['webhook-signature'].$padding.' v1,eA==', $secrets))->toThrow(WebhookException::class, 'Too many webhook signatures.')
+        ->and(fn () => $verify('{}', $now, 'v1,x', [...$secrets, WebhookSecret::generate()]))->toThrow(WebhookException::class, 'Too many webhook secrets.');
+});
+
+it('skips a signature of an unknown scheme even when it holds commas', function (): void {
+    $secret = WebhookSecret::generate();
+    $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
+
+    expect(swVerifier()->verify('{}', 'msg_1', '1700000000', 'v9,a,b '.$signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000')))->toBeNull();
+});
+
+it('wraps a store that fails with anything but a WebhookException', function (): void {
+    $failingStore = new class implements SeenWebhookIdStore
+    {
+        public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool
+        {
+            throw new RuntimeException('cache down');
+        }
+
+        public function release(WebhookIdClaim $claim): void {}
+    };
+    $secret = WebhookSecret::generate();
+    $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
+
+    try {
+        swVerifier(seenIds: $failingStore)->verify('{}', 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'));
+        $exception = null;
+    } catch (WebhookIdStoreFailedException $caughtException) {
+        $exception = $caughtException;
+    }
+
+    expect($exception?->getMessage())->toBe('Webhook id dedupe store failed.')
+        ->and($exception?->getCode())->toBe(0)
+        ->and($exception?->getPrevious()?->getMessage())->toBe('cache down');
+});

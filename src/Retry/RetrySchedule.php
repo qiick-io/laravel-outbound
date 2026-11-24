@@ -19,14 +19,17 @@ namespace Qiick\Outbound\Retry;
 final class RetrySchedule
 {
     /**
-     * Hard cap so delay + jitter never overflows PHP integers.
+     * Hard cap so delay + jitter never overflows PHP integers (30 days).
+     *
+     * A constant's line has no coverage, so Pest cannot run the mutants of
+     * this value or the next: the test "pins the public caps" pins both.
      */
-    public const int MAX_DELAY_SECONDS = 2_592_000; // 30 days
+    public const int MAX_DELAY_SECONDS = 2_592_000; // @pest-mutate-ignore: DecrementInteger,IncrementInteger
 
     /**
-     * Cap on the configured jitter argument (before ±floor(delay/2)).
+     * Cap on the configured jitter argument, before ±floor(delay/2) (1 hour).
      */
-    public const int MAX_JITTER_SECONDS = 3_600; // 1 hour
+    public const int MAX_JITTER_SECONDS = 3_600; // @pest-mutate-ignore: DecrementInteger,IncrementInteger
 
     /**
      * Standard Webhooks example delays (seconds).
@@ -74,20 +77,9 @@ final class RetrySchedule
             return $delaySeconds;
         }
 
-        $offset = $random->intBetween(-$amplitude, $amplitude);
-        // Boundary == amplitude is a no-op clamp (same value either way).
-        if ($offset < -$amplitude) { // @pest-mutate-ignore: SmallerToSmallerOrEqual
-            $offset = -$amplitude;
-        } elseif ($offset > $amplitude) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
-            $offset = $amplitude;
-        }
+        // A randomizer that strays outside ±amplitude is clamped back.
+        $offset = max(-$amplitude, min($amplitude, $random->intBetween(-$amplitude, $amplitude)));
 
-        $withJitter = $delaySeconds + $offset;
-        // Equality with the cap returns the same value either branch.
-        if ($withJitter > self::MAX_DELAY_SECONDS) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
-            return self::MAX_DELAY_SECONDS;
-        }
-
-        return $withJitter;
+        return min($delaySeconds + $offset, self::MAX_DELAY_SECONDS);
     }
 }

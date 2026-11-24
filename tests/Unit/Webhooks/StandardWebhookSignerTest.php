@@ -109,3 +109,12 @@ it('refuses a non-WebhookSecret entry in the secrets list', function (): void {
     expect(fn () => (new StandardWebhookSigner)->sign('msg_1', 1, '{}', ['not-a-secret']))
         ->toThrow(WebhookException::class);
 });
+
+it('signs up to 1 MiB and 4 secrets by default, and refuses one more', function (): void {
+    $signer = new StandardWebhookSigner;
+    $secrets = [WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate()];
+
+    expect($signer->sign('msg_1', 1_700_000_000, str_repeat('a', 1_048_576), $secrets)->headers['webhook-signature'])->toContain('v1,')
+        ->and(fn () => $signer->sign('msg_1', 1_700_000_000, str_repeat('a', 1_048_577), [$secrets[0]]))->toThrow(WebhookException::class, 'Webhook payload exceeds the configured size limit.')
+        ->and(fn () => $signer->sign('msg_1', 1_700_000_000, '{}', [...$secrets, WebhookSecret::generate()]))->toThrow(WebhookException::class, 'Too many webhook secrets.');
+});

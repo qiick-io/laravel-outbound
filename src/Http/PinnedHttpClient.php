@@ -91,7 +91,7 @@ final class PinnedHttpClient
         $snapshot = $builder->snapshot();
 
         $currentUrl = $url;
-        $currentMethod = strtoupper($method); // @pest-mutate-ignore: UnwrapStrtoupper
+        $currentMethod = strtoupper($method);
         $includeBody = $snapshot['body'] !== null;
         $hops = 0;
         $deadlineAt = $this->now() + $this->limits->totalDeadlineSeconds;
@@ -211,7 +211,7 @@ final class PinnedHttpClient
 
         $sendOptions = [];
 
-        if ($includeBody && $snapshot['body'] !== null) { // @pest-mutate-ignore: BooleanAndToBooleanOr
+        if ($includeBody && $snapshot['body'] !== null) {
             [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
         }
 
@@ -286,7 +286,7 @@ final class PinnedHttpClient
             'raw' => [
                 $pending->withBody(
                     is_string($payload) ? $payload : throw new InvalidArgumentException('Raw body must be a string.'),
-                    $body['contentType'] ?? 'application/octet-stream', // @pest-mutate-ignore: CoalesceRemoveLeft
+                    $body['contentType'] ?? 'application/octet-stream',
                 ),
                 [],
             ],
@@ -312,7 +312,7 @@ final class PinnedHttpClient
     private function urlWithQuery(string $url, array $query): string
     {
         if ($query === []) {
-            return $url; // @pest-mutate-ignore: RemoveEarlyReturn
+            return $url;
         }
 
         $uri = new Uri($url);
@@ -320,8 +320,8 @@ final class PinnedHttpClient
         foreach ($query as $key => $value) {
             $uri = Uri::withQueryValue(
                 $uri,
-                (string) $key, // @pest-mutate-ignore: RemoveStringCast
-                $value === null ? null : (string) $value, // @pest-mutate-ignore: RemoveStringCast
+                (string) $key,
+                $value === null ? null : (string) $value,
             );
         }
 
@@ -337,14 +337,14 @@ final class PinnedHttpClient
         // RedirectMiddleware (wrapped outside our handler by HandlerStack::create)
         // does not follow Locations past the authorised URI check. Handler
         // re-asserts the same flags; item removals here are equivalent under tests.
-        return [ // @pest-mutate-ignore: RemoveArrayItem
+        return [
             'allow_redirects' => false,
-            'proxy' => '', // @pest-mutate-ignore: EmptyStringToNotEmpty
-            'stream' => false, // @pest-mutate-ignore: FalseToTrue
-            'verify' => true, // @pest-mutate-ignore: TrueToFalse
-            'decode_content' => false, // @pest-mutate-ignore: FalseToTrue
+            'proxy' => '',
+            'stream' => false,
+            'verify' => true,
+            'decode_content' => false,
             'curl' => $destination->guzzleCurlOptions()['curl'],
-            'headers' => [ // @pest-mutate-ignore: RemoveArrayItem
+            'headers' => [
                 'Accept-Encoding' => 'identity',
             ],
         ];
@@ -442,7 +442,7 @@ final class PinnedHttpClient
             $requestOptions['timeout'] = $timeoutSeconds;
             $requestOptions['connect_timeout'] = $connectTimeoutSeconds;
 
-            $curl = is_array($requestOptions['curl'] ?? null) ? $requestOptions['curl'] : []; // @pest-mutate-ignore: TernaryNegated,CoalesceRemoveLeft
+            $curl = is_array($requestOptions['curl'] ?? null) ? $requestOptions['curl'] : [];
             unset($curl[CURLOPT_PROXY], $curl[CURLOPT_NOPROXY], $curl[CURLOPT_HTTPPROXYTUNNEL]);
             $curl[CURLOPT_CONNECT_TO] = [$destination->curlConnectToEntry];
 
@@ -477,7 +477,7 @@ final class PinnedHttpClient
      */
     private function nextRedirectUrl(string $currentUrl, Response $response): string
     {
-        $location = trim($response->header('Location')); // @pest-mutate-ignore: UnwrapTrim
+        $location = trim($response->header('Location'));
 
         if ($location === '') {
             throw new OutboundHttpException('Redirect response is missing a Location header.');
@@ -492,17 +492,17 @@ final class PinnedHttpClient
         $parts = parse_url($resolved);
 
         // UriResolver emits absolute URLs; parse_url does not return false for them.
-        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue,BooleanOrToBooleanAnd
+        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) {
             throw new OutboundHttpException('Redirect Location is not an absolute http(s) URL.');
         }
 
-        $scheme = strtolower((string) $parts['scheme']); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower
+        $scheme = strtolower((string) $parts['scheme']);
 
         if (! in_array($scheme, ['http', 'https'], true)) {
             throw new OutboundHttpException('Redirect Location scheme is not allowed.');
         }
 
-        if (isset($parts['user']) || isset($parts['pass'])) { // @pest-mutate-ignore: BooleanOrToBooleanAnd
+        if (isset($parts['user']) || isset($parts['pass'])) {
             throw new OutboundHttpException('Redirect Location must not contain credentials.');
         }
 
@@ -530,11 +530,11 @@ final class PinnedHttpClient
     private function originKey(string $url): string
     {
         $parts = parse_url($url) ?: [];
-        $scheme = strtolower((string) ($parts['scheme'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
-        $host = strtolower((string) ($parts['host'] ?? '')); // @pest-mutate-ignore: RemoveStringCast,UnwrapStrtolower,EmptyStringToNotEmpty,CoalesceRemoveLeft
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
         $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
 
-        return sprintf('%s://%s:%d', $scheme, $host, $port); // @pest-mutate-ignore: ConcatRemoveLeft,ConcatRemoveRight,ConcatSwitchSides
+        return sprintf('%s://%s:%d', $scheme, $host, $port);
     }
 
     /**
@@ -584,7 +584,7 @@ final class PinnedHttpClient
     private function methodAfterRedirect(string $method, int $status): string
     {
         // Method is already uppercased at the start of send().
-        $method = strtoupper($method); // @pest-mutate-ignore: UnwrapStrtoupper
+        $method = strtoupper($method);
 
         if ($status === 303) {
             return $method === 'HEAD' ? 'HEAD' : 'GET';
@@ -638,7 +638,7 @@ final class PinnedHttpClient
     private function now(): float
     {
         if (is_callable($this->clock)) {
-            return (float) ($this->clock)(); // @pest-mutate-ignore: RemoveDoubleCast
+            return (float) ($this->clock)();
         }
 
         return microtime(true);
