@@ -19,6 +19,7 @@ use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
+use Qiick\Outbound\Http\EgressProxy;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener;
@@ -72,10 +73,15 @@ final class OutboundServiceProvider extends ServiceProvider
         // Private Factory — never the shared Http facade factory, so
         // Http::globalOptions(['handler' => ...]) cannot replace our curl wrap.
         $this->app->singleton(PinnedHttpClient::class, function (Application $app): PinnedHttpClient {
+            $egressProxy = $app->make(ConfigRepository::class)->get('outbound.http.egress_proxy');
+
             return new PinnedHttpClient(
                 new HttpFactory,
                 $app->make(RemoteUrlGuard::class),
                 $app->make(OutboundHttpLimits::class),
+                // Only null or '' (an unset env variable) mean no proxy; any
+                // other value, a boolean or an array included, is refused.
+                egressProxy: $egressProxy === null || $egressProxy === '' ? null : EgressProxy::fromUrl(is_string($egressProxy) ? $egressProxy : ''),
             );
         });
 
@@ -195,6 +201,8 @@ final class OutboundServiceProvider extends ServiceProvider
         // shorter than the retry schedule at boot too.
         $this->app->make(EndpointDisablePolicy::class);
         $this->app->make(DatabaseDeliveryStore::class);
+        // Refuses an egress proxy that is not an http(s) proxy URL at boot.
+        $this->app->make(PinnedHttpClient::class);
         $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
         $migrationsPath = __DIR__.'/../../database/migrations';

@@ -53,6 +53,8 @@ final class PinnedHttpClient
     /**
      * @param  (callable(): float)|null  $clock  test seam for deadline arithmetic
      * @param  callable|null  $transferHandler  test seam replacing CurlHandler
+     * @param  EgressProxy|null  $egressProxy  `outbound.http.egress_proxy`; null
+     *                                         sends directly with every proxy off
      */
     public function __construct(
         private HttpFactory $http,
@@ -60,6 +62,7 @@ final class PinnedHttpClient
         private OutboundHttpLimits $limits = new OutboundHttpLimits,
         private mixed $clock = null,
         private mixed $transferHandler = null,
+        private ?EgressProxy $egressProxy = null,
     ) {}
 
     /**
@@ -200,14 +203,19 @@ final class PinnedHttpClient
             [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
         }
 
+        // The client's own refusals thrown inside the handler stack (a body
+        // over max_response_bytes, which a receiver can provoke) are created
+        // again here, as a local value, never passed on: a trace from inside
+        // carries the frames' arguments, which hold the egress proxy URL with
+        // its credentials. None of them carries a transport error kind.
         try {
             return $pending->send($method, $authorisedUrl, $sendOptions);
         } catch (OutboundHttpException $exception) {
-            throw $exception;
+            throw new OutboundHttpException($exception->getMessage());
         } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
             for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
                 if ($previous instanceof OutboundHttpException) {
-                    throw $previous;
+                    throw new OutboundHttpException($previous->getMessage());
                 }
             }
 
@@ -413,7 +421,9 @@ final class PinnedHttpClient
             unset($requestOptions['handler']);
 
             $requestOptions['allow_redirects'] = false;
-            $requestOptions['proxy'] = '';
+            // The deployment's egress proxy or none; never the caller's or the
+            // environment's.
+            $requestOptions['proxy'] = $this->egressProxy?->url() ?? '';
             $requestOptions['stream'] = false;
             $requestOptions['verify'] = true;
             $requestOptions['decode_content'] = false;
@@ -421,8 +431,14 @@ final class PinnedHttpClient
             $requestOptions['connect_timeout'] = $connectTimeoutSeconds;
 
             $curl = is_array($requestOptions['curl'] ?? null) ? $requestOptions['curl'] : []; // @pest-mutate-ignore: TernaryNegated,CoalesceRemoveLeft
-            unset($curl[CURLOPT_PROXY], $curl[CURLOPT_NOPROXY]);
+            unset($curl[CURLOPT_PROXY], $curl[CURLOPT_NOPROXY], $curl[CURLOPT_HTTPPROXYTUNNEL]);
             $curl[CURLOPT_CONNECT_TO] = [$destination->curlConnectToEntry];
+
+            if ($this->egressProxy !== null) {
+                // Tunnel even plain http: the proxy then receives `CONNECT` to
+                // the address the guard pinned, never a URL or a name to resolve.
+                $curl[CURLOPT_HTTPPROXYTUNNEL] = true;
+            }
             $requestOptions['curl'] = $curl;
 
             $request = $request->withHeader('Accept-Encoding', 'identity');

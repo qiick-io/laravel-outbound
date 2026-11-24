@@ -35,6 +35,7 @@ it('merges the package defaults into the outbound config', function (): void {
             'total_deadline_seconds' => 30,
             'max_response_bytes' => 1_048_576,
             'max_redirects' => 0,
+            'egress_proxy' => null,
         ],
         'webhooks' => [
             'replay_tolerance_seconds' => 300,
@@ -144,3 +145,30 @@ it('refuses to boot with a max_secrets above four', function (): void {
     $this->configBeforeBoot = [];
     $this->refreshApplication();
 });
+
+it('builds the pinned client with the configured egress proxy, or none', function (?string $configuredProxy, ?string $expectedProxy): void {
+    config()->set('outbound.http.egress_proxy', $configuredProxy);
+    $this->app->forgetInstance(PinnedHttpClient::class);
+
+    $egressProxy = (new ReflectionProperty(PinnedHttpClient::class, 'egressProxy'))->getValue($this->app->make(PinnedHttpClient::class));
+
+    expect($egressProxy === null ? null : $egressProxy->url())->toBe($expectedProxy);
+})->with([
+    'unset' => [null, null],
+    'empty, as an unset env variable leaves it' => ['', null],
+    'configured' => ['http://proxy.internal:3128', 'http://proxy.internal:3128'],
+]);
+
+it('refuses to boot with an egress proxy that is not an http(s) proxy URL', function (mixed $configuredProxy): void {
+    $this->configBeforeBoot = ['outbound.http.egress_proxy' => $configuredProxy];
+
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, 'outbound.http.egress_proxy must be an http:// or https:// proxy URL');
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+})->with([
+    'socks' => ['socks5h://proxy.internal:1080'],
+    // OUTBOUND_EGRESS_PROXY=true reaches the config as a boolean: never "no proxy".
+    'a boolean' => [true],
+    'an array from a published config' => [['http' => 'http://proxy.internal:3128']],
+]);

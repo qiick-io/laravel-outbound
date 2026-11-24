@@ -2,12 +2,14 @@
 
 declare(strict_types=1);
 
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Promise\Create as PromiseCreate;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Http;
 use Psr\Http\Message\RequestInterface;
+use Qiick\Outbound\Http\EgressProxy;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
@@ -1011,4 +1013,90 @@ it('fails closed when PendingRequest options property is not an array', function
 
     expect(fn () => $method->invoke($client, $stub))
         ->toThrow(OutboundHttpException::class, 'PendingRequest options property is not an array');
+});
+
+/*
+ * Standards review R3: through an egress proxy, the guard still authorises
+ * and pins every destination. curl is forced into tunnel mode, so the proxy
+ * only receives CONNECT to the guard-approved address.
+ */
+function proxiedClient(?EgressProxy $egressProxy, callable $transferHandler, array $answers = ['example.test' => ['93.184.216.34']]): PinnedHttpClient
+{
+    return new PinnedHttpClient(
+        app(HttpFactory::class),
+        new RemoteUrlGuard(new FakeHostResolver(answers: $answers)),
+        new OutboundHttpLimits,
+        null,
+        $transferHandler,
+        $egressProxy,
+    );
+}
+
+it('sends through the egress proxy in tunnel mode, keeping the pin', function (string $url, string $connectTo): void {
+    $seenOptions = null;
+    $handler = function (RequestInterface $request, array $options) use (&$seenOptions) {
+        $seenOptions = $options;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200, [], 'ok'));
+    };
+
+    proxiedClient(EgressProxy::fromUrl('http://user:s3cret@proxy.internal:3128'), $handler)
+        ->send('GET', $url, noopConfigure());
+
+    expect($seenOptions['proxy'])->toBe('http://user:s3cret@proxy.internal:3128')
+        ->and($seenOptions['curl'][CURLOPT_HTTPPROXYTUNNEL])->toBeTrue()
+        ->and($seenOptions['curl'][CURLOPT_CONNECT_TO])->toBe([$connectTo]);
+})->with([
+    'https' => ['https://example.test/hook', '::93.184.216.34:443'],
+    'plain http is tunnelled too' => ['http://example.test/hook', '::93.184.216.34:80'],
+]);
+
+it('sends directly, with proxies off, when no egress proxy is configured', function (): void {
+    $seenOptions = null;
+    $handler = function (RequestInterface $request, array $options) use (&$seenOptions) {
+        $seenOptions = $options;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200, [], 'ok'));
+    };
+
+    proxiedClient(null, $handler)->send('GET', 'https://example.test/hook', noopConfigure());
+
+    expect($seenOptions['proxy'])->toBe('')
+        ->and($seenOptions['curl'])->not->toHaveKey(CURLOPT_HTTPPROXYTUNNEL);
+});
+
+it('never reaches the egress proxy for a destination the guard refuses', function (): void {
+    $isProxyReached = false;
+    $handler = function () use (&$isProxyReached) {
+        $isProxyReached = true;
+
+        return PromiseCreate::promiseFor(new Psr7Response(200));
+    };
+    $client = proxiedClient(EgressProxy::fromUrl('http://proxy.internal:3128'), $handler, ['internal.test' => ['10.0.0.7'], 'metadata.test' => ['169.254.169.254']]);
+
+    expect(fn () => $client->send('GET', 'https://internal.test/', noopConfigure()))->toThrow(UnsafeUrl::class)
+        ->and(fn () => $client->send('GET', 'https://metadata.test/', noopConfigure()))->toThrow(UnsafeUrl::class)
+        ->and(fn () => $client->send('GET', 'http://169.254.169.254/latest/meta-data/', noopConfigure()))->toThrow(UnsafeUrl::class)
+        ->and($isProxyReached)->toBeFalse();
+});
+
+it('keeps the proxy credentials out of a transport error', function (): void {
+    $handler = static fn (RequestInterface $request) => PromiseCreate::rejectionFor(new ConnectException(
+        'cURL error 56: CONNECT tunnel failed, response 407 via http://user:s3cret@proxy.internal:3128',
+        $request,
+    ));
+
+    try {
+        proxiedClient(EgressProxy::fromUrl('http://user:s3cret@proxy.internal:3128'), $handler)->send('GET', 'https://example.test/', noopConfigure());
+        $chain = '';
+    } catch (OutboundHttpException $exception) {
+        $chain = '';
+        for ($link = $exception; $link !== null; $link = $link->getPrevious()) {
+            $chain .= $link->getMessage()."\n";
+        }
+    }
+
+    expect($chain)->toContain('Outbound request failed: connection error.')
+        ->and($chain)->not->toContain('s3cret')
+        ->and($chain)->not->toContain('proxy.internal');
 });
