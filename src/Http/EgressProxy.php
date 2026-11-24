@@ -23,11 +23,22 @@ use LogicException;
  */
 final class EgressProxy
 {
+    /**
+     * The URLs with their credentials, kept outside the instances: dump(),
+     * dd(), Telescope, an `(array)` cast and var_export() read every
+     * instance property, whatever __debugInfo() says.
+     *
+     * @var \WeakMap<self, string>|null
+     */
+    private static ?\WeakMap $urlsByProxy = null;
+
     private function __construct(
         #[\SensitiveParameter]
-        private readonly string $url,
+        string $url,
         private readonly string $redactedUrl,
-    ) {}
+    ) {
+        self::urlsByProxy()[$this] = $url;
+    }
 
     /**
      * @throws InvalidArgumentException when the URL is not an http(s) proxy
@@ -62,7 +73,7 @@ final class EgressProxy
      */
     public function url(): string
     {
-        return $this->url;
+        return self::urlsByProxy()[$this];
     }
 
     public function __toString(): string
@@ -86,6 +97,19 @@ final class EgressProxy
     public function __serialize(): array
     {
         throw new LogicException('An egress proxy must not be serialized.');
+    }
+
+    /**
+     * A clone would have no URL: the map holds the original only.
+     */
+    private function __clone() {}
+
+    /**
+     * @return \WeakMap<self, string>
+     */
+    private static function urlsByProxy(): \WeakMap
+    {
+        return self::$urlsByProxy ??= new \WeakMap;
     }
 
     /**

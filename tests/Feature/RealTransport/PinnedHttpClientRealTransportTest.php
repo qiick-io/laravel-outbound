@@ -676,3 +676,50 @@ it('never reaches the egress proxy for a destination the guard refuses', functio
         $server->stop();
     }
 })->group('real-transport');
+
+it('goes through the egress proxy even when NO_PROXY names the destination', function (string $noProxy): void {
+    $server = new RealTransportServer;
+    $proxy = new RealTransportProxy;
+    putenv("NO_PROXY={$noProxy}");
+    putenv("no_proxy={$noProxy}");
+
+    try {
+        $response = clientThroughProxy($server, $proxy)->send('GET', $server->url('app.test', '/ok'), static function (OutboundRequest $request): void {}, realTransportOptions());
+
+        expect($response->status())->toBe(200)
+            ->and($proxy->requestLines())->toBe(["CONNECT 127.0.0.1:{$server->port} HTTP/1.1"]);
+    } finally {
+        putenv('NO_PROXY');
+        putenv('no_proxy');
+        $proxy->stop();
+        $server->stop();
+    }
+})->with(['*', 'app.test', '.test'])->group('real-transport');
+
+it('keeps the egress proxy credentials out of the trace of an error the receiver can cause', function (): void {
+    // php.ini-production hides arguments from traces; the default and
+    // php.ini-development keep them, and error trackers collect them.
+    $previousIgnoreArgs = ini_set('zend.exception_ignore_args', '0');
+    $server = new RealTransportServer;
+    // A password no other test uses: the outer frames hold the test runner.
+    $proxy = new RealTransportProxy('outbound:trace-only-pa55');
+
+    try {
+        try {
+            clientThroughProxy($server, $proxy, 'outbound:trace-only-pa55')->send('GET', $server->url('app.test', '/big?n=500000'), static function (OutboundRequest $request): void {}, realTransportOptions(['maxResponseBytes' => 1024]));
+            $traces = 'not refused';
+        } catch (OutboundHttpException $exception) {
+            $traces = '';
+            for ($link = $exception; $link !== null; $link = $link->getPrevious()) {
+                $traces .= $link->getMessage()."\n".print_r($link->getTrace(), true);
+            }
+        }
+
+        expect($traces)->toContain('Response exceeds max_response_bytes.')
+            ->and($traces)->not->toContain('trace-only-pa55');
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previousIgnoreArgs);
+        $proxy->stop();
+        $server->stop();
+    }
+})->group('real-transport');

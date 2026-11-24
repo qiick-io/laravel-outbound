@@ -66,7 +66,7 @@ timeout, `Retry-After`, 410 and auto-disable after repeated failures.
 
 - PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
-- guzzlehttp/guzzle ^7.8 or ^8.0
+- guzzlehttp/guzzle ^7.12 or ^8.0
 
 ## Install
 
@@ -139,8 +139,10 @@ client makes itself (response size, redirect rules) have no kind.
 for example `http://user:secret@egress.internal:3128`) to send every request
 through a filtering forward proxy, as Standard Webhooks "Server side request
 forgery (SSRF)" recommends. It is deployment config, never set per endpoint
-or per call; null (the default) sends directly, and the `HTTP(S)_PROXY`
-environment variables are never read either way.
+or per call; null (the default) sends directly, and the `HTTP(S)_PROXY` and
+`NO_PROXY` environment variables are never read either way (Guzzle 7.12 is
+the first 7.x that guarantees this, hence the minimum). Any value other than
+an http(s) proxy URL, null or an empty string stops the boot.
 
 - The guard still authorises and pins every destination, so the proxy adds a
   network-layer control without replacing the application one. curl is
@@ -152,9 +154,10 @@ environment variables are never read either way.
   port are accepted, checked at boot; a SOCKS proxy could resolve names
   itself. The proxy's own address is trusted infrastructure, not checked by
   the guard.
-- `EgressProxy` keeps the credentials out of string casts, dumps,
-  serialization and exception messages; a proxy refusal surfaces as a
-  transport error with the fixed messages above.
+- `EgressProxy` keeps the credentials out of string casts, dumps (`dump()`,
+  `dd()`, `var_export()`), serialization, exception messages and exception
+  traces; a proxy refusal surfaces as a transport error with the fixed
+  messages above.
 
 
 ### Testing `PinnedHttpClient`

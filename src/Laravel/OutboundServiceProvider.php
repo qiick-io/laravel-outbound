@@ -79,7 +79,9 @@ final class OutboundServiceProvider extends ServiceProvider
                 new HttpFactory,
                 $app->make(RemoteUrlGuard::class),
                 $app->make(OutboundHttpLimits::class),
-                egressProxy: is_string($egressProxy) && $egressProxy !== '' ? EgressProxy::fromUrl($egressProxy) : null,
+                // Only null or '' (an unset env variable) mean no proxy; any
+                // other value, a boolean or an array included, is refused.
+                egressProxy: $egressProxy === null || $egressProxy === '' ? null : EgressProxy::fromUrl(is_string($egressProxy) ? $egressProxy : ''),
             );
         });
 

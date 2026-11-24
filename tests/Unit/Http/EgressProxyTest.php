@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Qiick\Outbound\Http\EgressProxy;
+use Symfony\Component\VarDumper\Cloner\VarCloner;
+use Symfony\Component\VarDumper\Dumper\CliDumper;
 
 /*
  * Standards review R3: the egress proxy is deployment config. Its URL is
@@ -53,6 +55,10 @@ it('never shows its credentials as text, in a dump or serialized', function (): 
 
     expect((string) $proxy)->toBe('http://[REDACTED]@proxy.internal:3128')
         ->and(print_r($proxy, true))->not->toContain('s3cret')
+        // Laravel's dump() and dd(): VarDumper reads the properties and adds __debugInfo().
+        ->and((new CliDumper)->dump((new VarCloner)->cloneVar($proxy), true))->not->toContain('s3cret')
+        ->and(var_export((array) $proxy, true))->not->toContain('s3cret')
+        ->and(var_export($proxy, true))->not->toContain('s3cret')
         ->and(var_export($proxy->__debugInfo(), true))->toBe(var_export(['url' => 'http://[REDACTED]@proxy.internal:3128'], true))
         ->and(fn () => serialize($proxy))->toThrow(LogicException::class, 'An egress proxy must not be serialized.');
 });

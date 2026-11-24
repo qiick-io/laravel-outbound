@@ -28,7 +28,7 @@
         "ext-curl": "*",
         "ext-intl": "*",
         "ext-mbstring": "*",
-        "guzzlehttp/guzzle": "^7.8 || ^8.0",
+        "guzzlehttp/guzzle": "^7.12 || ^8.0",
         "illuminate/contracts": "^12.0 || ^13.0",
         "illuminate/database": "^12.0 || ^13.0",
         "illuminate/http": "^12.0 || ^13.0",

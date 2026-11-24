@@ -92,8 +92,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Lowest supported Guzzle 7 line (composer.json ^7.8 || ^8.0).
-          - guzzle: '7.8'
+          # Lowest supported Guzzle 7 line (composer.json ^7.12 || ^8.0):
+          # the first 7.x that pins CURLOPT_NOPROXY, so NO_PROXY in the
+          # environment cannot send around the egress proxy.
+          - guzzle: '7.12'
             prefer: lowest
           # Current stable Guzzle 8.
           - guzzle: '8.5'

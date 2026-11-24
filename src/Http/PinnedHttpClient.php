@@ -203,14 +203,19 @@ final class PinnedHttpClient
             [$pending, $sendOptions] = $this->applyBody($pending, $snapshot['body']);
         }
 
+        // The client's own refusals thrown inside the handler stack (a body
+        // over max_response_bytes, which a receiver can provoke) are created
+        // again here, as a local value, never passed on: a trace from inside
+        // carries the frames' arguments, which hold the egress proxy URL with
+        // its credentials. None of them carries a transport error kind.
         try {
             return $pending->send($method, $authorisedUrl, $sendOptions);
         } catch (OutboundHttpException $exception) {
-            throw $exception;
+            throw new OutboundHttpException($exception->getMessage());
         } catch (ConnectionException|GuzzleException|InvalidArgumentException $exception) {
             for ($previous = $exception->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
                 if ($previous instanceof OutboundHttpException) {
-                    throw $previous;
+                    throw new OutboundHttpException($previous->getMessage());
                 }
             }
 

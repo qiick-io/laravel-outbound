@@ -159,11 +159,16 @@ it('builds the pinned client with the configured egress proxy, or none', functio
     'configured' => ['http://proxy.internal:3128', 'http://proxy.internal:3128'],
 ]);
 
-it('refuses to boot with an egress proxy that is not an http(s) proxy URL', function (): void {
-    $this->configBeforeBoot = ['outbound.http.egress_proxy' => 'socks5h://proxy.internal:1080'];
+it('refuses to boot with an egress proxy that is not an http(s) proxy URL', function (mixed $configuredProxy): void {
+    $this->configBeforeBoot = ['outbound.http.egress_proxy' => $configuredProxy];
 
     expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, 'outbound.http.egress_proxy must be an http:// or https:// proxy URL');
 
     $this->configBeforeBoot = [];
     $this->refreshApplication();
-});
+})->with([
+    'socks' => ['socks5h://proxy.internal:1080'],
+    // OUTBOUND_EGRESS_PROXY=true reaches the config as a boolean: never "no proxy".
+    'a boolean' => [true],
+    'an array from a published config' => [['http' => 'http://proxy.internal:3128']],
+]);
