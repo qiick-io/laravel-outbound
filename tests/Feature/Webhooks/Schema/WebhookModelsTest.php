@@ -143,7 +143,7 @@ it('never serialises bigint ids, user ids, secrets or bodies', function (): void
     $endpoint = createEndpointModel(['created_by' => $userId]);
     $secret = forceCreateModel($endpoint->secrets()->make(), ['secret' => 'whsec_c2VjcmV0']);
     $subscription = $endpoint->subscriptions()->create(['event_type' => '*']);
-    $delivery = createDeliveryModel($endpoint);
+    $delivery = createDeliveryModel($endpoint, ['next_attempt_triggered_by' => $userId]);
     $attempt = forceCreateModel($delivery->attempts()->make(), [
         'attempt' => 1,
         'status' => WebhookAttemptStatusEnum::Failed,
@@ -156,7 +156,7 @@ it('never serialises bigint ids, user ids, secrets or bodies', function (): void
     expect(array_keys($endpoint->toArray()))->not->toContain('id')->not->toContain('created_by')
         ->and(array_keys($secret->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('secret')
         ->and(array_keys($subscription->toArray()))->not->toContain('id')->not->toContain('endpoint_id')
-        ->and(array_keys($delivery->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('payload')->not->toContain('payload_hash')
+        ->and(array_keys($delivery->toArray()))->not->toContain('id')->not->toContain('endpoint_id')->not->toContain('payload')->not->toContain('payload_hash')->not->toContain('next_attempt_triggered_by')
         ->and(array_keys($attempt->toArray()))->not->toContain('id')->not->toContain('delivery_id')->not->toContain('triggered_by')
         ->and($endpoint->toArray())->toHaveKey('public_id');
 });
@@ -219,6 +219,7 @@ it('encrypts the body at rest and casts every delivery attempt', function (): vo
 
     expect($fresh->status)->toBe(DeliveryStatus::Pending)
         ->and($fresh->attempts_count)->toBe(0)
+        ->and($fresh->redelivery_requests)->toBe(0)
         ->and($fresh->trigger)->toBe(WebhookDeliveryTriggerEnum::Event);
 
     $endpoint = createEndpointModel();

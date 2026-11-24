@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Run pest mutation per class so each stays >= MUTATE_MIN (default 95).
 # Usage: scripts/mutate-per-class.sh [extra pest args...]
+# MUTATE_SHARD=i/n runs only every n-th class, starting with the i-th, so CI
+# can split the run over parallel jobs; unset runs every class.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -50,7 +52,27 @@ webhook_classes=(
 
 status=0
 
+shard="${MUTATE_SHARD:-1/1}"
+shard_index="${shard%/*}"
+shard_count="${shard#*/}"
+class_position=0
+classes_run=0
+
+# A malformed shard would run no class and still exit 0.
+if ! [[ "${shard_index}" =~ ^[0-9]+$ && "${shard_count}" =~ ^[0-9]+$ ]] || ((shard_index < 1 || shard_index > shard_count)); then
+  echo "MUTATE_SHARD must be i/n with 1 <= i <= n, not '${shard}'." >&2
+  exit 1
+fi
+
+# Whether the next class in the overall order belongs to this shard.
+in_this_shard() {
+  class_position=$((class_position + 1))
+  [[ $(((class_position - 1) % shard_count + 1)) -eq "${shard_index}" ]] || return 1
+  classes_run=$((classes_run + 1))
+}
+
 for class in "${covered_only_classes[@]}"; do
+  in_this_shard || continue
   paths="$unit_paths"
   if [[ "$class" == 'Qiick\Outbound\Http\PinnedHttpClient' ]]; then
     paths="$pin_paths"
@@ -69,6 +91,7 @@ unit_classes=(
 )
 
 for class in "${unit_classes[@]}"; do
+  in_this_shard || continue
   echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
   if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${unit_paths} "$@"; then
@@ -77,11 +100,19 @@ for class in "${unit_classes[@]}"; do
 done
 
 for class in "${webhook_classes[@]}"; do
+  in_this_shard || continue
   echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
   if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${webhook_paths} "$@"; then
     status=1
   fi
 done
+
+echo "==> shard ${shard} ran ${classes_run} class(es)"
+
+if ((classes_run == 0)); then
+  echo "Shard ${shard} ran no class." >&2
+  exit 1
+fi
 
 exit "${status}"

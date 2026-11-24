@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `outbound.webhooks.allow_endpoint_private_hosts` (off), without which an
   endpoint's `allow_private_hosts` is ignored.
 - `DeliveryAttempt::sanitiseErrorMessage()` is public.
+- Manual and bulk redelivery (standards review M11, R7, S5):
+  `WebhookDeliveryCoordinator::redeliver()` and `redeliverRange()` (endpoint,
+  time range, statuses) reuse the delivery's `webhook-id` with a fresh
+  timestamp and signatures, record `trigger = manual|bulk` and `triggered_by`
+  on the attempt, and fire `WebhookRedeliveryRequestedEvent`;
+  `webhook_deliveries.next_attempt_trigger` and `next_attempt_triggered_by`.
 - A failed attempt's `error_code` names the transport error kind (`timeout`,
   `tls`, `dns`, `connection`); `transport` remains for a client refusal
   without one.

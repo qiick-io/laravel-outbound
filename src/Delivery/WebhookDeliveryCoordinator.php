@@ -12,10 +12,12 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
+use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
+use Qiick\Outbound\Events\WebhookRedeliveryRequestedEvent;
 use Qiick\Outbound\Http\HttpRequestOptions;
 use Qiick\Outbound\Http\OutboundHttpException;
 use Qiick\Outbound\Http\OutboundHttpLimits;
@@ -192,7 +194,9 @@ final class WebhookDeliveryCoordinator
         $errorMessage = DeliveryAttempt::sanitiseErrorMessage($outcome['errorMessage']);
 
         $attemptAttributes = [
-            // `trigger` keeps the table default, `schedule`.
+            // A redelivery request's trigger and user; otherwise `schedule`.
+            'trigger' => $delivery->next_attempt_trigger ?? WebhookAttemptTriggerEnum::Schedule,
+            'triggered_by' => $delivery->next_attempt_triggered_by,
             'attempt' => $attemptNumber,
             'status' => $outcome['status'],
             'webhook_timestamp' => $attemptedAt->getTimestamp(),
@@ -214,6 +218,8 @@ final class WebhookDeliveryCoordinator
             'last_attempt_at' => $attemptedAt,
             'last_http_status' => $httpStatus,
             'last_error' => $errorMessage,
+            'next_attempt_trigger' => null,
+            'next_attempt_triggered_by' => null,
         ];
 
         try {
@@ -233,6 +239,130 @@ final class WebhookDeliveryCoordinator
             if ($disableReason !== null) {
                 $this->disable($endpoint, $disableReason, $attemptedAt, $this->disablePolicy->streakStillRequired($disableReason, $attemptedAt));
             }
+        }
+    }
+
+    /**
+     * Send one delivery again, with the same `webhook-id` (its event id), a
+     * fresh `webhook-timestamp` and fresh signatures: Standard Webhooks
+     * "Webhook metadata" keeps the id across retries, so a consumer that
+     * already processed it deduplicates it (standards review R7). The worker
+     * sends it on its next run. A settled delivery gets exactly one more
+     * attempt; a pending one keeps its schedule.
+     *
+     * Side effect: fires {@see WebhookRedeliveryRequestedEvent}.
+     *
+     * @param  int|null  $triggeredBy  the user who asked, recorded on the attempt
+     * @return bool false when the delivery no longer exists
+     *
+     * @throws WebhookException when the endpoint is disabled or deleted, or
+     *                          the body has been pruned
+     */
+    public function redeliver(WebhookDelivery $delivery, ?int $triggeredBy = null): bool
+    {
+        $this->assertCanRedeliverTo($delivery->endpoint);
+
+        if ($delivery->status === DeliveryStatus::Cancelled) {
+            throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
+        }
+
+        if ($delivery->payload === null) {
+            throw new WebhookException('Webhook delivery body has been pruned; it cannot be redelivered.');
+        }
+
+        // Checked again in the update itself: a prune or a cancel may have
+        // run since the caller loaded the delivery.
+        $scheduledCount = $this->store->scheduleRedelivery(
+            WebhookDelivery::query()
+                ->whereKey($delivery->id)
+                ->whereNotNull('payload')
+                ->where('status', '!=', DeliveryStatus::Cancelled),
+            WebhookAttemptTriggerEnum::Manual,
+            $triggeredBy,
+        );
+
+        if ($scheduledCount === 0) {
+            return false;
+        }
+
+        $this->events->dispatch(new WebhookRedeliveryRequestedEvent(
+            $delivery->endpoint->public_id,
+            $scheduledCount,
+            WebhookAttemptTriggerEnum::Manual,
+            $triggeredBy,
+            deliveryPublicId: $delivery->public_id,
+        ));
+
+        return true;
+    }
+
+    /**
+     * Send again every delivery of the endpoint created in [`$from`,
+     * `$until`) whose status is one of `$statuses` ("Redeliver failed
+     * since…"), as {@see redeliver()} does one. Deliveries whose body has been
+     * pruned are skipped. The worker's fairness keeps a large range from
+     * starving other endpoints.
+     *
+     * Side effect: fires {@see WebhookRedeliveryRequestedEvent} when any
+     * delivery was scheduled.
+     *
+     * @param  list<DeliveryStatus>  $statuses
+     * @return int the deliveries scheduled
+     *
+     * @throws WebhookException when the endpoint is disabled or deleted, the
+     *                          range is empty, or no status is given
+     */
+    public function redeliverRange(WebhookEndpoint $endpoint, CarbonImmutable $from, CarbonImmutable $until, array $statuses, ?int $triggeredBy = null): int
+    {
+        $this->assertCanRedeliverTo($endpoint);
+
+        if ($until <= $from) {
+            throw new WebhookException('The redelivery range must end after it starts.');
+        }
+
+        if ($statuses === []) {
+            throw new WebhookException('A bulk redelivery needs at least one status.');
+        }
+
+        if (in_array(DeliveryStatus::Cancelled, $statuses, true)) {
+            throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
+        }
+
+        $scheduledCount = $this->store->scheduleRedelivery(
+            WebhookDelivery::query()
+                ->where('endpoint_id', $endpoint->id)
+                ->where('created_at', '>=', $from->utc())
+                ->where('created_at', '<', $until->utc())
+                // Laravel binds backed enums by their value.
+                ->whereIn('status', $statuses)
+                ->whereNotNull('payload'),
+            WebhookAttemptTriggerEnum::Bulk,
+            $triggeredBy,
+        );
+
+        if ($scheduledCount > 0) {
+            $this->events->dispatch(new WebhookRedeliveryRequestedEvent(
+                $endpoint->public_id,
+                $scheduledCount,
+                WebhookAttemptTriggerEnum::Bulk,
+                $triggeredBy,
+                from: $from,
+                until: $until,
+                statuses: $statuses,
+            ));
+        }
+
+        return $scheduledCount;
+    }
+
+    /**
+     * @throws WebhookException when the endpoint is disabled or deleted: its
+     *                          deliveries would wait unseen
+     */
+    private function assertCanRedeliverTo(WebhookEndpoint $endpoint): void
+    {
+        if (! $endpoint->is_active || $endpoint->trashed()) {
+            throw new WebhookException('Webhook endpoint is disabled; enable it before redelivering.');
         }
     }
 

@@ -27,7 +27,11 @@ use Illuminate\Support\Facades\Schema;
  * per-endpoint concurrency counts the pending rows still leased, and a lease
  * left behind by a crashed worker simply expires. `exhausted_reason` says why
  * automatic retries stopped (every attempt used, a Retry-After above the cap,
- * or 410 Gone; review R4).
+ * or 410 Gone; review R4). `next_attempt_trigger` and
+ * `next_attempt_triggered_by` carry a manual or bulk redelivery request to
+ * the worker, which records them on the attempt and clears them (review R7).
+ * `redelivery_requests` counts the requests, so a request repeated by the
+ * same user while the delivery is being sent is still told apart.
  *
  * Deleting an endpoint with deliveries is refused: the log outlives a
  * soft-deleted endpoint until retention removes it.
@@ -37,8 +41,9 @@ return new class extends Migration
     public function up(): void
     {
         $isMysqlFamily = in_array(Schema::getConnection()->getDriverName(), ['mysql', 'mariadb'], true);
+        $usersTable = config('outbound.webhooks.users_table');
 
-        Schema::create('webhook_deliveries', function (Blueprint $table) use ($isMysqlFamily): void {
+        Schema::create('webhook_deliveries', function (Blueprint $table) use ($isMysqlFamily, $usersTable): void {
             $table->id();
             $table->uuid('public_id')->unique();
             $table->foreignId('endpoint_id')->constrained('webhook_endpoints')->restrictOnDelete();
@@ -57,6 +62,15 @@ return new class extends Migration
             $table->dateTime('next_attempt_at')->nullable();
             $table->dateTime('claimed_until')->nullable();
             $table->string('exhausted_reason', 32)->nullable();
+            $table->string('next_attempt_trigger', 16)->nullable();
+            $nextAttemptTriggeredBy = $table->foreignId('next_attempt_triggered_by')->nullable();
+
+            if (is_string($usersTable) && $usersTable !== '') {
+                $nextAttemptTriggeredBy->constrained($usersTable)->nullOnDelete();
+            }
+
+            $table->unsignedInteger('redelivery_requests')->default(0);
+
             $table->timestamp('last_attempt_at')->nullable();
             $table->timestamp('delivered_at')->nullable();
             $table->unsignedSmallInteger('last_http_status')->nullable();

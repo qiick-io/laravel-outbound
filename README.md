@@ -41,8 +41,8 @@ One canonical path for:
 Non-goals for v1: asymmetric Standard Webhooks (`v2a`; its columns are
 reserved), global helpers, a hard dependency on `laravel/framework`. The
 rest of the delivery layer the 2026-11-22 standards review made mandatory
-before 1.0 (redelivery, body retention, egress proxy) lands in the following
-pull requests.
+before 1.0 (body retention, egress proxy) lands in the following pull
+requests.
 
 ## Threat model
 
@@ -342,6 +342,47 @@ $coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliv
 
 `enableEndpoint()` is the only supported way back: setting `is_active` by
 hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
+
+### Redelivery
+
+```php
+$coordinator = app(WebhookDeliveryCoordinator::class);
+
+$coordinator->redeliver($delivery, triggeredBy: auth()->id());
+$coordinator->redeliverRange($endpoint, $from, $until, [DeliveryStatus::Exhausted], auth()->id()); // "Redeliver failed since…"
+```
+
+A redelivery is sent by the next `outbound:webhooks:work` run with the **same
+`webhook-id`** (the delivery's event id), a fresh `webhook-timestamp` and fresh
+signatures (standards review R7; Standard Webhooks "Webhook metadata" keeps the
+id across retries). A consumer that already processed it deduplicates it. A
+consumer that verifies with this package and fails after claiming the id
+drops the redelivery as a duplicate until the claim expires;
+`SeenWebhookIdStore::release()` for giving a claim back arrives in a later
+pull request (review M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
+
+- A settled delivery (delivered, exhausted, refused, cancelled) gets exactly
+  one more attempt: if it fails, it is exhausted again. A pending one is
+  sent now and keeps its schedule.
+- `redeliverRange()` takes the endpoint's deliveries created in
+  [`$from`, `$until`) with the given statuses; deliveries whose body has been
+  pruned are skipped. A large range does not starve other endpoints.
+- Both refuse a disabled or deleted endpoint (enable it first) and a
+  cancelled delivery: the product withdrew it, for good. A pruned body
+  differs: `redeliver()` refuses its one delivery, while `redeliverRange()`
+  skips pruned deliveries and schedules the rest, so one old delivery does not
+  block a range. Both fire `WebhookRedeliveryRequestedEvent` (endpoint public
+  id, count, trigger, user) for a product's audit log.
+- Asking twice before the worker runs sends the delivery once, for the latest
+  request. A request made while the delivery is being sent is kept, even from
+  the same user (each request is counted): that attempt is recorded as it
+  went, then the delivery is sent again.
+- A redelivery goes to the endpoint's **current** URL (through the SSRF guard)
+  with the current signing secrets, whatever the subscriptions are now:
+  allow it only to users who may edit the endpoint. Redelivering a pending
+  delivery sends it now, before any `Retry-After` the receiver asked for.
+- `exhausted_reason` is cleared when a redelivery is scheduled; `delivered_at`
+  keeps the time of the last successful delivery until a new one replaces it.
 
 ### Retry schedule and delivery records
 

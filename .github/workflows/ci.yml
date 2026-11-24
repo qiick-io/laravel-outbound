@@ -130,10 +130,16 @@ jobs:
       - name: Real-transport Pest
         run: vendor/bin/pest --group=real-transport
 
-  mutate:
-    name: Mutation (per-class ≥95%)
+  # Split over three jobs: one serial run outgrew 45 minutes. The required
+  # check is the `mutate` job below, which passes only if every shard did.
+  mutate-shard:
+    name: Mutation shard ${{ matrix.shard }}/3
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         # actions/checkout@v4.2.2
@@ -155,7 +161,19 @@ jobs:
           composer update --no-interaction --prefer-dist --with-all-dependencies
 
       - name: Pest mutate per class
+        env:
+          MUTATE_SHARD: ${{ matrix.shard }}/3
         run: bash scripts/mutate-per-class.sh
+
+  mutate:
+    name: Mutation (per-class ≥95%)
+    if: always()
+    needs: mutate-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        run: test "${{ needs.mutate-shard.result }}" = success
 
   # The package ships migrations (1.0 checklist item 6): the suite also runs on
   # each server engine, not only on in-memory SQLite. Webhook ids and event

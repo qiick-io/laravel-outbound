@@ -12,6 +12,7 @@ use PDOException;
 use Qiick\Outbound\Delivery\DeliveryStatus;
 use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
 use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
+use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Models\Concerns\PackageModelTrait;
@@ -46,6 +47,9 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property CarbonImmutable|null $next_attempt_at
  * @property CarbonImmutable|null $claimed_until
  * @property WebhookExhaustedReasonEnum|null $exhausted_reason
+ * @property WebhookAttemptTriggerEnum|null $next_attempt_trigger
+ * @property int|null $next_attempt_triggered_by
+ * @property int $redelivery_requests
  * @property CarbonImmutable|null $last_attempt_at
  * @property CarbonImmutable|null $delivered_at
  * @property int|null $last_http_status
@@ -136,7 +140,7 @@ class WebhookDelivery extends Model
      */
     protected function privateAttributes(): array
     {
-        return ['endpoint_id', 'payload', 'payload_hash'];
+        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by'];
     }
 
     /**
@@ -147,6 +151,7 @@ class WebhookDelivery extends Model
         return [
             'status' => 'pending',
             'attempts_count' => 0,
+            'redelivery_requests' => 0,
             'trigger' => 'event',
         ];
     }
@@ -162,6 +167,7 @@ class WebhookDelivery extends Model
             'next_attempt_at' => 'immutable_datetime',
             'claimed_until' => 'immutable_datetime',
             'exhausted_reason' => WebhookExhaustedReasonEnum::class,
+            'next_attempt_trigger' => WebhookAttemptTriggerEnum::class,
             'last_attempt_at' => 'immutable_datetime',
             'delivered_at' => 'immutable_datetime',
             'payload' => 'encrypted',
