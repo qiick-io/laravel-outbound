@@ -407,9 +407,9 @@ final class RemoteUrlGuard
      */
     private static function canonicalIp(string $address): string
     {
-        // Both functions return false only for an invalid address, which never
-        // reaches here: the casts only narrow their types.
-        return (string) inet_ntop((string) inet_pton($address)); // @pest-mutate-ignore: RemoveStringCast
+        // Both functions fail only on an address filter_var() refused, which
+        // never reaches here; the address as given would then be the answer.
+        return inet_ntop(inet_pton($address) ?: $address) ?: $address;
     }
 
     private function destination(string $url, string $host, int $port, string $pinnedAddress): AuthorizedDestination

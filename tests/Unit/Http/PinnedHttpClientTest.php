@@ -1140,3 +1140,31 @@ it('announces nothing for a request the guard allows', function (): void {
 
     expect($seen)->toBe(0);
 });
+
+it('sends each body type with its encoding and content type', function (Closure $configure, string $contentType, Closure $bodyMatches): void {
+    Http::fake(['https://example.test/hook' => Http::response('ok', 200)]);
+
+    pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send('POST', 'https://example.test/hook', $configure, new HttpRequestOptions);
+
+    Http::assertSent(fn ($request): bool => str_starts_with($request->header('Content-Type')[0] ?? '', $contentType) && $bodyMatches($request->body()));
+})->with([
+    'raw without a content type' => [fn (OutboundRequest $request) => $request->withBody('raw-bytes'), 'application/octet-stream', fn (string $body): bool => $body === 'raw-bytes'],
+    'json' => [fn (OutboundRequest $request) => $request->asJson(['a' => 1]), 'application/json', fn (string $body): bool => $body === '{"a":1}'],
+    'form' => [fn (OutboundRequest $request) => $request->asForm(['a' => 'b c']), 'application/x-www-form-urlencoded', fn (string $body): bool => $body === 'a=b+c'],
+    'multipart' => [fn (OutboundRequest $request) => $request->asMultipart([['name' => 'field', 'contents' => 'value']]), 'multipart/form-data', fn (string $body): bool => str_contains($body, 'name="field"') && str_contains($body, 'value')],
+]);
+
+it('refuses a redirect whose Location is not a valid URI', function (): void {
+    Http::fake(['https://example.test/hook' => Http::response('', 302, ['Location' => 'http://[::1'])]);
+
+    try {
+        pinnedClient(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]))->send('GET', 'https://example.test/hook', noopConfigure(), new HttpRequestOptions(followRedirects: true, maxRedirects: 2));
+        $exception = null;
+    } catch (OutboundHttpException $caughtException) {
+        $exception = $caughtException;
+    }
+
+    expect($exception?->getMessage())->toBe('Redirect Location is not a valid URI.')
+        ->and($exception?->getCode())->toBe(0)
+        ->and($exception?->getPrevious()?->getMessage())->toBe('Invalid redirect URI.');
+});

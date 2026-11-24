@@ -75,14 +75,14 @@ it('clamps a randomizer that returns outside ±amplitude', function (): void {
     expect(RetrySchedule::withJitter(100, 30, $random))->toBe(70);
 });
 
-it('caps delays at MAX_DELAY_SECONDS', function (): void {
-    $max = RetrySchedule::MAX_DELAY_SECONDS;
+it('caps delays at maxDelaySeconds()', function (): void {
+    $max = RetrySchedule::maxDelaySeconds();
 
     expect(RetrySchedule::withJitter($max + 100, 0, new FixedRandomizer([1])))->toBe($max)
         ->and(RetrySchedule::withJitter($max, 0, new FixedRandomizer([1])))->toBe($max);
 });
 
-it('caps configured jitter at MAX_JITTER_SECONDS before delay/2', function (): void {
+it('caps configured jitter at one hour before delay/2', function (): void {
     $seen = new class implements Randomizer
     {
         public int $max = 0;
@@ -95,14 +95,14 @@ it('caps configured jitter at MAX_JITTER_SECONDS before delay/2', function (): v
         }
     };
 
-    // delay large enough that floor(delay/2) > MAX_JITTER; amplitude must be MAX_JITTER
-    RetrySchedule::withJitter(100_000, RetrySchedule::MAX_JITTER_SECONDS + 999, $seen);
+    // delay large enough that floor(delay/2) > MAX_JITTER; amplitude must be the one-hour jitter cap
+    RetrySchedule::withJitter(100_000, 3_600 + 999, $seen);
 
-    expect($seen->max)->toBe(RetrySchedule::MAX_JITTER_SECONDS);
+    expect($seen->max)->toBe(3_600);
 });
 
-it('caps jittered results that would exceed MAX_DELAY_SECONDS', function (): void {
-    $max = RetrySchedule::MAX_DELAY_SECONDS;
+it('caps jittered results that would exceed maxDelaySeconds()', function (): void {
+    $max = RetrySchedule::maxDelaySeconds();
     // amplitude = min(10, floor(max/2)) = 10; offset +10 would exceed if delay were max
     // but delay is capped to max first, amplitude = min(10, max/2)=10, result max+10 capped
     $random = new FixedRandomizer([10]);
@@ -139,7 +139,6 @@ it('refuses SystemRandomizer when min exceeds max', function (): void {
         ->toThrow(InvalidArgumentException::class);
 });
 
-it('pins the public caps', function (): void {
-    expect(RetrySchedule::MAX_DELAY_SECONDS)->toBe(2_592_000)
-        ->and(RetrySchedule::MAX_JITTER_SECONDS)->toBe(3_600);
+it('caps delays at 30 days', function (): void {
+    expect(RetrySchedule::maxDelaySeconds())->toBe(2_592_000);
 });

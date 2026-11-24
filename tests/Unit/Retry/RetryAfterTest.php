@@ -24,10 +24,10 @@ it('reads delay-seconds', function (string $headerValue, int $expectedSeconds): 
     'more leading zeros than the cap has digits' => ['00000000120', 120],
     'surrounding whitespace' => [" 120\t", 120],
     'one under the cap' => ['2591999', 2_591_999],
-    'at the cap' => ['2592000', RetrySchedule::MAX_DELAY_SECONDS],
-    'above the cap' => ['2592001', RetrySchedule::MAX_DELAY_SECONDS],
-    'beyond PHP_INT_MAX' => ['99999999999999999999999', RetrySchedule::MAX_DELAY_SECONDS],
-    'beyond the float range' => ['1'.str_repeat('0', 400), RetrySchedule::MAX_DELAY_SECONDS],
+    'at the cap' => ['2592000', RetrySchedule::maxDelaySeconds()],
+    'above the cap' => ['2592001', RetrySchedule::maxDelaySeconds()],
+    'beyond PHP_INT_MAX' => ['99999999999999999999999', RetrySchedule::maxDelaySeconds()],
+    'beyond the float range' => ['1'.str_repeat('0', 400), RetrySchedule::maxDelaySeconds()],
 ]);
 
 it('reads the three HTTP-date formats as seconds from now', function (string $headerValue): void {
@@ -61,7 +61,7 @@ it('reads a two-digit RFC 850 year as the latest year not more than 50 years ahe
     expect(RetryAfter::parse($headerValue, retryAfterNow()))->toBe($expectedSeconds);
 })->with([
     // 2076 is 50 years ahead, so it stays in this century (and hits the cap).
-    'fifty years ahead' => ['Monday, 23-Nov-76 10:00:00 GMT', RetrySchedule::MAX_DELAY_SECONDS],
+    'fifty years ahead' => ['Monday, 23-Nov-76 10:00:00 GMT', RetrySchedule::maxDelaySeconds()],
     // 2077 would be more than 50 years ahead: it means 1977, in the past.
     'more than fifty years ahead' => ['Tuesday, 23-Nov-77 10:00:00 GMT', 0],
 ]);
@@ -75,7 +75,7 @@ it('returns zero for a date in the past or exactly now', function (string $heade
 ]);
 
 it('caps a far-future date like a large delay', function (): void {
-    expect(RetryAfter::parse('Fri, 31 Dec 9999 23:59:59 GMT', retryAfterNow()))->toBe(RetrySchedule::MAX_DELAY_SECONDS);
+    expect(RetryAfter::parse('Fri, 31 Dec 9999 23:59:59 GMT', retryAfterNow()))->toBe(RetrySchedule::maxDelaySeconds());
 });
 
 it('rounds a fractional "now" up so the wait is never shortened', function (): void {

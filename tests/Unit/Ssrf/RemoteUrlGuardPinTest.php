@@ -335,3 +335,10 @@ it('pins only the resolver answers that are ip addresses, in canonical form', fu
 
     expect($guard->authorize('https://app.example/token')->pinnedAddress)->toBe('93.184.216.34');
 });
+
+it('pins and names an ipv6 address in its canonical form', function (): void {
+    $guard = new RemoteUrlGuard((new FakeHostResolver)->with('app.example', ['2001:DB8:0:0:0:0:0:1']), allowPrivateHosts: true);
+
+    expect($guard->authorize('https://app.example/token')->pinnedAddress)->toBe('2001:db8::1')
+        ->and($guard->authorize('https://[2001:DB8:0:0:0:0:0:1]/token')->host)->toBe('2001:db8::1');
+});

@@ -20,16 +20,13 @@ final class RetrySchedule
 {
     /**
      * Hard cap so delay + jitter never overflows PHP integers (30 days).
-     *
-     * A constant's line has no coverage, so Pest cannot run the mutants of
-     * this value or the next: the test "pins the public caps" pins both.
+     * Methods rather than constants: a constant's line has no coverage, so
+     * mutation testing could not check the values.
      */
-    public const int MAX_DELAY_SECONDS = 2_592_000; // @pest-mutate-ignore: DecrementInteger,IncrementInteger
-
-    /**
-     * Cap on the configured jitter argument, before ±floor(delay/2) (1 hour).
-     */
-    public const int MAX_JITTER_SECONDS = 3_600; // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+    public static function maxDelaySeconds(): int
+    {
+        return 2_592_000;
+    }
 
     /**
      * Standard Webhooks example delays (seconds).
@@ -54,7 +51,7 @@ final class RetrySchedule
     /**
      * Apply symmetric jitter capped to ±min(jitter, floor(delay/2)) so a
      * positive delay never becomes an immediate retry. The randomizer offset
-     * is clamped to that amplitude; the result is capped at {@see MAX_DELAY_SECONDS}.
+     * is clamped to that amplitude; the result is capped at {@see maxDelaySeconds()}.
      *
      * @throws \InvalidArgumentException when delay or jitter is negative
      */
@@ -68,8 +65,8 @@ final class RetrySchedule
             throw new \InvalidArgumentException('Retry jitter must not be negative.');
         }
 
-        $delaySeconds = min($delaySeconds, self::MAX_DELAY_SECONDS);
-        $jitterSeconds = min($jitterSeconds, self::MAX_JITTER_SECONDS);
+        $delaySeconds = min($delaySeconds, self::maxDelaySeconds());
+        $jitterSeconds = min($jitterSeconds, self::maxJitterSeconds());
 
         // Amplitude ≤ floor(delay/2) keeps wait ≥ ceil(delay/2) for delay > 0.
         $amplitude = min($jitterSeconds, intdiv($delaySeconds, 2));
@@ -80,6 +77,14 @@ final class RetrySchedule
         // A randomizer that strays outside ±amplitude is clamped back.
         $offset = max(-$amplitude, min($amplitude, $random->intBetween(-$amplitude, $amplitude)));
 
-        return min($delaySeconds + $offset, self::MAX_DELAY_SECONDS);
+        return min($delaySeconds + $offset, self::maxDelaySeconds());
+    }
+
+    /**
+     * Cap on the configured jitter argument, before ±floor(delay/2) (1 hour).
+     */
+    private static function maxJitterSeconds(): int
+    {
+        return 3_600;
     }
 }

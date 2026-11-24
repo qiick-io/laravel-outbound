@@ -37,21 +37,6 @@ use RuntimeException;
  */
 final class PinnedHttpClient
 {
-    private const FOLLOW_STATUSES = [301, 302, 303, 307, 308];
-
-    /** Headers forwarded on an opted-in cross-origin hop (body usually dropped). */
-    private const CROSS_ORIGIN_SAFE_HEADERS = [
-        'Accept',
-        'Accept-Language',
-        'User-Agent',
-        'Content-Type',
-    ];
-
-    private const BODY_HEADERS = [
-        'Content-Type',
-        'Content-Length',
-    ];
-
     /**
      * @param  (callable(): float)|null  $clock  test seam for deadline arithmetic
      * @param  callable|null  $transferHandler  test seam replacing CurlHandler
@@ -154,9 +139,9 @@ final class PinnedHttpClient
                     throw new OutboundHttpException('Cross-origin 307/308 redirect is not allowed.');
                 }
 
-                $snapshot['headers'] = $this->onlyHeaders($snapshot['headers'], self::CROSS_ORIGIN_SAFE_HEADERS);
+                $snapshot['headers'] = $this->onlyHeaders($snapshot['headers'], self::crossOriginSafeHeaders());
                 // Cross-origin only allows 301/302/303, which become GET/HEAD below
-                // and drop the body there — Content-Type is then stripped with BODY_HEADERS.
+                // and drop the body there — Content-Type is then stripped with bodyHeaders().
             }
 
             $nextMethod = $this->methodAfterRedirect($currentMethod, $status);
@@ -166,7 +151,7 @@ final class PinnedHttpClient
             }
 
             if (! $includeBody) {
-                $snapshot['headers'] = $this->withoutHeaders($snapshot['headers'], self::BODY_HEADERS);
+                $snapshot['headers'] = $this->withoutHeaders($snapshot['headers'], self::bodyHeaders());
                 $snapshot['body'] = null;
             }
 
@@ -176,7 +161,7 @@ final class PinnedHttpClient
     }
 
     /**
-     * @param  array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: string, payload: mixed, contentType: ?string}|null}  $snapshot
+     * @param  array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form'|'multipart', payload: array<string, mixed>, contentType: ?string}|null}  $snapshot
      *
      * @throws OutboundHttpException
      */
@@ -275,34 +260,19 @@ final class PinnedHttpClient
     }
 
     /**
-     * @param  array{type: string, payload: mixed, contentType: ?string}  $body
+     * The payload's type follows from `type`: OutboundRequest accepts only a
+     * string for a raw body and an array for the others.
+     *
+     * @param  array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form'|'multipart', payload: array<string, mixed>, contentType: ?string}  $body
      * @return array{0: PendingRequest, 1: array<string, mixed>}
      */
     private function applyBody(PendingRequest $pending, array $body): array
     {
-        $payload = $body['payload'];
-
         return match ($body['type']) {
-            'raw' => [
-                $pending->withBody(
-                    is_string($payload) ? $payload : throw new InvalidArgumentException('Raw body must be a string.'),
-                    $body['contentType'] ?? 'application/octet-stream',
-                ),
-                [],
-            ],
-            'json' => [
-                $pending->asJson(),
-                ['json' => is_array($payload) ? $payload : throw new InvalidArgumentException('JSON body must be an array.')],
-            ],
-            'form' => [
-                $pending->asForm(),
-                ['form_params' => is_array($payload) ? $payload : throw new InvalidArgumentException('Form body must be an array.')],
-            ],
-            'multipart' => [
-                $pending->asMultipart(),
-                ['multipart' => is_array($payload) ? $payload : throw new InvalidArgumentException('Multipart body must be an array.')],
-            ],
-            default => throw new InvalidArgumentException('Unknown outbound body type.'),
+            'raw' => [$pending->withBody($body['payload'], $body['contentType'] ?? 'application/octet-stream'), []],
+            'json' => [$pending->asJson(), ['json' => $body['payload']]],
+            'form' => [$pending->asForm(), ['form_params' => $body['payload']]],
+            'multipart' => [$pending->asMultipart(), ['multipart' => $body['payload']]],
         };
     }
 
@@ -469,7 +439,7 @@ final class PinnedHttpClient
             return false;
         }
 
-        return in_array($response->status(), self::FOLLOW_STATUSES, true);
+        return in_array($response->status(), self::followStatuses(), true);
     }
 
     /**
@@ -486,7 +456,7 @@ final class PinnedHttpClient
         try {
             $resolved = (string) UriResolver::resolve(new Uri($currentUrl), new Uri($location));
         } catch (InvalidArgumentException) {
-            throw new OutboundHttpException('Redirect Location is not a valid URI.', 0, new RuntimeException('Invalid redirect URI.'));
+            throw new OutboundHttpException('Redirect Location is not a valid URI.', previous: new RuntimeException('Invalid redirect URI.'));
         }
 
         $parts = parse_url($resolved);
@@ -638,9 +608,39 @@ final class PinnedHttpClient
     private function now(): float
     {
         if (is_callable($this->clock)) {
-            return (float) ($this->clock)();
+            return ($this->clock)();
         }
 
         return microtime(true);
+    }
+
+    /**
+     * Redirect statuses the client may follow. Methods rather than constants,
+     * like the header lists below: a constant's lines have no coverage, so
+     * mutation testing could not check that each entry is needed.
+     *
+     * @return list<int>
+     */
+    private static function followStatuses(): array
+    {
+        return [301, 302, 303, 307, 308];
+    }
+
+    /**
+     * Headers forwarded on an opted-in cross-origin hop (body usually dropped).
+     *
+     * @return list<string>
+     */
+    private static function crossOriginSafeHeaders(): array
+    {
+        return ['Accept', 'Accept-Language', 'User-Agent', 'Content-Type'];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function bodyHeaders(): array
+    {
+        return ['Content-Type', 'Content-Length'];
     }
 }
