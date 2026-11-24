@@ -17,6 +17,7 @@ use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Events\WebhookRedeliveryRequestedEvent;
 use Qiick\Outbound\Http\HttpRequestOptions;
@@ -128,7 +129,8 @@ final class WebhookDeliveryCoordinator
      * batch carries on.
      *
      * Side effects: outbound HTTP POSTs; attempt rows; delivery and endpoint
-     * updates; unexpected errors reported to the exception handler.
+     * updates; {@see WebhookDeliveryFailedEvent} for a delivery an attempt
+     * left exhausted; unexpected errors reported to the exception handler.
      *
      * @return int the attempts sent or refused
      *
@@ -231,6 +233,19 @@ final class WebhookDeliveryCoordinator
             // it, the outcome still counts, so a delivered webhook is never
             // sent again and a failing one still moves towards exhausted.
             $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess, $isReceiverOutcome);
+        }
+
+        // A redelivery asked during the send keeps the delivery pending, so
+        // the stored status decides.
+        if ($isRecorded && $delivery->refresh()->status === DeliveryStatus::Exhausted && $delivery->exhausted_reason !== null) {
+            $this->events->dispatch(new WebhookDeliveryFailedEvent(
+                $delivery->public_id,
+                $endpoint->public_id,
+                $delivery->event_type,
+                $delivery->exhausted_reason,
+                $delivery->attempts_count,
+                $attemptedAt,
+            ));
         }
 
         // An attempt another worker already recorded, or a refusal on the

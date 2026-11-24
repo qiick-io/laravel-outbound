@@ -16,6 +16,7 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookDelivery;
@@ -987,4 +988,50 @@ it('keeps "transport" for a client refusal that has no transport kind', function
 
     expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('transport')
         ->and(WebhookDeliveryAttempt::query()->sole()->error_message)->toBe('Response exceeds max_response_bytes.');
+});
+
+/*
+ * Standards review S5: an exhausted delivery is announced, public ids and the
+ * reason only.
+ */
+
+it('announces a delivery the attempt left exhausted, and only then', function (): void {
+    $failedEvents = [];
+    app(Dispatcher::class)->listen(WebhookDeliveryFailedEvent::class, function (WebhookDeliveryFailedEvent $event) use (&$failedEvents): void {
+        $failedEvents[] = $event;
+    });
+    $endpoint = deliveryEndpoint(['max_attempts' => 2]);
+    $this->transfer->respond(500)->respond(500);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($failedEvents)->toBe([]);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+    coordinator()->work(50);
+
+    expect($failedEvents)->toHaveCount(1)
+        ->and($failedEvents[0]->deliveryPublicId)->toBe(onlyDelivery()->public_id)
+        ->and($failedEvents[0]->endpointPublicId)->toBe($endpoint->public_id)
+        ->and($failedEvents[0]->eventType)->toBe('invoice.paid')
+        ->and($failedEvents[0]->reason)->toBe(WebhookExhaustedReasonEnum::MaxAttempts)
+        ->and($failedEvents[0]->attempts)->toBe(2)
+        ->and($failedEvents[0]->failedAt->toDateTimeString())->toBe('2026-11-23 10:00:05');
+});
+
+it('announces a delivery a 410 Gone exhausted, with that reason', function (): void {
+    $failedEvents = [];
+    app(Dispatcher::class)->listen(WebhookDeliveryFailedEvent::class, function (WebhookDeliveryFailedEvent $event) use (&$failedEvents): void {
+        $failedEvents[] = $event;
+    });
+    deliveryEndpoint();
+    $this->transfer->respond(410);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($failedEvents)->toHaveCount(1)
+        ->and($failedEvents[0]->reason)->toBe(WebhookExhaustedReasonEnum::Gone)
+        ->and($failedEvents[0]->attempts)->toBe(1);
 });
