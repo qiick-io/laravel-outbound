@@ -37,6 +37,8 @@ final class StandardWebhookVerifier
      * @param  non-empty-string  $dedupeScope  MUST identify the verifying secret or
      *                                         endpoint — sharing the default across
      *                                         tenants collides claims on the same id
+     * @return WebhookIdClaim|null the claim on the webhook id, which only this
+     *                             request can release; null without a store
      *
      * @throws WebhookException when verification fails
      */
@@ -49,14 +51,8 @@ final class StandardWebhookVerifier
         array $secrets,
         DateTimeImmutable $now,
         string $dedupeScope = 'default',
-    ): void {
-        if ($webhookId === '') {
-            throw new WebhookException('Webhook id must not be empty.');
-        }
-
-        if (preg_match('/[\x00-\x1F\x7F]/', $webhookId) === 1) {
-            throw new WebhookException('Webhook id must not contain control characters.');
-        }
+    ): ?WebhookIdClaim {
+        StandardWebhookSigner::assertValidWebhookId($webhookId);
 
         if ($dedupeScope === '') {
             throw new WebhookException('Webhook dedupe scope must not be empty.');
@@ -113,15 +109,17 @@ final class StandardWebhookVerifier
         }
 
         if ($this->seenIds === null) {
-            return;
+            return null;
         }
 
         // Hold through the last second the timestamp check still accepts (off-by-one safe).
         // After delta <= tolerance, this is always >= 1 (no need to floor).
         $ttl = $timestamp + $this->replayToleranceSeconds - $nowUnix + 1;
 
+        $claim = WebhookIdClaim::generate($dedupeScope, $webhookId);
+
         try {
-            $claimed = $this->seenIds->claim($dedupeScope, $webhookId, $ttl);
+            $claimed = $this->seenIds->claim($claim, $ttl);
         } catch (WebhookException $e) {
             throw $e;
         } catch (Throwable $e) {
@@ -131,6 +129,8 @@ final class StandardWebhookVerifier
         if (! $claimed) {
             throw new DuplicateWebhookIdException('Webhook id has already been processed.');
         }
+
+        return $claim;
     }
 
     /**

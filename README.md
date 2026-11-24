@@ -182,7 +182,7 @@ $signer = app(StandardWebhookSigner::class);
 $signed = $signer->sign($msgId, $unixSeconds, $rawBody, [$secret]);
 
 $verifier = app(StandardWebhookVerifier::class); // cache-backed webhook-id dedupe
-$verifier->verify(
+$claim = $verifier->verify(
     $rawBody,
     $signed->headers['webhook-id'],
     $signed->headers['webhook-timestamp'],
@@ -212,17 +212,21 @@ generic 500. Catch `DuplicateWebhookIdException`,
 instead of string-matching; messages stay stable for BC. The service
 provider binds a cache-backed `SeenWebhookIdStore` by default.
 
-A consumer whose processing fails after the claim gives it back with
-`SeenWebhookIdStore::release($scope, $webhookId)`, so the sender's retry or
-redelivery (same `webhook-id`) is processed instead of being dropped as a
-duplicate. A store that cannot release fails closed
+`verify()` returns the `WebhookIdClaim` it won (null without a store). A
+consumer whose processing fails after that gives it back with
+`SeenWebhookIdStore::release($claim)`, so the sender's retry or redelivery
+(same `webhook-id`) is processed instead of being dropped as a duplicate.
+Only the winning claim releases: a duplicate gets no claim, and a claim
+another request holds carries a different random token, so it is left in
+place. A store that cannot release fails closed
 (`WebhookIdStoreFailedException`).
 
-The signer refuses a `webhook-id` with a `.` (it separates the signed fields)
-or a control character. `WebhookMessage` checks the same at construction,
-plus at most 191 bytes (the stored `event_id`), and requires the event type
-to be dot-separated segments of letters, digits and underscores
-(`invoice.paid`, Standard Webhooks "Event types").
+The signer and the verifier refuse a `webhook-id` that is empty, holds a `.`
+(it separates the signed fields) or a control character. `WebhookMessage`
+checks the same at construction, plus at most 191 bytes of valid UTF-8 (the
+stored `event_id`), and requires the event type to be at most 191 bytes of
+dot-separated segments of letters, digits and underscores (`invoice.paid`,
+Standard Webhooks "Event types").
 
 Two events carry no secret and no body: `WebhookSignedEvent` (webhook id,
 timestamp, signature count, body length) after each signing, and

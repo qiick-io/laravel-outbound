@@ -25,11 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Guzzle 7.12 is the minimum on the 7 line** (`^7.12 || ^8.0`): older 7.x
   leave `CURLOPT_NOPROXY` unset, so `NO_PROXY` in the environment could send
   requests around the egress proxy.
+- **`SeenWebhookIdStore::claim()` takes a `WebhookIdClaim`** instead of the
+  scope and id (`WebhookIdClaim::generate($scope, $webhookId)`); a custom
+  store implements the new signature and `release(WebhookIdClaim)`, freeing
+  the id only for the claim's token. `StandardWebhookVerifier::verify()`
+  returns the claim it won, or null without a store.
 
 ### Added
 
 - Standards review gaps: `SeenWebhookIdStore::release()` (M14), implemented by
-  `CacheSeenWebhookIdStore` and `FakeSeenWebhookIdStore`; the events
+  `CacheSeenWebhookIdStore` and `FakeSeenWebhookIdStore`, usable only with
+  the `WebhookIdClaim` that `verify()` returned; the events
   `WebhookSignedEvent` and `OutboundRequestBlockedEvent` (M13), with no
   secrets or bodies.
 - Egress proxy (standards review R3, S1): `outbound.http.egress_proxy` and

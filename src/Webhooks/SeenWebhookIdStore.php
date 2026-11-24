@@ -16,21 +16,23 @@ namespace Qiick\Outbound\Webhooks;
 interface SeenWebhookIdStore
 {
     /**
-     * Atomically claim `(scope, webhookId)` for `$ttlSeconds`.
+     * Atomically claim `(scope, webhookId)` for `$ttlSeconds`, holding the
+     * claim's token so that only this claim can release it.
      *
      * @return bool true if this caller won the claim; false if already claimed
      *
      * @throws WebhookException when the store cannot record the claim (fail closed)
      */
-    public function claim(string $scope, string $webhookId, int $ttlSeconds): bool;
+    public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool;
 
     /**
      * Give a claim back, so the same `(scope, webhookId)` can be processed
      * again: for a consumer whose processing failed after the claim, which
      * the sender's redelivery will retry with the same `webhook-id`
-     * (standards review M14, R7). Releasing an id never claimed does nothing.
+     * (standards review M14, R7). Only the claim that won does anything:
+     * one that lost, or an id never claimed, leaves the store as it is.
      *
      * @throws WebhookException when the store cannot release the claim (fail closed)
      */
-    public function release(string $scope, string $webhookId): void;
+    public function release(WebhookIdClaim $claim): void;
 }

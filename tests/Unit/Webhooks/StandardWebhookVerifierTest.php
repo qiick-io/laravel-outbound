@@ -10,6 +10,7 @@ use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
 use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 use Qiick\Outbound\Webhooks\WebhookSecret;
 
@@ -417,12 +418,12 @@ it('claims with TTL equal to timestamp + tolerance - now + 1', function (): void
     $recorded = [];
     $store = new class($recorded) implements SeenWebhookIdStore
     {
-        public function release(string $scope, string $webhookId): void {}
+        public function release(WebhookIdClaim $claim): void {}
 
         /** @param list<int> $ttls */
         public function __construct(private array &$ttls) {}
 
-        public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
+        public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool
         {
             $this->ttls[] = $ttlSeconds;
 

@@ -8,8 +8,11 @@ use Illuminate\Events\Dispatcher;
 use Qiick\Outbound\Events\WebhookSignedEvent;
 use Qiick\Outbound\Testing\FakeSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\DuplicateWebhookIdException;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
 use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 use Qiick\Outbound\Webhooks\WebhookMessage;
 use Qiick\Outbound\Webhooks\WebhookSecret;
@@ -50,38 +53,110 @@ it('gives a claimed webhook id back, so the consumer can process it again (M14)'
     $fake = new FakeSeenWebhookIdStore;
 
     foreach ([$store, $fake] as $idStore) {
-        expect($idStore->claim('endpoint-1', 'msg_1', 300))->toBeTrue()
-            ->and($idStore->claim('endpoint-1', 'msg_1', 300))->toBeFalse();
+        $firstClaim = WebhookIdClaim::generate('endpoint-1', 'msg_1');
+        $otherScopeClaim = WebhookIdClaim::generate('endpoint-2', 'msg_1');
 
-        $idStore->release('endpoint-1', 'msg_1');
+        expect($idStore->claim($firstClaim, 300))->toBeTrue()
+            ->and($idStore->claim(WebhookIdClaim::generate('endpoint-1', 'msg_1'), 300))->toBeFalse();
 
-        expect($idStore->claim('endpoint-1', 'msg_1', 300))->toBeTrue()
-            ->and($idStore->claim('endpoint-2', 'msg_1', 300))->toBeTrue();
+        $idStore->release($firstClaim);
+
+        expect($idStore->claim(WebhookIdClaim::generate('endpoint-1', 'msg_1'), 300))->toBeTrue()
+            ->and($idStore->claim($otherScopeClaim, 300))->toBeTrue();
 
         // Releasing one scope leaves the other claimed.
-        $idStore->release('endpoint-2', 'msg_1');
+        $idStore->release($otherScopeClaim);
 
-        expect($idStore->claim('endpoint-1', 'msg_1', 300))->toBeFalse();
+        expect($idStore->claim(WebhookIdClaim::generate('endpoint-1', 'msg_1'), 300))->toBeFalse();
     }
 });
 
+it('releases only the claim it holds, never one another request won', function (): void {
+    $store = new CacheSeenWebhookIdStore(new CacheRepository(new ArrayStore), allowArrayStore: true);
+    $fake = new FakeSeenWebhookIdStore;
+
+    foreach ([$store, $fake] as $idStore) {
+        $winningClaim = WebhookIdClaim::generate('endpoint-1', 'msg_1');
+        $losingClaim = WebhookIdClaim::generate('endpoint-1', 'msg_1');
+
+        expect($idStore->claim($winningClaim, 300))->toBeTrue()
+            ->and($idStore->claim($losingClaim, 300))->toBeFalse();
+
+        $idStore->release($losingClaim);
+
+        expect($idStore->claim(WebhookIdClaim::generate('endpoint-1', 'msg_1'), 300))->toBeFalse();
+    }
+});
+
+it('returns the claim from verify, and gives a duplicate none to release', function (): void {
+    $idStore = new FakeSeenWebhookIdStore(static fn (): int => 1_700_000_000);
+    $verifier = new StandardWebhookVerifier(seenIds: $idStore);
+    $secret = WebhookSecret::generate();
+    $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
+    $verify = fn (): ?WebhookIdClaim => $verifier->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'endpoint-1');
+
+    $claim = $verify();
+
+    expect($claim?->scope)->toBe('endpoint-1')
+        ->and($claim?->webhookId)->toBe('msg_1')
+        ->and($verify)->toThrow(DuplicateWebhookIdException::class);
+
+    $idStore->release($claim ?? throw new LogicException('no claim'));
+
+    expect($verify())->toBeInstanceOf(WebhookIdClaim::class);
+});
+
+it('returns no claim when the verifier has no store', function (): void {
+    $secret = WebhookSecret::generate();
+    $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
+
+    expect((new StandardWebhookVerifier)->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000')))->toBeNull();
+});
+
+it('draws a fresh token for every claim', function (): void {
+    expect(WebhookIdClaim::generate('endpoint-1', 'msg_1')->token)
+        ->toMatch('/^[0-9a-f]{32}$/')
+        ->not->toBe(WebhookIdClaim::generate('endpoint-1', 'msg_1')->token);
+});
+
+it('refuses on verify the webhook ids the signer refuses (M4)', function (string $webhookId, string $message): void {
+    $secret = WebhookSecret::generate();
+
+    expect(fn () => (new StandardWebhookVerifier)->verify('{}', $webhookId, '1700000000', 'v1,x', [$secret], new DateTimeImmutable('@1700000000')))
+        ->toThrow(WebhookException::class, $message);
+})->with([
+    ['msg.1', 'Webhook id must not contain a dot.'],
+    ['', 'Webhook id must not be empty.'],
+    ["msg\n1", 'Webhook id must not contain control characters.'],
+]);
+
+it('refuses an event type over 191 bytes, the stored event_type', function (): void {
+    expect((new WebhookMessage('msg_1', str_repeat('a', 191), new DateTimeImmutable, []))->type)->toHaveLength(191)
+        ->and(fn () => new WebhookMessage('msg_1', str_repeat('a', 192), new DateTimeImmutable, []))
+        ->toThrow(WebhookException::class, 'Webhook event type must be at most 191 bytes.');
+});
+
+it('refuses a message id that is not valid UTF-8, which the event_id column rejects', function (): void {
+    new WebhookMessage("msg_\xB1", 'invoice.paid', new DateTimeImmutable, []);
+})->throws(WebhookException::class, 'Webhook id must be valid UTF-8.');
+
 it('releases an id never claimed without complaint', function (): void {
     $store = new CacheSeenWebhookIdStore(new CacheRepository(new ArrayStore), allowArrayStore: true);
-    $store->release('endpoint-1', 'msg_never');
+    $store->release(WebhookIdClaim::generate('endpoint-1', 'msg_never'));
 
-    expect($store->claim('endpoint-1', 'msg_never', 300))->toBeTrue();
+    expect($store->claim(WebhookIdClaim::generate('endpoint-1', 'msg_never'), 300))->toBeTrue();
 });
 
 it('fails closed when the store cannot release', function (): void {
     $failingStore = new class extends ArrayStore
     {
-        public function forget($key): bool
+        public function get($key): mixed
         {
             throw new RuntimeException('cache down');
         }
     };
 
-    (new CacheSeenWebhookIdStore(new CacheRepository($failingStore), allowArrayStore: true))->release('endpoint-1', 'msg_1');
+    (new CacheSeenWebhookIdStore(new CacheRepository($failingStore), allowArrayStore: true))->release(WebhookIdClaim::generate('endpoint-1', 'msg_1'));
 })->throws(WebhookIdStoreFailedException::class, 'Webhook id dedupe store failed.');
 
 it('announces each signature without secrets or the body (M13)', function (): void {
