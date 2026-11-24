@@ -128,7 +128,7 @@ it('refuses nextAttemptAt before at', function (): void {
 });
 
 it('strips C0 controls and caps errorMessage length on a byte boundary', function (): void {
-    $long = str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES + 50);
+    $long = str_repeat('a', DeliveryAttempt::maxErrorMessageBytes() + 50);
     $attempt = new DeliveryAttempt(
         'evt',
         'type',
@@ -143,14 +143,14 @@ it('strips C0 controls and caps errorMessage length on a byte boundary', functio
     expect($attempt->errorMessage)->not->toContain("\n")
         ->and($attempt->errorMessage)->not->toContain("\t")
         ->and($attempt->errorMessage)->not->toContain("\0")
-        ->and(strlen((string) $attempt->errorMessage))->toBe(DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES)
+        ->and(strlen((string) $attempt->errorMessage))->toBe(DeliveryAttempt::maxErrorMessageBytes())
         ->and($attempt->errorMessage)->toStartWith('boomok');
 });
 
 it('caps with mb_strcut so a multi-byte character is never split', function (): void {
     // Euro sign is 3 bytes in UTF-8; fill so substr would cut mid-character.
     $euro = "\u{20AC}";
-    $prefix = str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES - 1);
+    $prefix = str_repeat('a', DeliveryAttempt::maxErrorMessageBytes() - 1);
     $attempt = new DeliveryAttempt(
         'evt',
         'type',
@@ -164,9 +164,9 @@ it('caps with mb_strcut so a multi-byte character is never split', function (): 
 
     $msg = (string) $attempt->errorMessage;
     // substr() would leave a dangling euro lead byte (invalid UTF-8); mb_strcut must not.
-    expect(strlen($msg))->toBeLessThanOrEqual(DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES)
+    expect(strlen($msg))->toBeLessThanOrEqual(DeliveryAttempt::maxErrorMessageBytes())
         ->and(mb_check_encoding($msg, 'UTF-8'))->toBeTrue()
-        ->and($msg)->toBe(str_repeat('a', DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES - 1));
+        ->and($msg)->toBe(str_repeat('a', DeliveryAttempt::maxErrorMessageBytes() - 1));
 });
 
 it('strips U+2028 and U+2029 line/paragraph separators', function (): void {
@@ -232,4 +232,20 @@ it('scrubs invalid UTF-8 instead of returning an empty string', function (): voi
         ->and(mb_check_encoding((string) $attempt->errorMessage, 'UTF-8'))->toBeTrue()
         ->and($attempt->errorMessage)->toContain('ok')
         ->and($attempt->errorMessage)->toContain('end');
+});
+
+it('accepts the boundary http statuses 100 and 599, and a next attempt at the same moment', function (int $status): void {
+    $at = new DateTimeImmutable('@100');
+    $attempt = new DeliveryAttempt('evt', 'type', 1, DeliveryStatus::Failed, $status, null, $at, $at);
+
+    expect($attempt->httpStatus)->toBe($status)
+        ->and($attempt->nextAttemptAt)->toBe($at);
+})->with([100, 599]);
+
+it('keeps an error message of exactly the column width whole, and caps one byte more', function (): void {
+    $width = DeliveryAttempt::maxErrorMessageBytes();
+
+    expect($width)->toBe(500)
+        ->and(DeliveryAttempt::sanitiseErrorMessage(str_repeat('a', 500)))->toBe(str_repeat('a', 500))
+        ->and(DeliveryAttempt::sanitiseErrorMessage(str_repeat('a', 501)))->toBe(str_repeat('a', 500));
 });

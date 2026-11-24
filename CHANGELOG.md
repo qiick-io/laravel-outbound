@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the claim it won, or null without a store.
 - **`RetrySchedule::MAX_DELAY_SECONDS` is now `RetrySchedule::maxDelaySeconds()`**,
   and `MAX_JITTER_SECONDS` is no longer public (both values are unchanged).
+- **`DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES` is now
+  `DeliveryAttempt::maxErrorMessageBytes()`** (still 500).
+- **A config value of the wrong type stops the boot**, naming the key (for
+  example a string where `outbound.webhooks.payload_retention_days` takes an
+  integer), and an unknown `outbound.webhooks.retry_preset` is refused;
+  before, both silently fell back to the default. A key missing from a
+  published config still takes the package default.
+- **`OutboundRequest::asMultipart()` takes a list of parts**, as Guzzle's
+  `multipart` option does; `fromSnapshot()` now restores a multipart body
+  (it refused every one).
 - **`RemoteUrlGuard` refuses a host name outside dot-separated letters,
   digits, hyphens and underscores** ("URL is invalid."); before, a name such
   as `exa!mple.com` reached the resolver.

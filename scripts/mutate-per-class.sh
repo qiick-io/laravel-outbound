@@ -70,6 +70,11 @@ echo_and_mutate() {
   fi
 }
 
+# The provider's bindings are exercised by the whole suite.
+if in_this_shard; then
+  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests "$@"
+fi
+
 # PinnedHttpClient's transport mutants are killed only on the real wire.
 if in_this_shard; then
   # shellcheck disable=SC2086
@@ -85,6 +90,16 @@ unit_classes=(
   'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
   'Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore'
   'Qiick\Outbound\Retry\RetrySchedule'
+  'Qiick\Outbound\Retry\SystemRandomizer'
+  'Qiick\Outbound\Ssrf\DnsHostResolver'
+  'Qiick\Outbound\Ssrf\UrlGuardOptions'
+  'Qiick\Outbound\Http\HttpRequestOptions'
+  'Qiick\Outbound\Http\OutboundHttpLimits'
+  'Qiick\Outbound\Http\OutboundRequest'
+  'Qiick\Outbound\Delivery\DeliveryAttempt'
+  'Qiick\Outbound\Testing\FakeHostResolver'
+  'Qiick\Outbound\Testing\FakeOutboundHttpFactory'
+  'Qiick\Outbound\Testing\FakeSeenWebhookIdStore'
   'Qiick\Outbound\Http\OutboundHttpException'
   'Qiick\Outbound\Http\EgressProxy'
   'Qiick\Outbound\Webhooks\WebhookMessage'
