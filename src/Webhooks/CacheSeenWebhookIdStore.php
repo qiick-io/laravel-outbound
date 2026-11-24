@@ -51,19 +51,40 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
         $this->assertAtomicAdd($this->cache->getStore(), $allowArrayStore);
     }
 
-    public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
+    public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool
     {
-        $key = $this->keyPrefix.hash('sha256', $scope."\0".$webhookId);
+        $key = $this->keyFor($claim);
         $ttl = max(1, $ttlSeconds);
 
         try {
-            // Stored value is opaque; only add()'s boolean matters for claim semantics.
-            return $this->cache->add($key, true, $ttl); // @pest-mutate-ignore: TrueToFalse
+            return $this->cache->add($key, $claim->token, $ttl);
         } catch (WebhookException $e) {
             throw $e;
         } catch (Throwable $e) {
             throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, $e); // @pest-mutate-ignore: DecrementInteger,IncrementInteger
         }
+    }
+
+    public function release(WebhookIdClaim $claim): void
+    {
+        $key = $this->keyFor($claim);
+
+        // ponytail: compare, then forget, is not atomic: another request can
+        // claim the id between the two only once this claim has expired, and
+        // then only with a fresh timestamp. A store-level compare-and-delete
+        // (a Redis script) closes that gap if it ever matters.
+        try {
+            if ($this->cache->get($key) === $claim->token) {
+                $this->cache->forget($key);
+            }
+        } catch (Throwable $exception) {
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $exception);
+        }
+    }
+
+    private function keyFor(WebhookIdClaim $claim): string
+    {
+        return $this->keyPrefix.hash('sha256', $claim->scope."\0".$claim->webhookId);
     }
 
     /**

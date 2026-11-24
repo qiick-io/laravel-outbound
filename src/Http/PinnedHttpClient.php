@@ -8,6 +8,7 @@ use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\PendingRequest;
@@ -16,6 +17,7 @@ use InvalidArgumentException;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Qiick\Outbound\Enums\OutboundTransportErrorKindEnum;
+use Qiick\Outbound\Events\OutboundRequestBlockedEvent;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
@@ -55,6 +57,8 @@ final class PinnedHttpClient
      * @param  callable|null  $transferHandler  test seam replacing CurlHandler
      * @param  EgressProxy|null  $egressProxy  `outbound.http.egress_proxy`; null
      *                                         sends directly with every proxy off
+     * @param  Dispatcher|null  $events  receives {@see OutboundRequestBlockedEvent}
+     *                                   when the guard refuses a destination
      */
     public function __construct(
         private HttpFactory $http,
@@ -63,6 +67,7 @@ final class PinnedHttpClient
         private mixed $clock = null,
         private mixed $transferHandler = null,
         private ?EgressProxy $egressProxy = null,
+        private ?Dispatcher $events = null,
     ) {}
 
     /**
@@ -98,7 +103,14 @@ final class PinnedHttpClient
                 throw OutboundHttpException::forTransport(OutboundTransportErrorKindEnum::Timeout, 'Outbound request total deadline exceeded.');
             }
 
-            $destination = $this->guard->authorize($currentUrl, $options->urlOptions);
+            try {
+                $destination = $this->guard->authorize($currentUrl, $options->urlOptions);
+            } catch (UnsafeUrl $unsafeUrl) {
+                // The host and the reason only: a path or a query can carry a token.
+                $this->events?->dispatch(new OutboundRequestBlockedEvent((string) parse_url($currentUrl, PHP_URL_HOST), $unsafeUrl->getMessage()));
+
+                throw $unsafeUrl;
+            }
             $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining)));
             $hopConnect = min($options->connectTimeoutSeconds, $hopTimeout);
 

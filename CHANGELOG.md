@@ -25,9 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Guzzle 7.12 is the minimum on the 7 line** (`^7.12 || ^8.0`): older 7.x
   leave `CURLOPT_NOPROXY` unset, so `NO_PROXY` in the environment could send
   requests around the egress proxy.
+- **`SeenWebhookIdStore::claim()` takes a `WebhookIdClaim`** instead of the
+  scope and id (`WebhookIdClaim::generate($scope, $webhookId)`); a custom
+  store implements the new signature and `release(WebhookIdClaim)`, freeing
+  the id only for the claim's token. `StandardWebhookVerifier::verify()`
+  returns the claim it won, or null without a store.
 
 ### Added
 
+- Standards review gaps: `SeenWebhookIdStore::release()` (M14), implemented by
+  `CacheSeenWebhookIdStore` and `FakeSeenWebhookIdStore`, usable only with
+  the `WebhookIdClaim` that `verify()` returned; the events
+  `WebhookSignedEvent` and `OutboundRequestBlockedEvent` (M13), with no
+  secrets or bodies.
 - Egress proxy (standards review R3, S1): `outbound.http.egress_proxy` and
   `EgressProxy` route `PinnedHttpClient` through an http(s) forward proxy in
   forced tunnel mode, so the proxy only receives `CONNECT` to the address
@@ -105,6 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `StandardWebhookSigner` refuses a `webhook-id` containing `.` (M4), and
+  `WebhookMessage` validates its id (no `.`, no control characters, at most
+  191 bytes) and its event type (dot-separated `[A-Za-z0-9_]` segments, S3).
 - `webhook_endpoints.allow_private_hosts`, `auto_disable` and `created_by`
   are no longer mass-assignable.
 - A transport timeout, TLS or DNS failure now reads `Outbound request failed:

@@ -82,6 +82,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 // Only null or '' (an unset env variable) mean no proxy; any
                 // other value, a boolean or an array included, is refused.
                 egressProxy: $egressProxy === null || $egressProxy === '' ? null : EgressProxy::fromUrl(is_string($egressProxy) ? $egressProxy : ''),
+                events: $app->make(EventDispatcher::class),
             );
         });
 
@@ -99,6 +100,7 @@ final class OutboundServiceProvider extends ServiceProvider
             return new StandardWebhookSigner(
                 maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes', 1_048_576),
                 maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets', 4),
+                events: $app->make(EventDispatcher::class),
             );
         });
 
