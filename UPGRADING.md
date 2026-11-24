@@ -81,6 +81,10 @@ and the approved design before adopting a commit from `develop`.
   `RetrySchedule::maxDelaySeconds()`; `MAX_JITTER_SECONDS` is gone (one hour,
   internal). `RemoteUrlGuard` now refuses host names with characters other
   than letters, digits, hyphens, underscores and dots.
+- Pass `dedupeScope` to every `StandardWebhookVerifier::verify()` call (the
+  secret's or endpoint's id); it no longer defaults to `'default'`. Set the
+  scope column of a `WebhookEndpoint` with `forceFill()`: `fill()` and
+  `create()` ignore it now.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

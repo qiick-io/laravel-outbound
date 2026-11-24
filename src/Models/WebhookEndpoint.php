@@ -17,8 +17,9 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * Nullable policy attributes mean "use the config value". `headers` (static
  * request headers, often a token) is encrypted at rest and hidden from arrays
  * and JSON, like a secret. A product's scope
- * column (named in `outbound.webhooks.scope_column`) is an ordinary attribute
- * the product added with its own migration; the package defines none.
+ * column (named in `outbound.webhooks.scope_column`) is an attribute the
+ * product added with its own migration; the package defines none, and never
+ * mass-assigns it.
  *
  * @property int $id
  * @property string $public_id
@@ -88,16 +89,15 @@ class WebhookEndpoint extends Model
      * disable reason and the failure streak) is not mass-assignable. Nor are
      * the columns a request must never choose, which the product sets in its
      * own code: `allow_private_hosts` loosens the SSRF guard, `auto_disable`
-     * can opt an endpoint out of auto-disable, and `created_by` is the user
-     * the disable email goes to. The
-     * product's scope column is, when `outbound.webhooks.scope_column` names one.
+     * can opt an endpoint out of auto-disable, `created_by` is the user the
+     * disable email goes to, and the product's scope column (in
+     * `outbound.webhooks.scope_column`) decides the tenant: a request that
+     * chose it could create an endpoint in another tenant.
      *
      * @return list<string>
      */
     protected function fillableAttributes(): array
     {
-        $scopeColumn = config('outbound.webhooks.scope_column');
-
         return [
             'name',
             'description',
@@ -112,7 +112,6 @@ class WebhookEndpoint extends Model
             'max_attempts',
             'headers',
             'metadata',
-            ...(is_string($scopeColumn) && $scopeColumn !== '' ? [$scopeColumn] : []),
         ];
     }
 

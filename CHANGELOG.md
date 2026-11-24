@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digits, hyphens and underscores** ("URL is invalid."); before, a name such
   as `exa!mple.com` reached the resolver.
 
+- **`StandardWebhookVerifier::verify()` requires `dedupeScope`**: the shared
+  `'default'` made two tenants block each other's identical `webhook-id`.
+- **The product's scope column is no longer mass-assignable** on
+  `WebhookEndpoint`: set it with `forceFill()` in the product's own code.
+
 ### Added
 
 - Dependency register `docs/dependencies.md`: one row per runtime
@@ -216,6 +221,11 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `OutboundHttpLimits` and cannot be raised per call. Cross-origin 307/308 are
   refused even when cross-origin redirects are opted in; bodies are dropped on
   GET/HEAD hops and on cross-origin hops.
+
+- **`StandardWebhookVerifier::verify()` requires `dedupeScope`**: the shared
+  `'default'` made two tenants block each other's identical `webhook-id`.
+- **The product's scope column is no longer mass-assignable** on
+  `WebhookEndpoint`: set it with `forceFill()` in the product's own code.
 
 ### Added
 
