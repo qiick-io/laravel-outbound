@@ -54,6 +54,12 @@ return new class extends Migration
             $table->unsignedSmallInteger('timeout_seconds')->nullable();
             $table->unsignedSmallInteger('max_concurrency')->nullable();
             $table->unsignedInteger('rate_limit_per_minute')->nullable();
+            // The throttle's state (standards review S7): the minute window the
+            // claim counts attempts in, and since when an overload answer
+            // (429, 502, 503, 504) has halved the concurrency.
+            $table->timestamp('rate_window_started_at')->nullable();
+            $table->unsignedInteger('rate_window_attempts')->default(0);
+            $table->timestamp('throttled_at')->nullable();
             $table->string('retry_preset', 32)->nullable();
             $table->unsignedTinyInteger('max_attempts')->nullable();
             $table->boolean('auto_disable')->nullable();

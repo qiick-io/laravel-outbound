@@ -59,7 +59,7 @@ it('creates the five tables with the standard fixed names and every column of th
         'id', 'public_id', 'name', 'description', 'url', 'is_active', 'disabled_at', 'disabled_reason',
         'failing_since', 'consecutive_failures', 'last_success_at', 'last_failure_at', 'payload_version',
         'legacy_profile', 'https_only', 'allow_private_hosts', 'timeout_seconds', 'max_concurrency',
-        'rate_limit_per_minute', 'retry_preset', 'max_attempts', 'auto_disable', 'verified_at', 'headers',
+        'rate_limit_per_minute', 'rate_window_started_at', 'rate_window_attempts', 'throttled_at', 'retry_preset', 'max_attempts', 'auto_disable', 'verified_at', 'headers',
         'metadata', 'created_by', 'created_at', 'updated_at', 'deleted_at',
     ]],
     'webhook_endpoint_secrets' => ['webhook_endpoint_secrets', [

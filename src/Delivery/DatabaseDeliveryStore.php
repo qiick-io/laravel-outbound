@@ -14,6 +14,7 @@ use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Models\WebhookSubscription;
+use Qiick\Outbound\Retry\RetryPolicy;
 use Qiick\Outbound\Webhooks\WebhookMessage;
 
 /**
@@ -190,7 +191,24 @@ final class DatabaseDeliveryStore
                 ->where('claimed_until', '>', $now)
                 ->count();
 
-            if ($leasedCount >= ($endpoint->max_concurrency ?? $defaultMaxConcurrency)) {
+            $maxConcurrency = $endpoint->max_concurrency ?? $defaultMaxConcurrency;
+
+            // An endpoint that answered an overload gets half its concurrency
+            // until its next success (standards review S7).
+            if ($endpoint->throttled_at !== null) {
+                $maxConcurrency = max(1, intdiv($maxConcurrency, 2));
+            }
+
+            if ($leasedCount >= $maxConcurrency) {
+                return null;
+            }
+
+            // rate_limit_per_minute counts the attempts started in a fixed
+            // window, which a minute after its start begins again.
+            $isNewWindow = $endpoint->rate_window_started_at === null || $endpoint->rate_window_started_at->lessThanOrEqualTo($now->subMinute());
+            $attemptsInWindow = $isNewWindow ? 0 : $endpoint->rate_window_attempts;
+
+            if ($endpoint->rate_limit_per_minute !== null && $attemptsInWindow >= $endpoint->rate_limit_per_minute) {
                 return null;
             }
 
@@ -198,9 +216,16 @@ final class DatabaseDeliveryStore
                 ->where('next_attempt_at', '<=', $now)
                 ->update(['claimed_until' => $now->addSeconds($leaseSeconds)]);
 
-            return $leasedRows === 1
-                ? WebhookDelivery::query()->findOrFail($deliveryId)->setRelation('endpoint', $endpoint)
-                : null;
+            if ($leasedRows !== 1) {
+                return null;
+            }
+
+            WebhookEndpoint::withTrashed()->whereKey($endpoint->id)->update([
+                'rate_window_started_at' => $isNewWindow ? $now : $endpoint->rate_window_started_at,
+                'rate_window_attempts' => $attemptsInWindow + 1,
+            ]);
+
+            return WebhookDelivery::query()->findOrFail($deliveryId)->setRelation('endpoint', $endpoint);
         });
 
         return $claimedDelivery;
@@ -246,7 +271,8 @@ final class DatabaseDeliveryStore
                 'claimed_until' => null,
             ])->save();
             if ($isReceiverOutcome) {
-                $this->moveFailureStreak($delivery->endpoint_id, $isSuccess);
+                $httpStatus = $attemptAttributes['http_status'] ?? null;
+                $this->moveFailureStreak($delivery->endpoint_id, $isSuccess, is_int($httpStatus) ? $httpStatus : null);
             }
 
             if ($redeliveryAskedMeanwhile && $askedTrigger !== null) {
@@ -445,18 +471,21 @@ final class DatabaseDeliveryStore
      * The streak the auto-disable policy reads: a success clears it, a
      * failure extends it and keeps the time it started.
      */
-    private function moveFailureStreak(int $endpointId, bool $isSuccess): void
+    private function moveFailureStreak(int $endpointId, bool $isSuccess, ?int $httpStatus): void
     {
         $now = CarbonImmutable::now('UTC');
         $endpointQuery = WebhookEndpoint::withTrashed()->whereKey($endpointId);
 
         if ($isSuccess) {
-            $endpointQuery->update(['consecutive_failures' => 0, 'failing_since' => null, 'last_success_at' => $now]);
+            $endpointQuery->update(['consecutive_failures' => 0, 'failing_since' => null, 'last_success_at' => $now, 'throttled_at' => null]);
 
             return;
         }
 
-        $endpointQuery->clone()->increment('consecutive_failures', 1, ['last_failure_at' => $now]);
+        $endpointQuery->clone()->increment('consecutive_failures', 1, [
+            'last_failure_at' => $now,
+            ...(RetryPolicy::isOverloadStatus($httpStatus) ? ['throttled_at' => $now] : []),
+        ]);
         $endpointQuery->whereNull('failing_since')->update(['failing_since' => $now]);
     }
 }

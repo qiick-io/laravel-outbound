@@ -40,6 +40,9 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int|null $timeout_seconds
  * @property int|null $max_concurrency
  * @property int|null $rate_limit_per_minute
+ * @property CarbonImmutable|null $rate_window_started_at
+ * @property int $rate_window_attempts
+ * @property CarbonImmutable|null $throttled_at
  * @property string|null $retry_preset
  * @property int|null $max_attempts
  * @property bool|null $auto_disable
@@ -131,6 +134,7 @@ class WebhookEndpoint extends Model
         return [
             'is_active' => true,
             'consecutive_failures' => 0,
+            'rate_window_attempts' => 0,
             'payload_version' => '1',
         ];
     }
@@ -146,6 +150,8 @@ class WebhookEndpoint extends Model
             'disabled_reason' => WebhookEndpointDisabledReasonEnum::class,
             'failing_since' => 'immutable_datetime',
             'last_success_at' => 'immutable_datetime',
+            'rate_window_started_at' => 'immutable_datetime',
+            'throttled_at' => 'immutable_datetime',
             'last_failure_at' => 'immutable_datetime',
             'https_only' => 'boolean',
             'allow_private_hosts' => 'boolean',

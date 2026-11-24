@@ -78,6 +78,7 @@ it('reads a fresh endpoint like a stored row and casts every endpoint attribute'
 
     expect($fresh->is_active)->toBeTrue()
         ->and($fresh->consecutive_failures)->toBe(0)
+        ->and($fresh->rate_window_attempts)->toBe(0)
         ->and($fresh->payload_version)->toBe('1');
 
     $userId = (int) DB::table('users')->insertGetId(['name' => 'Owner', 'email' => 'owner@example.com', 'password' => 'x']);
@@ -87,6 +88,9 @@ it('reads a fresh endpoint like a stored row and casts every endpoint attribute'
         'disabled_reason' => WebhookEndpointDisabledReasonEnum::GoneHttp410,
         'failing_since' => '2026-11-20 10:00:00',
         'consecutive_failures' => '11',
+        'rate_window_attempts' => 7,
+        'rate_window_started_at' => '2026-11-22 10:00:00',
+        'throttled_at' => '2026-11-22 10:00:30',
         'last_success_at' => '2026-11-19 10:00:00',
         'last_failure_at' => '2026-11-22 09:00:00',
         'https_only' => 1,
@@ -110,6 +114,9 @@ it('reads a fresh endpoint like a stored row and casts every endpoint attribute'
         ->and($endpoint->disabled_reason)->toBe(WebhookEndpointDisabledReasonEnum::GoneHttp410)
         ->and($endpoint->failing_since)->toBeInstanceOf(CarbonImmutable::class)
         ->and($endpoint->consecutive_failures)->toBe(11)
+        ->and($endpoint->rate_window_attempts)->toBe(7)
+        ->and($endpoint->rate_window_started_at?->toDateTimeString())->toBe('2026-11-22 10:00:00')
+        ->and($endpoint->throttled_at?->toDateTimeString())->toBe('2026-11-22 10:00:30')
         ->and($endpoint->last_success_at)->toBeInstanceOf(CarbonImmutable::class)
         ->and($endpoint->last_failure_at)->toBeInstanceOf(CarbonImmutable::class)
         ->and($endpoint->https_only)->toBeTrue()
