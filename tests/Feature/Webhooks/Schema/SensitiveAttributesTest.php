@@ -148,6 +148,7 @@ function unsavedDelivery(WebhookEndpoint $endpoint, string $rawBody, array $attr
         'occurred_at' => '2026-11-23 10:00:00',
         'payload_version' => '1',
         'max_attempts' => 10,
+        'payload_expires_at' => '2026-12-23 10:00:00',
         ...$attributes,
     ]);
 }

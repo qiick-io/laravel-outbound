@@ -34,6 +34,7 @@ function insertDeliveryRow(int $endpointId, string $eventId = 'msg_1'): int
         'max_attempts' => 10,
         'payload_hash' => str_repeat('a', 64),
         'payload_bytes' => 2,
+        'payload_expires_at' => '2026-12-22 10:00:00',
     ]);
 }
 
@@ -106,6 +107,22 @@ it('applies the documented column defaults', function (): void {
         ->and((int) $delivery->attempts_count)->toBe(0)
         ->and($delivery->trigger)->toBe('event')
         ->and($attempt->trigger)->toBe('schedule');
+});
+
+it('requires a body expiry on every delivery, so the prune can always delete the row', function (): void {
+    $endpointId = insertEndpointRow();
+
+    expect(fn () => DB::table('webhook_deliveries')->insert([
+        'public_id' => (string) Str::uuid7(),
+        'endpoint_id' => $endpointId,
+        'event_id' => 'msg_no_expiry',
+        'event_type' => 'invoice.paid',
+        'occurred_at' => '2026-11-22 10:00:00',
+        'payload_version' => '1',
+        'max_attempts' => 10,
+        'payload_hash' => str_repeat('a', 64),
+        'payload_bytes' => 2,
+    ]))->toThrow(QueryException::class);
 });
 
 it('keeps one subscription per endpoint and event type, compared case-sensitively', function (): void {
