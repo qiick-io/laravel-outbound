@@ -223,7 +223,8 @@ it('prunes in blocks, so a large backlog never takes one long transaction', func
     }
     $bodyUpdates = 0;
     DB::listen(function ($query) use (&$bodyUpdates): void {
-        if (str_starts_with($query->sql, 'update') && str_contains($query->sql, '"payload" = ?')) {
+        // SQLite and PostgreSQL quote identifiers with ", MySQL and MariaDB with `.
+        if (preg_match('/^update .*[`"]payload[`"] = \?/', $query->sql) === 1) {
             $bodyUpdates++;
         }
     });
