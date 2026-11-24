@@ -398,19 +398,23 @@ final class DatabaseDeliveryStore
     /**
      * Delete settled deliveries created `delivery_retention_days` ago or
      * more, with their attempts (cascade). Pending ones are kept: they still
-     * have attempts to make. Works in blocks of 500.
+     * have attempts to make. So are rows whose body has not expired: a long
+     * retry plan can keep a body past `delivery_retention_days`, and until
+     * then it can still be redelivered. Works in blocks of 500.
      *
      * @return int the deliveries deleted
      */
     public function deleteExpiredDeliveries(): int
     {
-        $cutoff = CarbonImmutable::now('UTC')->subDays($this->deliveryRetentionDays);
+        $now = CarbonImmutable::now('UTC');
+        $cutoff = $now->subDays($this->deliveryRetentionDays);
         $deletedCount = 0;
 
         do {
             $expiredIds = WebhookDelivery::query()
                 ->where('status', '!=', DeliveryStatus::Pending->value)
                 ->where('created_at', '<=', $cutoff)
+                ->where('payload_expires_at', '<=', $now)
                 ->orderBy('id')
                 ->limit(500)
                 ->pluck('id')

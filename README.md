@@ -403,8 +403,8 @@ its body mid-schedule.
 `outbound:webhooks:prune` then clears the body and keeps `payload_hash` and
 `payload_bytes`, so the delivery log still proves what was sent. It also
 deletes settled deliveries created `outbound.webhooks.delivery_retention_days`
-ago (90, at least the payload retention), with their attempts; pending ones
-are kept. It works in blocks of 500, each in its own short transaction.
+ago (90, at least the payload retention), with their attempts, once their
+body has expired too; pending ones are kept. It works in blocks of 500, each in its own short transaction.
 
 - A body that has expired, pruned or not, cannot be redelivered.
 - A pending delivery whose body expires (an endpoint disabled for weeks) is

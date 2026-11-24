@@ -128,7 +128,8 @@ return [
         /*
          * Days a settled delivery row and its attempts are kept before
          * `outbound:webhooks:prune` deletes them. At least the payload
-         * retention. Pending deliveries are never deleted.
+         * retention. Pending deliveries, and rows whose body has not
+         * expired yet, are never deleted.
          */
         'delivery_retention_days' => (int) env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90),
 
