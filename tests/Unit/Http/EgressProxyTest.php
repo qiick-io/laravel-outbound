@@ -17,6 +17,8 @@ it('accepts an http or https proxy with an optional port and credentials', funct
     'http://10.0.0.5:8080',
     'http://user:s3cret@proxy.internal:3128',
     'http://[fd00::5]:3128',
+    'http://user@proxy.internal:3128',
+    'http://user:@proxy.internal:3128',
 ]);
 
 it('refuses anything else, without echoing the value', function (string $url): void {
@@ -39,6 +41,11 @@ it('refuses anything else, without echoing the value', function (string $url): v
     'just a slash' => ['http://proxy.internal:3128/'],
     'not a URL' => ['not a url'],
     'empty' => [''],
+    'a scheme alone' => ['http:'],
+    'a trailing newline, which parse_url hides in the host' => ["http://proxy.internal:3128\n"],
+    'a control character inside the host' => ["http://proxy\x00.internal:3128"],
+    'an empty port' => ['http://proxy.internal:'],
+    'a padded port' => ['http://proxy.internal:03128'],
 ]);
 
 it('never shows its credentials as text, in a dump or serialized', function (): void {
@@ -46,6 +53,7 @@ it('never shows its credentials as text, in a dump or serialized', function (): 
 
     expect((string) $proxy)->toBe('http://[REDACTED]@proxy.internal:3128')
         ->and(print_r($proxy, true))->not->toContain('s3cret')
+        ->and(var_export($proxy->__debugInfo(), true))->toBe(var_export(['url' => 'http://[REDACTED]@proxy.internal:3128'], true))
         ->and(fn () => serialize($proxy))->toThrow(LogicException::class, 'An egress proxy must not be serialized.');
 });
 

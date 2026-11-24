@@ -40,21 +40,21 @@ final class EgressProxy
     ): self {
         $parts = parse_url($url);
 
-        if (
-            ! is_array($parts)
-            || ! in_array($parts['scheme'] ?? null, ['http', 'https'], true)
-            || ($parts['host'] ?? '') === ''
-            || array_diff(array_keys($parts), ['scheme', 'host', 'port', 'user', 'pass']) !== []
-            || ! str_starts_with($url, $parts['scheme'].'://')
-            || str_ends_with($url, '/')
-        ) {
-            throw new InvalidArgumentException('outbound.http.egress_proxy must be an http:// or https:// proxy URL with a host and nothing after the port.');
+        if (! is_array($parts) || ! in_array($parts['scheme'] ?? null, ['http', 'https'], true) || ! isset($parts['host'])) {
+            throw self::invalidUrl();
         }
 
         $hostAndPort = $parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
-        $credentials = isset($parts['user']) ? '[REDACTED]@' : '';
+        $credentials = isset($parts['user']) ? $parts['user'].(isset($parts['pass']) ? ':'.$parts['pass'] : '').'@' : '';
 
-        return new self($url, "{$parts['scheme']}://{$credentials}{$hostAndPort}");
+        // parse_url() tolerates what curl would read differently (a newline
+        // it shows as `_` in the host, an empty or padded port, a path):
+        // only a URL that is exactly its own parts is accepted.
+        if ("{$parts['scheme']}://{$credentials}{$hostAndPort}" !== $url) {
+            throw self::invalidUrl();
+        }
+
+        return new self($url, "{$parts['scheme']}://".($credentials === '' ? '' : '[REDACTED]@').$hostAndPort);
     }
 
     /**
@@ -86,5 +86,13 @@ final class EgressProxy
     public function __serialize(): array
     {
         throw new LogicException('An egress proxy must not be serialized.');
+    }
+
+    /**
+     * The message never repeats the value, which may hold credentials.
+     */
+    private static function invalidUrl(): InvalidArgumentException
+    {
+        return new InvalidArgumentException('outbound.http.egress_proxy must be an http:// or https:// proxy URL with a host and nothing after the port.');
     }
 }
