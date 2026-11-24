@@ -175,6 +175,14 @@ return [
         'allow_raw_legacy_secret' => (bool) env('OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET', false),
 
         /*
+         * Legacy formats by the name an endpoint's `legacy_profile` holds:
+         * each value is a container binding of a LegacyWebhookProfileContract, for
+         * example `['externa-1' => ExternaWebhookProfile::class]`. An endpoint
+         * naming a profile that is not here is refused at every attempt.
+         */
+        'legacy_profiles' => [],
+
+        /*
          * The product's own scope column on `webhook_endpoints` (for example
          * `project_id`), added by the product's migration. Null means one
          * instance-wide scope. Table names are fixed by the package.

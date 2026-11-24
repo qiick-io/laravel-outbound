@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Qiick\Outbound\Contracts\HostResolver;
-use Qiick\Outbound\Contracts\MetadataPolicy;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -63,6 +63,7 @@ it('merges the package defaults into the outbound config', function (): void {
                 'endpoint_url' => null,
             ],
             'allow_raw_legacy_secret' => false,
+            'legacy_profiles' => [],
             'scope_column' => null,
             'users_table' => 'users',
         ],
@@ -209,7 +210,7 @@ it('uses the package default for a key a published config lacks', function (): v
 });
 
 it('gives the guard the metadata policy a product binds', function (): void {
-    $this->app->instance(MetadataPolicy::class, new class implements MetadataPolicy
+    $this->app->instance(MetadataPolicyContract::class, new class implements MetadataPolicyContract
     {
         public function additionalMetadataHosts(): array
         {

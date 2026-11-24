@@ -15,7 +15,8 @@ use InvalidArgumentException;
 use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
-use Qiick\Outbound\Contracts\MetadataPolicy;
+use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
@@ -59,7 +60,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 hostResolver: $resolver,
                 allowPrivateHosts: self::configBool($config, 'outbound.ssrf.allow_private_hosts'),
                 httpsOnly: self::configBool($config, 'outbound.ssrf.https_only'),
-                metadataPolicy: $app->bound(MetadataPolicy::class) ? $app->make(MetadataPolicy::class) : null,
+                metadataPolicy: $app->bound(MetadataPolicyContract::class) ? $app->make(MetadataPolicyContract::class) : null,
             );
         });
 
@@ -176,6 +177,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 exceptionHandler: $app->make(ExceptionHandler::class),
                 disablePolicy: $app->make(EndpointDisablePolicy::class),
                 events: $app->make(EventDispatcher::class),
+                legacyProfiles: self::legacyProfiles($app, $config),
             );
         });
 
@@ -224,6 +226,31 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class]);
         }
+    }
+
+    /**
+     * `outbound.webhooks.legacy_profiles`, each binding resolved.
+     *
+     * @return array<string, LegacyWebhookProfileContract>
+     *
+     * @throws InvalidArgumentException when an entry is not a name and a
+     *                                  binding of a LegacyWebhookProfileContract
+     */
+    private static function legacyProfiles(Application $app, ConfigRepository $config): array
+    {
+        $profiles = [];
+
+        foreach ((array) self::configValue($config, 'outbound.webhooks.legacy_profiles') as $name => $binding) {
+            $profile = is_string($name) && is_string($binding) ? $app->make($binding) : null;
+
+            if (! is_string($name) || ! $profile instanceof LegacyWebhookProfileContract) {
+                throw new InvalidArgumentException('outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.');
+            }
+
+            $profiles[$name] = $profile;
+        }
+
+        return $profiles;
     }
 
     /**

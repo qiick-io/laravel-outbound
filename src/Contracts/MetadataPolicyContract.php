@@ -15,7 +15,7 @@ namespace Qiick\Outbound\Contracts;
  *
  * @api
  */
-interface MetadataPolicy
+interface MetadataPolicyContract
 {
     /**
      * @return list<string> host names or IP addresses

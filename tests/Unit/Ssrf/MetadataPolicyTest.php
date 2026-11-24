@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Qiick\Outbound\Contracts\MetadataPolicy;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Testing\FakeHostResolver;
 
@@ -16,7 +16,7 @@ use Qiick\Outbound\Testing\FakeHostResolver;
  */
 function guardWithMetadataPolicy(array $hosts, FakeHostResolver $resolver = new FakeHostResolver): RemoteUrlGuard
 {
-    return new RemoteUrlGuard($resolver, allowPrivateHosts: true, metadataPolicy: new class($hosts) implements MetadataPolicy
+    return new RemoteUrlGuard($resolver, allowPrivateHosts: true, metadataPolicy: new class($hosts) implements MetadataPolicyContract
     {
         /** @param  list<string>  $hosts */
         public function __construct(private array $hosts) {}

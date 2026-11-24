@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Ssrf;
 
 use Qiick\Outbound\Contracts\HostResolver;
-use Qiick\Outbound\Contracts\MetadataPolicy;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Symfony\Component\HttpFoundation\IpUtils;
 
 /**
@@ -23,7 +23,7 @@ final class RemoteUrlGuard
         private HostResolver $hostResolver,
         private bool $allowPrivateHosts = false,
         private bool $httpsOnly = false,
-        private ?MetadataPolicy $metadataPolicy = null,
+        private ?MetadataPolicyContract $metadataPolicy = null,
     ) {}
 
     /**
