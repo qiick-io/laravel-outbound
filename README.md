@@ -153,7 +153,8 @@ an http(s) proxy URL, null or an empty string stops the boot.
 - Only `http://` and `https://` proxies with a host and nothing after the
   port are accepted, checked at boot; a SOCKS proxy could resolve names
   itself. The proxy's own address is trusted infrastructure, not checked by
-  the guard.
+  the guard. Name the port: without one, libcurl uses 1080 for an `http://`
+  proxy and 443 for an `https://` one.
 - `EgressProxy` keeps the credentials out of string casts, dumps (`dump()`,
   `dd()`, `var_export()`), serialization, exception messages and exception
   traces; a proxy refusal surfaces as a transport error with the fixed
@@ -233,6 +234,15 @@ timestamp, signature count, body length) after each signing, and
 `OutboundRequestBlockedEvent` (host and the guard's reason, never the path
 or query) when `PinnedHttpClient`'s guard refuses a destination, for
 alerting on attempts to reach internal addresses.
+
+Both are dispatched synchronously, before the refusal is thrown or the
+signature returned, so their listeners must not throw: make them
+`ShouldQueue` or catch inside. A listener that throws replaces the
+`UnsafeUrl` or `WebhookException` a direct caller expects (the request still
+fails closed and nothing is sent), and in the delivery coordinator the
+attempt is recorded as `internal_error` instead of its real outcome. The
+host in `OutboundRequestBlockedEvent` comes from `parse_url()`, not from the
+guard's own parse: rely on it for alerting, not for decisions.
 
 `WebhookSecret::parseAllowingLegacyRaw()` accepts non-`whsec_` base64 only when
 `outbound.webhooks.allow_raw_legacy_secret` is true. Secrets use

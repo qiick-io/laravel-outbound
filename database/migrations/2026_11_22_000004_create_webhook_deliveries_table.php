@@ -18,7 +18,9 @@ use Illuminate\Support\Facades\Schema;
  * (`endpoint_id`, `event_id`) unique key, led by the endpoint, cannot.
  *
  * `payload` is the exact raw body under Laravel's `encrypted` cast, kept until
- * `payload_expires_at` (30 days by default) and then pruned to null;
+ * `payload_expires_at` (30 days by default, or the end of the retry plan if
+ * later; required, so the prune can always delete the row) and then pruned
+ * to null;
  * `payload_hash` and `payload_bytes` stay for good (review R5). Retries are
  * driven by `next_attempt_at` through the (`status`, `next_attempt_at`)
  * index, not by queue delays, so a retry 24 h away survives queue loss.
@@ -79,7 +81,7 @@ return new class extends Migration
             $table->longText('payload')->nullable();
             $table->char('payload_hash', 64);
             $table->unsignedInteger('payload_bytes');
-            $table->dateTime('payload_expires_at')->nullable()->index();
+            $table->dateTime('payload_expires_at')->index();
             $table->string('trigger', 16)->default('event');
             $table->json('metadata')->nullable();
             $table->timestamps();

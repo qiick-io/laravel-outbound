@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success for 5 days with at least 10 consecutive failures, stops receiving
   deliveries, and its creator is emailed. Re-enable it with
   `WebhookDeliveryCoordinator::enableEndpoint()`.
+- **`webhook_deliveries.payload_expires_at` is required**: a product that
+  inserts delivery rows itself sets it. A row without it was never deleted
+  by the prune.
 - **Guzzle 7.12 is the minimum on the 7 line** (`^7.12 || ^8.0`): older 7.x
   leave `CURLOPT_NOPROXY` unset, so `NO_PROXY` in the environment could send
   requests around the egress proxy.

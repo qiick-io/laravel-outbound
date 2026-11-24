@@ -64,6 +64,19 @@ and the approved design before adopting a commit from `develop`.
 - `SeenWebhookIdStore` gains `release()`: a custom implementation must add
   it. Webhook ids with a `.` and event types outside dot-separated
   `[A-Za-z0-9_]` segments (for example `invoice-paid`) are now refused.
+- `SeenWebhookIdStore::claim()` takes a `WebhookIdClaim` instead of the
+  scope and id, and `release()` takes that claim: a custom store implements
+  `claim(WebhookIdClaim $claim, int $ttlSeconds): bool`, stores
+  `$claim->token`, and releases only while it still holds that token. A
+  direct caller builds the claim with `WebhookIdClaim::generate($scope,
+  $webhookId)`. `StandardWebhookVerifier::verify()` returns the claim it won
+  (null without a store); keep it to release the id when processing fails.
+  Event types are at most 191 bytes, and webhook ids must be valid UTF-8.
+- The minimum Guzzle on the 7 line is 7.12 (`^7.12 || ^8.0`): run
+  `composer update guzzlehttp/guzzle` if the application pins an older 7.x.
+- `webhook_deliveries.payload_expires_at` is required: a product that
+  inserts delivery rows itself (seeders, imports) sets it, or the insert
+  fails. Recreate the database.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

@@ -40,6 +40,7 @@ function createDeliveryModel(WebhookEndpoint $endpoint, array $attributes = []):
         'occurred_at' => CarbonImmutable::parse('2026-11-22 10:00:00'),
         'payload_version' => '1',
         'max_attempts' => 10,
+        'payload_expires_at' => CarbonImmutable::parse('2026-12-22 10:00:00'),
         ...$attributes,
     ]);
     $delivery->save();

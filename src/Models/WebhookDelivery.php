@@ -57,7 +57,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property string|null $payload
  * @property string $payload_hash
  * @property int $payload_bytes
- * @property CarbonImmutable|null $payload_expires_at
+ * @property CarbonImmutable $payload_expires_at
  * @property WebhookDeliveryTriggerEnum $trigger
  * @property array<string, mixed>|null $metadata
  * @property CarbonImmutable|null $created_at

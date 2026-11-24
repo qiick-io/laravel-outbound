@@ -268,7 +268,7 @@ final class WebhookDeliveryCoordinator
             throw new WebhookException('A cancelled delivery was withdrawn and cannot be redelivered.');
         }
 
-        if ($delivery->payload === null || $delivery->payload_expires_at?->lessThanOrEqualTo(CarbonImmutable::now()) === true) {
+        if ($delivery->payload === null || $delivery->payload_expires_at->lessThanOrEqualTo(CarbonImmutable::now())) {
             throw new WebhookException('Webhook delivery body has been pruned or has expired; it cannot be redelivered.');
         }
 
@@ -365,9 +365,7 @@ final class WebhookDeliveryCoordinator
      */
     private function withLiveBody(Builder $deliveriesQuery): void
     {
-        $deliveriesQuery->whereNotNull('payload')->where(function (Builder $expiryQuery): void {
-            $expiryQuery->whereNull('payload_expires_at')->orWhere('payload_expires_at', '>', CarbonImmutable::now('UTC'));
-        });
+        $deliveriesQuery->whereNotNull('payload')->where('payload_expires_at', '>', CarbonImmutable::now('UTC'));
     }
 
     /**
