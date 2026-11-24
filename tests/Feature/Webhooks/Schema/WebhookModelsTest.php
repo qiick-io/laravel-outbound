@@ -219,6 +219,7 @@ it('encrypts the body at rest and casts every delivery attempt', function (): vo
 
     expect($fresh->status)->toBe(DeliveryStatus::Pending)
         ->and($fresh->attempts_count)->toBe(0)
+        ->and($fresh->redelivery_requests)->toBe(0)
         ->and($fresh->trigger)->toBe(WebhookDeliveryTriggerEnum::Event);
 
     $endpoint = createEndpointModel();
