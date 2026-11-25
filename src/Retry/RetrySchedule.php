@@ -10,22 +10,23 @@ namespace Qiick\Outbound\Retry;
  * Prefer {@see standardDelays()} (Standard Webhooks example: 5s, 5m, 30m, 2h,
  * 5h, 10h, 14h, 20h, 24h — about 75.6 hours end-to-end). Each delay is the wait
  * from the previous attempt, not from the first send. Bound
- * {@see shortDelays()} to a migration window only. Products own concurrency
- * caps, circuit-break / auto-disable, and honouring Retry-After / 410 / 429.
+ * {@see shortDelays()} to a migration window only. {@see RetryPolicy} applies
+ * these delays with Retry-After and 410; the delivery coordinator enforces
+ * per-endpoint concurrency.
  *
  * @api
  */
 final class RetrySchedule
 {
     /**
-     * Hard cap so delay + jitter never overflows PHP integers.
+     * Hard cap so delay + jitter never overflows PHP integers (30 days).
+     * Methods rather than constants: a constant's line has no coverage, so
+     * mutation testing could not check the values.
      */
-    public const int MAX_DELAY_SECONDS = 2_592_000; // 30 days
-
-    /**
-     * Cap on the configured jitter argument (before ±floor(delay/2)).
-     */
-    public const int MAX_JITTER_SECONDS = 3_600; // 1 hour
+    public static function maxDelaySeconds(): int
+    {
+        return 2_592_000;
+    }
 
     /**
      * Standard Webhooks example delays (seconds).
@@ -50,7 +51,7 @@ final class RetrySchedule
     /**
      * Apply symmetric jitter capped to ±min(jitter, floor(delay/2)) so a
      * positive delay never becomes an immediate retry. The randomizer offset
-     * is clamped to that amplitude; the result is capped at {@see MAX_DELAY_SECONDS}.
+     * is clamped to that amplitude; the result is capped at {@see maxDelaySeconds()}.
      *
      * @throws \InvalidArgumentException when delay or jitter is negative
      */
@@ -64,8 +65,8 @@ final class RetrySchedule
             throw new \InvalidArgumentException('Retry jitter must not be negative.');
         }
 
-        $delaySeconds = min($delaySeconds, self::MAX_DELAY_SECONDS);
-        $jitterSeconds = min($jitterSeconds, self::MAX_JITTER_SECONDS);
+        $delaySeconds = min($delaySeconds, self::maxDelaySeconds());
+        $jitterSeconds = min($jitterSeconds, self::maxJitterSeconds());
 
         // Amplitude ≤ floor(delay/2) keeps wait ≥ ceil(delay/2) for delay > 0.
         $amplitude = min($jitterSeconds, intdiv($delaySeconds, 2));
@@ -73,20 +74,17 @@ final class RetrySchedule
             return $delaySeconds;
         }
 
-        $offset = $random->intBetween(-$amplitude, $amplitude);
-        // Boundary == amplitude is a no-op clamp (same value either way).
-        if ($offset < -$amplitude) { // @pest-mutate-ignore: SmallerToSmallerOrEqual
-            $offset = -$amplitude;
-        } elseif ($offset > $amplitude) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
-            $offset = $amplitude;
-        }
+        // A randomizer that strays outside ±amplitude is clamped back.
+        $offset = max(-$amplitude, min($amplitude, $random->intBetween(-$amplitude, $amplitude)));
 
-        $withJitter = $delaySeconds + $offset;
-        // Equality with the cap returns the same value either branch.
-        if ($withJitter > self::MAX_DELAY_SECONDS) { // @pest-mutate-ignore: GreaterToGreaterOrEqual
-            return self::MAX_DELAY_SECONDS;
-        }
+        return min($delaySeconds + $offset, self::maxDelaySeconds());
+    }
 
-        return $withJitter;
+    /**
+     * Cap on the configured jitter argument, before ±floor(delay/2) (1 hour).
+     */
+    private static function maxJitterSeconds(): int
+    {
+        return 3_600;
     }
 }

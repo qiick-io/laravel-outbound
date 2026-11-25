@@ -122,3 +122,7 @@ it('refuses unserializing a forged payload that would bypass length checks', fun
     expect(fn () => unserialize($forged))
         ->toThrow(WebhookException::class, 'WebhookSecret must not be unserialized');
 });
+
+it('generates a 32-byte key by default', function (): void {
+    expect(strlen(WebhookSecret::generate()->signingKey()))->toBe(32);
+});

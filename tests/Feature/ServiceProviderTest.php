@@ -2,18 +2,30 @@
 
 declare(strict_types=1);
 
+use Carbon\CarbonImmutable;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver;
+use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
+use Qiick\Outbound\Webhooks\WebhookException;
+use Qiick\Outbound\Webhooks\WebhookSecret;
+use Qiick\Outbound\Webhooks\WebhookSecretResolver;
 
 it('merges the package defaults into the outbound config', function (): void {
     expect(config('outbound'))->toMatchArray([
+        'migrations' => [
+            'load' => true,
+        ],
         'ssrf' => [
             'allow_private_hosts' => false,
             'https_only' => false,
@@ -26,15 +38,34 @@ it('merges the package defaults into the outbound config', function (): void {
             'total_deadline_seconds' => 30,
             'max_response_bytes' => 1_048_576,
             'max_redirects' => 0,
+            'egress_proxy' => null,
         ],
         'webhooks' => [
             'replay_tolerance_seconds' => 300,
             'max_payload_bytes' => 1_048_576,
             'max_signatures' => 8,
             'max_secrets' => 4,
+            'secret_rotation_grace_seconds' => 86_400,
             'retry_preset' => 'standard',
             'retry_jitter_seconds' => 30,
+            'timeout_seconds' => 15,
+            'respect_retry_after' => true,
+            'retry_after_cap_seconds' => 86_400,
+            'default_max_concurrency' => 2,
+            'allow_endpoint_private_hosts' => false,
+            'payload_retention_days' => 30,
+            'delivery_retention_days' => 90,
+            'auto_disable' => [
+                'enabled' => true,
+                'no_success_days' => 5,
+                'min_consecutive_failures' => 10,
+                'notify_owner' => true,
+                'endpoint_url' => null,
+            ],
             'allow_raw_legacy_secret' => false,
+            'legacy_profiles' => [],
+            'scope_column' => null,
+            'users_table' => 'users',
         ],
     ]);
 });
@@ -69,4 +100,126 @@ it('fails clearly when resolving the verifier with ArrayStore outside testing', 
 
     expect(fn () => $this->app->make(StandardWebhookVerifier::class))
         ->toThrow(UnsupportedWebhookIdCacheStoreException::class, 'refuses ArrayStore outside tests');
+});
+
+it('binds the secret resolver and rotator as singletons', function (): void {
+    expect($this->app->make(WebhookSecretResolver::class))->toBeInstanceOf(DatabaseWebhookSecretResolver::class)
+        ->and($this->app->make(WebhookSecretResolver::class))->toBe($this->app->make(WebhookSecretResolver::class))
+        ->and($this->app->make(SecretRotator::class))->toBe($this->app->make(SecretRotator::class));
+});
+
+it('configures the rotator grace period and secret cap from config', function (): void {
+    CarbonImmutable::setTestNow('2026-11-23 10:00:00');
+    config()->set('outbound.webhooks.secret_rotation_grace_seconds', 60);
+    config()->set('outbound.webhooks.max_secrets', 2);
+    // Boot already built the singleton (to check max_secrets); build it again.
+    $this->app->forgetInstance(SecretRotator::class);
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $rotator = $this->app->make(SecretRotator::class);
+    $old = $rotator->issue($endpoint);
+    $rotator->rotate($endpoint);
+
+    expect($old->refresh()->expires_at?->toDateTimeString())->toBe('2026-11-23 10:01:00')
+        ->and(fn () => $rotator->rotate($endpoint))
+        ->toThrow(WebhookException::class, 'Rotating would exceed 2 signing secrets');
+
+    CarbonImmutable::setTestNow();
+});
+
+it('lets the resolver read legacy raw secrets only when the config allows them', function (bool $isAllowed): void {
+    config()->set('outbound.webhooks.allow_raw_legacy_secret', $isAllowed);
+    $endpoint = WebhookEndpoint::query()->create(['url' => 'https://hooks.example.com/receive']);
+    $endpoint->secrets()->forceCreate(['secret' => base64_encode(str_repeat('k', 32)), 'is_legacy_raw' => true, 'is_primary' => true]);
+    $resolve = fn () => $this->app->make(WebhookSecretResolver::class)->signingSetFor($endpoint);
+
+    if ($isAllowed) {
+        expect($resolve()->secrets())->toHaveCount(1);
+
+        return;
+    }
+
+    expect($resolve)->toThrow(WebhookException::class, 'whsec_ prefix');
+})->with([true, false]);
+
+it('refuses to boot with a max_secrets above four', function (): void {
+    $this->configBeforeBoot = ['outbound.webhooks.max_secrets' => 5];
+
+    expect(fn () => $this->refreshApplication())->toThrow(WebhookException::class, 'max_secrets must be between 1 and 4');
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+});
+
+it('builds the pinned client with the configured egress proxy, or none', function (?string $configuredProxy, ?string $expectedProxy): void {
+    config()->set('outbound.http.egress_proxy', $configuredProxy);
+    $this->app->forgetInstance(PinnedHttpClient::class);
+
+    $egressProxy = (new ReflectionProperty(PinnedHttpClient::class, 'egressProxy'))->getValue($this->app->make(PinnedHttpClient::class));
+
+    expect($egressProxy === null ? null : $egressProxy->url())->toBe($expectedProxy);
+})->with([
+    'unset' => [null, null],
+    'empty, as an unset env variable leaves it' => ['', null],
+    'configured' => ['http://proxy.internal:3128', 'http://proxy.internal:3128'],
+]);
+
+it('refuses to boot with an egress proxy that is not an http(s) proxy URL', function (mixed $configuredProxy): void {
+    $this->configBeforeBoot = ['outbound.http.egress_proxy' => $configuredProxy];
+
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, 'outbound.http.egress_proxy must be an http:// or https:// proxy URL');
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+})->with([
+    'socks' => ['socks5h://proxy.internal:1080'],
+    // OUTBOUND_EGRESS_PROXY=true reaches the config as a boolean: never "no proxy".
+    'a boolean' => [true],
+    'an array from a published config' => [['http' => 'http://proxy.internal:3128']],
+]);
+
+it('refuses to boot with a config value of the wrong type, naming the key', function (string $key, mixed $value, string $message): void {
+    $this->configBeforeBoot = [$key => $value];
+
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $message);
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+})->with([
+    'an integer as a string' => ['outbound.webhooks.payload_retention_days', '30', 'outbound.webhooks.payload_retention_days must be an integer.'],
+    'a boolean as a string' => ['outbound.migrations.load', 'yes', 'outbound.migrations.load must be true or false.'],
+]);
+
+it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {
+    config()->set('outbound.webhooks.retry_preset', $preset);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(fn () => $this->app->make(WebhookDeliveryCoordinator::class))->toThrow(InvalidArgumentException::class, $message);
+})->with([
+    'not a string' => [5, 'outbound.webhooks.retry_preset must be a string.'],
+    'an unknown name' => ['fast', 'outbound.webhooks.retry_preset must be standard or short.'],
+]);
+
+it('uses the package default for a key a published config lacks', function (): void {
+    config()->set('outbound.webhooks.max_secrets', null);
+    $this->app->forgetInstance(StandardWebhookSigner::class);
+    $secrets = array_map(fn (): WebhookSecret => WebhookSecret::generate(), range(1, 5));
+
+    expect(fn () => $this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', $secrets))
+        ->toThrow(WebhookException::class, 'Too many webhook secrets.')
+        ->and($this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', array_slice($secrets, 0, 4))->headers['webhook-signature'])->toContain('v1,');
+});
+
+it('gives the guard the metadata policy a product binds', function (): void {
+    $this->app->instance(MetadataPolicyContract::class, new class implements MetadataPolicyContract
+    {
+        public function additionalMetadataHosts(): array
+        {
+            return ['meta.example'];
+        }
+    });
+    $this->app->forgetInstance(RemoteUrlGuard::class);
+
+    $result = $this->app->make(RemoteUrlGuard::class)->tryAuthorize('https://meta.example/latest');
+
+    expect($result['ok'] ? null : $result['reason'])->toBe('Host is not allowed.');
 });

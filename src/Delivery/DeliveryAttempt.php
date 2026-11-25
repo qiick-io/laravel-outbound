@@ -18,8 +18,6 @@ use DateTimeImmutable;
  */
 final readonly class DeliveryAttempt
 {
-    public const int MAX_ERROR_MESSAGE_BYTES = 500;
-
     public readonly ?string $errorMessage;
 
     /**
@@ -64,7 +62,12 @@ final readonly class DeliveryAttempt
         $this->errorMessage = self::sanitiseErrorMessage($errorMessage);
     }
 
-    private static function sanitiseErrorMessage(?string $errorMessage): ?string
+    /**
+     * Strips control, C1, line-separator and bidi characters, scrubs invalid
+     * UTF-8 and caps the result at {@see maxErrorMessageBytes()}. Callers
+     * still remove URLs, tokens and secrets first.
+     */
+    public static function sanitiseErrorMessage(?string $errorMessage): ?string
     {
         if ($errorMessage === null) {
             return null;
@@ -73,17 +76,25 @@ final readonly class DeliveryAttempt
         // Replace invalid UTF-8 sequences instead of collapsing to empty.
         $scrubbed = mb_scrub($errorMessage, 'UTF-8');
 
-        // C0 + DEL, C1 controls, U+2028/U+2029, bidi isolates/embeds.
+        // C0 + DEL, C1 controls, U+2028/U+2029, bidi isolates/embeds. On
+        // scrubbed UTF-8 preg_replace() cannot fail.
         $stripped = preg_replace(
             '/[\x00-\x1F\x7F\x{0080}-\x{009F}\x{2028}\x{2029}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u',
             '',
             $scrubbed,
-        ) ?? '';
+        ) ?? $scrubbed;
 
-        if (strlen($stripped) > self::MAX_ERROR_MESSAGE_BYTES) {
-            return mb_strcut($stripped, 0, self::MAX_ERROR_MESSAGE_BYTES, 'UTF-8');
-        }
+        // A shorter message comes back whole.
+        return mb_strcut($stripped, 0, self::maxErrorMessageBytes(), 'UTF-8');
+    }
 
-        return $stripped;
+    /**
+     * The longest stored error message, in bytes: the `last_error` column
+     * width. A method rather than a constant: a constant's line has no
+     * coverage, so mutation testing could not check the value.
+     */
+    public static function maxErrorMessageBytes(): int
+    {
+        return 500;
     }
 }

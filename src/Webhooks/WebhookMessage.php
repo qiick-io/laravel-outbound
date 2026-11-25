@@ -18,14 +18,41 @@ use JsonException;
 final readonly class WebhookMessage
 {
     /**
+     * The id is checked here, at dispatch, rather than at every signing: it
+     * is the `webhook-id` (no `.`, which separates the signed fields; no
+     * control characters) and the stored `event_id` (at most 191 bytes of
+     * valid UTF-8). The type is stored too (at most 191 bytes) and follows
+     * Standard Webhooks "Event types": dot-separated segments of letters,
+     * digits and underscores (standards review S3).
+     *
      * @param  array<string, mixed>  $data
+     *
+     * @throws WebhookException when the id or the type is not valid
      */
     public function __construct(
         public string $id,
         public string $type,
         public DateTimeImmutable $timestamp,
         public array $data,
-    ) {}
+    ) {
+        StandardWebhookSigner::assertValidWebhookId($id);
+
+        if (strlen($id) > 191) {
+            throw new WebhookException('Webhook id must be at most 191 bytes.');
+        }
+
+        if (! mb_check_encoding($id, 'UTF-8')) {
+            throw new WebhookException('Webhook id must be valid UTF-8.');
+        }
+
+        if (strlen($type) > 191) {
+            throw new WebhookException('Webhook event type must be at most 191 bytes.');
+        }
+
+        if (preg_match('/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/D', $type) !== 1) {
+            throw new WebhookException('Webhook event type must be dot-separated segments of letters, digits and underscores.');
+        }
+    }
 
     /**
      * Compact UTF-8 JSON: `{type, timestamp, data}` with stable key order as

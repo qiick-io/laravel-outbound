@@ -14,15 +14,16 @@ use Illuminate\Cache\Repository;
 use Illuminate\Cache\StorageStore;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
 use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 
 it('claims atomically with the array store when allowed for tests', function (): void {
     $cache = new Repository(new ArrayStore);
     $store = new CacheSeenWebhookIdStore($cache, allowArrayStore: true);
 
-    expect($store->claim('scope-a', 'msg_1', 60))->toBeTrue()
-        ->and($store->claim('scope-a', 'msg_1', 60))->toBeFalse()
-        ->and($store->claim('scope-b', 'msg_1', 60))->toBeTrue();
+    expect($store->claim(WebhookIdClaim::generate('scope-a', 'msg_1'), 60))->toBeTrue()
+        ->and($store->claim(WebhookIdClaim::generate('scope-a', 'msg_1'), 60))->toBeFalse()
+        ->and($store->claim(WebhookIdClaim::generate('scope-b', 'msg_1'), 60))->toBeTrue();
 });
 
 it('floors claim TTL at one second', function (): void {
@@ -39,9 +40,9 @@ it('floors claim TTL at one second', function (): void {
     };
     $store = new CacheSeenWebhookIdStore(new Repository($inner), allowArrayStore: true);
 
-    expect($store->claim('s', 'id', 0))->toBeTrue()
+    expect($store->claim(WebhookIdClaim::generate('s', 'id'), 0))->toBeTrue()
         ->and($inner->seenTtl)->toBe(1)
-        ->and($store->claim('s', 'id2', -5))->toBeTrue()
+        ->and($store->claim(WebhookIdClaim::generate('s', 'id2'), -5))->toBeTrue()
         ->and($inner->seenTtl)->toBe(1);
 });
 
@@ -49,7 +50,7 @@ it('hashes scope and id into a bounded Memcached-safe key', function (): void {
     $cache = new Repository(new ArrayStore);
     $store = new CacheSeenWebhookIdStore($cache, keyPrefix: 't:', allowArrayStore: true);
 
-    expect($store->claim('tenant', 'msg_'.str_repeat('x', 200), 30))->toBeTrue();
+    expect($store->claim(WebhookIdClaim::generate('tenant', 'msg_'.str_repeat('x', 200)), 30))->toBeTrue();
 
     $keys = array_keys($cache->getStore()->all());
     expect($keys)->toHaveCount(1)
@@ -170,6 +171,14 @@ it('wraps cache failures as WebhookIdStoreFailedException', function (): void {
     };
     $store = new CacheSeenWebhookIdStore(new Repository($inner), allowArrayStore: true);
 
-    expect(fn () => $store->claim('s', 'id', 10))
+    expect(fn () => $store->claim(WebhookIdClaim::generate('s', 'id'), 10))
         ->toThrow(WebhookIdStoreFailedException::class, 'Webhook id dedupe store failed.');
+});
+
+it('names the refused store and the accepted ones', function (): void {
+    expect(fn () => new CacheSeenWebhookIdStore(new Repository(new NullStore)))
+        ->toThrow(
+            UnsupportedWebhookIdCacheStoreException::class,
+            'CacheSeenWebhookIdStore refuses cache store Illuminate\Cache\NullStore; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.',
+        );
 });

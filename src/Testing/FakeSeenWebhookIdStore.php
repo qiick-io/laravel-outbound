@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Testing;
 
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
 use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 use RuntimeException;
 
@@ -15,17 +16,19 @@ use RuntimeException;
  */
 final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
 {
-    /** @var array<string, int> hashed key => expiresAt unix */
+    /** @var array<string, array{expiresAt: int, token: string}> hashed key => claim */
     private array $entries = [];
 
-    private bool $failNextWrite = false;
+    private bool $failNextWrite;
 
     /**
      * @param  (callable(): int)|null  $clock  Unix-seconds clock; defaults to time()
      */
     public function __construct(
         private readonly mixed $clock = null,
-    ) {}
+    ) {
+        $this->failNextWrite = false;
+    }
 
     public function failNextWrite(): self
     {
@@ -34,30 +37,44 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
         return $this;
     }
 
-    public function claim(string $scope, string $webhookId, int $ttlSeconds): bool
+    public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool
     {
         if ($this->failNextWrite) {
             $this->failNextWrite = false;
 
-            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, new RuntimeException('forced cache write failure'));
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: new RuntimeException('forced cache write failure'));
         }
 
-        $key = hash('sha256', $scope."\0".$webhookId);
+        $key = self::keyFor($claim);
         $now = $this->now();
 
-        if (array_key_exists($key, $this->entries) && $this->entries[$key] > $now) {
+        if (array_key_exists($key, $this->entries) && $this->entries[$key]['expiresAt'] > $now) {
             return false;
         }
 
-        $this->entries[$key] = $now + max(1, $ttlSeconds);
+        $this->entries[$key] = ['expiresAt' => $now + max(1, $ttlSeconds), 'token' => $claim->token];
 
         return true;
+    }
+
+    public function release(WebhookIdClaim $claim): void
+    {
+        $key = self::keyFor($claim);
+
+        if (($this->entries[$key]['token'] ?? null) === $claim->token) {
+            unset($this->entries[$key]);
+        }
+    }
+
+    private static function keyFor(WebhookIdClaim $claim): string
+    {
+        return hash('sha256', $claim->scope."\0".$claim->webhookId);
     }
 
     private function now(): int
     {
         if (is_callable($this->clock)) {
-            return (int) ($this->clock)();
+            return ($this->clock)();
         }
 
         return time();

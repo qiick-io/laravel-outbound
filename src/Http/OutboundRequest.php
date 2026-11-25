@@ -21,34 +21,18 @@ use InvalidArgumentException;
  */
 final class OutboundRequest
 {
-    /** @var list<string> */
-    private const REFUSED_HEADERS = [
-        'Host',
-        'X-Host',
-        'X-Original-Host',
-        'Forwarded',
-        'X-Original-URL',
-        'X-Rewrite-URL',
-    ];
-
     /** @var array<string, string> */
     private array $headers = [];
 
     /** @var array<string, scalar|null> */
     private array $query = [];
 
-    private ?string $rawBody = null;
-
-    private ?string $rawContentType = null;
-
-    /** @var array<string, mixed>|null */
-    private ?array $json = null;
-
-    /** @var array<string, mixed>|null */
-    private ?array $form = null;
-
-    /** @var array<string, mixed>|null */
-    private ?array $multipart = null;
+    /**
+     * The one body this request sends, if any: setting a body replaces it.
+     *
+     * @var array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form', payload: array<string, mixed>, contentType: ?string}|array{type: 'multipart', payload: list<array<string, mixed>>, contentType: null}|null
+     */
+    private ?array $body = null;
 
     /**
      * @param  array<string, string>  $headers
@@ -56,7 +40,8 @@ final class OutboundRequest
     public function withHeaders(array $headers): self
     {
         foreach ($headers as $name => $value) {
-            $this->withHeader((string) $name, (string) $value);
+            // A numeric name arrives as an integer array key.
+            $this->withHeader((string) $name, $value);
         }
 
         return $this;
@@ -76,7 +61,7 @@ final class OutboundRequest
     public function withQuery(array $query): self
     {
         foreach ($query as $key => $value) {
-            $this->query[(string) $key] = $value;
+            $this->query[$key] = $value;
         }
 
         return $this;
@@ -94,9 +79,7 @@ final class OutboundRequest
 
     public function withBody(string $body, ?string $contentType = null): self
     {
-        $this->clearBody();
-        $this->rawBody = $body;
-        $this->rawContentType = $contentType;
+        $this->body = ['type' => 'raw', 'payload' => $body, 'contentType' => $contentType];
 
         if ($contentType !== null) {
             $this->withHeader('Content-Type', $contentType);
@@ -110,8 +93,7 @@ final class OutboundRequest
      */
     public function asJson(array $data): self
     {
-        $this->clearBody();
-        $this->json = $data;
+        $this->body = ['type' => 'json', 'payload' => $data, 'contentType' => 'application/json'];
 
         return $this;
     }
@@ -121,44 +103,30 @@ final class OutboundRequest
      */
     public function asForm(array $data): self
     {
-        $this->clearBody();
-        $this->form = $data;
+        $this->body = ['type' => 'form', 'payload' => $data, 'contentType' => 'application/x-www-form-urlencoded'];
 
         return $this;
     }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param  list<array<string, mixed>>  $data  the parts, as Guzzle's `multipart` option takes them
      */
     public function asMultipart(array $data): self
     {
-        $this->clearBody();
-        $this->multipart = $data;
+        $this->body = ['type' => 'multipart', 'payload' => $data, 'contentType' => null];
 
         return $this;
     }
 
     /**
-     * @return array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: string, payload: mixed, contentType: ?string}|null}
+     * @return array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form', payload: array<string, mixed>, contentType: ?string}|array{type: 'multipart', payload: list<array<string, mixed>>, contentType: null}|null}
      */
     public function snapshot(): array
     {
-        $body = null;
-
-        if ($this->rawBody !== null) {
-            $body = ['type' => 'raw', 'payload' => $this->rawBody, 'contentType' => $this->rawContentType];
-        } elseif ($this->json !== null) {
-            $body = ['type' => 'json', 'payload' => $this->json, 'contentType' => 'application/json'];
-        } elseif ($this->form !== null) {
-            $body = ['type' => 'form', 'payload' => $this->form, 'contentType' => 'application/x-www-form-urlencoded'];
-        } elseif ($this->multipart !== null) {
-            $body = ['type' => 'multipart', 'payload' => $this->multipart, 'contentType' => null];
-        }
-
         return [
             'headers' => $this->headers,
             'query' => $this->query,
-            'body' => $body,
+            'body' => $this->body,
         ];
     }
 
@@ -181,14 +149,14 @@ final class OutboundRequest
             'raw' => $request->withBody(self::stringPayload($body['payload'], 'Raw'), $body['contentType']),
             'json' => $request->asJson(self::stringKeyedArray($body['payload'], 'JSON')),
             'form' => $request->asForm(self::stringKeyedArray($body['payload'], 'Form')),
-            'multipart' => $request->asMultipart(self::stringKeyedArray($body['payload'], 'Multipart')),
+            'multipart' => $request->asMultipart(self::multipartParts($body['payload'])),
             default => throw new InvalidArgumentException('Unknown outbound body type.'),
         };
     }
 
     private function assertHeaderAllowed(string $name): void
     {
-        foreach (self::REFUSED_HEADERS as $refused) {
+        foreach (self::refusedHeaders() as $refused) {
             if (strcasecmp($name, $refused) === 0) {
                 throw new InvalidArgumentException('Outbound request must not set Host or routing headers.');
             }
@@ -230,12 +198,27 @@ final class OutboundRequest
         return $out;
     }
 
-    private function clearBody(): void
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private static function multipartParts(mixed $payload): array
     {
-        $this->rawBody = null;
-        $this->rawContentType = null;
-        $this->json = null;
-        $this->form = null;
-        $this->multipart = null;
+        if (! is_array($payload) || ! array_is_list($payload)) {
+            throw new InvalidArgumentException('Multipart body must be a list of parts.');
+        }
+
+        return array_map(static fn (mixed $part): array => self::stringKeyedArray($part, 'Multipart part'), $payload);
+    }
+
+    /**
+     * Headers that would route the request elsewhere: the Host header must
+     * stay the authorised URL host while CONNECT_TO pins the checked address.
+     * A method rather than a constant: a constant's lines have no coverage.
+     *
+     * @return list<string>
+     */
+    private static function refusedHeaders(): array
+    {
+        return ['Host', 'X-Host', 'X-Original-Host', 'Forwarded', 'X-Original-URL', 'X-Rewrite-URL'];
     }
 }
