@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependency register `docs/dependencies.md`: one row per runtime
   `composer.json` `require` entry with constraint rationale, usage,
   maintainer, license, known risk and an in-package exit plan.
+- `Contracts\MetadataPolicyContract` (standards review S4): a product adds
+  metadata hosts the guard always refuses; the union with the package's list
+  can never unblock one.
+- `WebhookDeliveryFailedEvent` (S5): fired when an attempt leaves a delivery
+  exhausted, with public ids and the reason only.
+- `Contracts\LegacyWebhookProfileContract` and
+  `outbound.webhooks.legacy_profiles` (S8): a legacy format's superset body,
+  stored and signed at dispatch, and its headers on each attempt, without a
+  condition in the package.
 - Standards review gaps: `SeenWebhookIdStore::release()` (M14), implemented by
   `CacheSeenWebhookIdStore` and `FakeSeenWebhookIdStore`, usable only with
   the `WebhookIdClaim` that `verify()` returned; the events

@@ -94,6 +94,22 @@ $destination = $guard->authorize('https://example.test/hook');
 `assertBrowserUrlIsSafe()` checks scheme and credentials for URLs the server
 never connects to (browser redirects).
 
+A product adds metadata or control-plane hosts of its own platform to the ones
+the guard always refuses, also with private hosts allowed, by binding a
+`Contracts\MetadataPolicyContract` (standards review S4). The guard normalises
+each entry (a lowercased name without its trailing dot, a canonical IP) and
+takes the union with its own list, so a policy can never unblock a host.
+
+```php
+$this->app->instance(MetadataPolicyContract::class, new class implements MetadataPolicyContract
+{
+    public function additionalMetadataHosts(): array
+    {
+        return ['metadata.platform.internal', '10.255.0.1'];
+    }
+});
+```
+
 ### Pinned HTTP client
 
 ```php
@@ -398,6 +414,38 @@ $coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliv
 `enableEndpoint()` is the only supported way back: setting `is_active` by
 hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
 
+An attempt that leaves a delivery exhausted (every attempt used, a
+`Retry-After` above the cap, or 410 Gone) fires `WebhookDeliveryFailedEvent`
+once, after the attempt is stored: the delivery's and the endpoint's public
+ids, the event type, the reason, the attempt count and the time (standards
+review S5). A body pruned while its delivery was still pending exhausts it
+without an attempt and without the event.
+
+### Legacy profiles
+
+An endpoint whose `legacy_profile` names a registered profile keeps an older
+webhook format next to Standard Webhooks while its consumers migrate
+(standards review S8; externa 1.6 sends its `X-Externa-*` headers and a
+superset body). Register each profile by name in
+`outbound.webhooks.legacy_profiles`, as a container binding of a
+`Contracts\LegacyWebhookProfileContract`:
+
+```php
+// config/outbound.php
+'legacy_profiles' => ['externa-1' => ExternaWebhookProfile::class],
+```
+
+- `body()` runs once, at dispatch: the body it returns (the Standard Webhooks
+  body or a superset of its keys) is stored, signed and sent on every attempt
+  and redelivery.
+- `headers()` runs on each attempt, with the signed webhook and the
+  endpoint's signing secrets, for a legacy signature. Its headers go next to
+  the Standard Webhooks ones; naming `webhook-id`, `webhook-timestamp` or
+  `webhook-signature`, in any case, refuses the attempt (`legacy_profile`).
+- An endpoint naming a profile that is not registered keeps the plain body,
+  and every attempt is refused (`legacy_profile`), so the mistake shows in the
+  delivery log instead of sending the wrong format.
+
 ### Redelivery
 
 ```php
@@ -607,6 +655,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.auto_disable.notify_owner` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER` | `true` |
 | `outbound.webhooks.auto_disable.endpoint_url` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL` | `null` |
 | `outbound.webhooks.allow_raw_legacy_secret` | `OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET` | `false` |
+| `outbound.webhooks.legacy_profiles` | — (config file) | `[]` |
 | `outbound.webhooks.scope_column` | `OUTBOUND_WEBHOOK_SCOPE_COLUMN` | `null` |
 | `outbound.webhooks.users_table` | `OUTBOUND_WEBHOOK_USERS_TABLE` | `users` |
 

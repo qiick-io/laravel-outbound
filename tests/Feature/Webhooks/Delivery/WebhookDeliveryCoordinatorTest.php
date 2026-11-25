@@ -8,6 +8,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Schema;
+use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\DeliveryStatus;
 use Qiick\Outbound\Delivery\EndpointDisablePolicy;
@@ -16,6 +17,7 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookDelivery;
@@ -26,6 +28,7 @@ use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Testing\FakeHostResolver;
 use Qiick\Outbound\Tests\Support\RecordingTransferHandler;
 use Qiick\Outbound\Webhooks\SecretRotator;
+use Qiick\Outbound\Webhooks\SignedWebhook;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
 use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
 use Qiick\Outbound\Webhooks\WebhookMessage;
@@ -988,3 +991,144 @@ it('keeps "transport" for a client refusal that has no transport kind', function
     expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('transport')
         ->and(WebhookDeliveryAttempt::query()->sole()->error_message)->toBe('Response exceeds max_response_bytes.');
 });
+
+/*
+ * Standards review S5: an exhausted delivery is announced, public ids and the
+ * reason only.
+ */
+
+it('announces a delivery the attempt left exhausted, and only then', function (): void {
+    $failedEvents = [];
+    app(Dispatcher::class)->listen(WebhookDeliveryFailedEvent::class, function (WebhookDeliveryFailedEvent $event) use (&$failedEvents): void {
+        $failedEvents[] = $event;
+    });
+    $endpoint = deliveryEndpoint(['max_attempts' => 2]);
+    $this->transfer->respond(500)->respond(500);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($failedEvents)->toBe([]);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+    coordinator()->work(50);
+
+    expect($failedEvents)->toHaveCount(1)
+        ->and($failedEvents[0]->deliveryPublicId)->toBe(onlyDelivery()->public_id)
+        ->and($failedEvents[0]->endpointPublicId)->toBe($endpoint->public_id)
+        ->and($failedEvents[0]->eventType)->toBe('invoice.paid')
+        ->and($failedEvents[0]->reason)->toBe(WebhookExhaustedReasonEnum::MaxAttempts)
+        ->and($failedEvents[0]->attempts)->toBe(2)
+        ->and($failedEvents[0]->failedAt->toDateTimeString())->toBe('2026-11-23 10:00:05');
+});
+
+it('announces a delivery a 410 Gone exhausted, with that reason', function (): void {
+    $failedEvents = [];
+    app(Dispatcher::class)->listen(WebhookDeliveryFailedEvent::class, function (WebhookDeliveryFailedEvent $event) use (&$failedEvents): void {
+        $failedEvents[] = $event;
+    });
+    deliveryEndpoint();
+    $this->transfer->respond(410);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($failedEvents)->toHaveCount(1)
+        ->and($failedEvents[0]->reason)->toBe(WebhookExhaustedReasonEnum::Gone)
+        ->and($failedEvents[0]->attempts)->toBe(1);
+});
+
+/*
+ * Standards review S8: a legacy profile adds its own body keys and headers
+ * without a condition in the package.
+ */
+
+/**
+ * @param  array<string, string>  $extraHeaders
+ */
+function registerLegacyProfile(array $extraHeaders = []): void
+{
+    app()->instance('test.legacy-profile', new class($extraHeaders) implements LegacyWebhookProfileContract
+    {
+        /** @param  array<string, string>  $extraHeaders */
+        public function __construct(private array $extraHeaders) {}
+
+        public function body(WebhookMessage $message, string $standardBody): string
+        {
+            return json_encode(['id' => $message->id, ...json_decode($standardBody, true)], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        }
+
+        public function headers(SignedWebhook $signedWebhook, array $secrets): array
+        {
+            return [
+                'X-Legacy-Event-Id' => $signedWebhook->headers['webhook-id'],
+                'X-Legacy-Signature' => hash_hmac('sha256', $signedWebhook->rawBody, $secrets[0]->signingKey()),
+                ...$this->extraHeaders,
+            ];
+        }
+    });
+    config()->set('outbound.webhooks.legacy_profiles', ['legacy-1' => 'test.legacy-profile']);
+    app()->forgetInstance(WebhookDeliveryCoordinator::class);
+}
+
+it('stores, signs and sends the legacy body, with the legacy headers next to the Standard Webhooks ones', function (): void {
+    registerLegacyProfile();
+    $endpoint = deliveryEndpoint(['legacy_profile' => 'legacy-1']);
+    $secret = $endpoint->secrets()->sole();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $request = $this->transfer->requests[0];
+    $rawBody = (string) $request->getBody();
+    $expectedBody = json_encode(['id' => 'msg_2KWPBgLlAfxdpx2AI54pPJ85f4W', ...json_decode(invoicePaidMessage()->toPayloadJson(), true)], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+
+    expect(onlyDelivery()->payload)->toBe($expectedBody)
+        ->and($rawBody)->toBe($expectedBody)
+        ->and($request->getHeaderLine('x-legacy-event-id'))->toBe('msg_2KWPBgLlAfxdpx2AI54pPJ85f4W')
+        ->and($request->getHeaderLine('x-legacy-signature'))->toBe(hash_hmac('sha256', $expectedBody, WebhookSecret::parse((string) $secret->secret)->signingKey()))
+        ->and(fn () => app(StandardWebhookVerifier::class)->verify($rawBody, $request->getHeaderLine('webhook-id'), $request->getHeaderLine('webhook-timestamp'), $request->getHeaderLine('webhook-signature'), [WebhookSecret::parse((string) $secret->secret)], new DateTimeImmutable('2026-11-23 10:00:00'), 'legacy'))->not->toThrow(Throwable::class);
+});
+
+it('sends the plain body and no legacy header to an endpoint without a profile', function (): void {
+    registerLegacyProfile();
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect((string) $this->transfer->requests[0]->getBody())->toBe(invoicePaidMessage()->toPayloadJson())
+        ->and($this->transfer->requests[0]->hasHeader('x-legacy-signature'))->toBeFalse();
+});
+
+it('refuses every attempt to an endpoint whose profile is not registered, or that names a Standard Webhooks header', function (?string $profile, array $extraHeaders, string $message, bool $isBodyPlain): void {
+    registerLegacyProfile($extraHeaders);
+    deliveryEndpoint(['legacy_profile' => $profile]);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($this->transfer->requests)->toBe([])
+        ->and($attempt->status)->toBe(WebhookAttemptStatusEnum::Refused)
+        ->and($attempt->error_code)->toBe('legacy_profile')
+        ->and($attempt->error_message)->toBe($message)
+        ->and(onlyDelivery()->payload === invoicePaidMessage()->toPayloadJson())->toBe($isBodyPlain);
+})->with([
+    'an unknown profile, which keeps the plain body' => ['legacy-9', [], 'The endpoint names a legacy profile that is not registered.', true],
+    'a profile setting webhook-signature' => ['legacy-1', ['Webhook-Signature' => 'v1,forged'], 'A legacy profile must not set a Standard Webhooks header.', false],
+    'a profile setting it in another case' => ['legacy-1', ['WEBHOOK-ID' => 'msg_forged'], 'A legacy profile must not set a Standard Webhooks header.', false],
+    'a profile setting webhook-timestamp' => ['legacy-1', ['Webhook-Timestamp' => '1'], 'A legacy profile must not set a Standard Webhooks header.', false],
+]);
+
+it('refuses a legacy profile entry that is not a name and a profile binding', function (mixed $profiles): void {
+    config()->set('outbound.webhooks.legacy_profiles', $profiles);
+    app()->instance('test.not-a-profile', new stdClass);
+    app()->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    expect(fn () => coordinator())->toThrow(InvalidArgumentException::class, 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.');
+})->with([
+    'not a profile' => [['legacy-1' => 'test.not-a-profile']],
+    'not a binding name' => [['legacy-1' => 42]],
+    'no name' => [['test.legacy-profile']],
+    'not a map at all' => ['test.legacy-profile'],
+]);

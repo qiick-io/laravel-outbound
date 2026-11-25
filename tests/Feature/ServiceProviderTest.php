@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
 use Qiick\Outbound\Contracts\HostResolver;
+use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -62,6 +63,7 @@ it('merges the package defaults into the outbound config', function (): void {
                 'endpoint_url' => null,
             ],
             'allow_raw_legacy_secret' => false,
+            'legacy_profiles' => [],
             'scope_column' => null,
             'users_table' => 'users',
         ],
@@ -205,4 +207,19 @@ it('uses the package default for a key a published config lacks', function (): v
     expect(fn () => $this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', $secrets))
         ->toThrow(WebhookException::class, 'Too many webhook secrets.')
         ->and($this->app->make(StandardWebhookSigner::class)->sign('msg_1', 1_700_000_000, '{}', array_slice($secrets, 0, 4))->headers['webhook-signature'])->toContain('v1,');
+});
+
+it('gives the guard the metadata policy a product binds', function (): void {
+    $this->app->instance(MetadataPolicyContract::class, new class implements MetadataPolicyContract
+    {
+        public function additionalMetadataHosts(): array
+        {
+            return ['meta.example'];
+        }
+    });
+    $this->app->forgetInstance(RemoteUrlGuard::class);
+
+    $result = $this->app->make(RemoteUrlGuard::class)->tryAuthorize('https://meta.example/latest');
+
+    expect($result['ok'] ? null : $result['reason'])->toBe('Host is not allowed.');
 });

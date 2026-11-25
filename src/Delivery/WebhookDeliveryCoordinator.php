@@ -12,11 +12,13 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
 use InvalidArgumentException;
+use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Events\WebhookRedeliveryRequestedEvent;
 use Qiick\Outbound\Http\HttpRequestOptions;
@@ -66,6 +68,7 @@ final class WebhookDeliveryCoordinator
      *                                               whether an endpoint's own
      *                                               `allow_private_hosts` counts
      * @param  (Closure(): int)|null  $nanosecondClock  monotonic clock for `duration_ms`
+     * @param  array<string, LegacyWebhookProfileContract>  $legacyProfiles  `outbound.webhooks.legacy_profiles`, by name
      */
     public function __construct(
         private readonly DatabaseDeliveryStore $store,
@@ -84,6 +87,7 @@ final class WebhookDeliveryCoordinator
         private readonly EndpointDisablePolicy $disablePolicy,
         private readonly EventDispatcher $events,
         private readonly ?Closure $nanosecondClock = null,
+        private readonly array $legacyProfiles = [],
     ) {}
 
     /**
@@ -108,7 +112,9 @@ final class WebhookDeliveryCoordinator
         foreach ($this->store->subscribedEndpoints($message->type, $scope) as $endpoint) {
             $retryDelays = $this->retryDelaysFor($endpoint);
             $maxAttempts = $endpoint->max_attempts ?? count($retryDelays) + 1;
-            $delivery = $this->store->createDelivery($endpoint, $message, $rawBody, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts));
+            // An unknown profile keeps the plain body; every attempt is refused.
+            $body = $this->legacyProfileOf($endpoint)?->body($message, $rawBody) ?? $rawBody;
+            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts));
 
             if ($delivery !== null) {
                 $createdDeliveries->push($delivery);
@@ -128,7 +134,8 @@ final class WebhookDeliveryCoordinator
      * batch carries on.
      *
      * Side effects: outbound HTTP POSTs; attempt rows; delivery and endpoint
-     * updates; unexpected errors reported to the exception handler.
+     * updates; {@see WebhookDeliveryFailedEvent} for a delivery an attempt
+     * left exhausted; unexpected errors reported to the exception handler.
      *
      * @return int the attempts sent or refused
      *
@@ -231,6 +238,20 @@ final class WebhookDeliveryCoordinator
             // it, the outcome still counts, so a delivered webhook is never
             // sent again and a failing one still moves towards exhausted.
             $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess, $isReceiverOutcome);
+        }
+
+        // A redelivery asked during the send keeps the delivery pending, so
+        // the stored status decides.
+        if ($isRecorded && $delivery->refresh()->status === DeliveryStatus::Exhausted) {
+            $this->events->dispatch(new WebhookDeliveryFailedEvent(
+                $delivery->public_id,
+                $endpoint->public_id,
+                $delivery->event_type,
+                // An exhausted delivery always has its reason; the fallback only types it.
+                $delivery->exhausted_reason ?? WebhookExhaustedReasonEnum::MaxAttempts,
+                $delivery->attempts_count,
+                $attemptedAt,
+            ));
         }
 
         // An attempt another worker already recorded, or a refusal on the
@@ -434,11 +455,18 @@ final class WebhookDeliveryCoordinator
         $secretPublicIds = $signingSet->secretPublicIds();
 
         try {
+            $legacyHeaders = $this->legacyHeadersFor($endpoint, $signedWebhook, $signingSet);
+        } catch (WebhookException $exception) {
+            return $this->outcome(WebhookAttemptStatusEnum::Refused, 'legacy_profile', $exception->getMessage(), null, $secretPublicIds);
+        }
+
+        try {
             $response = $this->client->send(
                 'POST',
                 $endpoint->url,
-                function (OutboundRequest $request) use ($endpoint, $signedWebhook): void {
+                function (OutboundRequest $request) use ($endpoint, $signedWebhook, $legacyHeaders): void {
                     $request->withHeaders($this->staticHeadersOf($endpoint))
+                        ->withHeaders($legacyHeaders)
                         ->withHeaders($signedWebhook->headers)
                         ->withBody($signedWebhook->rawBody, 'application/json');
                 },
@@ -464,6 +492,41 @@ final class WebhookDeliveryCoordinator
         $errorCode = $response->status() === 410 ? 'gone' : 'http_status';
 
         return $this->outcome(WebhookAttemptStatusEnum::Failed, $errorCode, 'HTTP '.$response->status(), $response, $secretPublicIds);
+    }
+
+    /**
+     * The headers of the endpoint's legacy profile, none without one.
+     *
+     * @return array<string, string>
+     *
+     * @throws WebhookException when the profile is not registered, or names a
+     *                          Standard Webhooks header
+     */
+    private function legacyHeadersFor(WebhookEndpoint $endpoint, SignedWebhook $signedWebhook, WebhookSigningSet $signingSet): array
+    {
+        if ($endpoint->legacy_profile === null) {
+            return [];
+        }
+
+        $profile = $this->legacyProfileOf($endpoint) ?? throw new WebhookException('The endpoint names a legacy profile that is not registered.');
+        $headers = $profile->headers($signedWebhook, $signingSet->secrets());
+
+        foreach (array_keys($headers) as $name) {
+            if (in_array(strtolower($name), ['webhook-id', 'webhook-timestamp', 'webhook-signature'], true)) {
+                throw new WebhookException('A legacy profile must not set a Standard Webhooks header.');
+            }
+        }
+
+        return $headers;
+    }
+
+    /**
+     * The registered profile the endpoint's `legacy_profile` names; null
+     * without one, or when the name is not registered.
+     */
+    private function legacyProfileOf(WebhookEndpoint $endpoint): ?LegacyWebhookProfileContract
+    {
+        return $endpoint->legacy_profile === null ? null : $this->legacyProfiles[$endpoint->legacy_profile] ?? null;
     }
 
     /**
