@@ -99,12 +99,21 @@ final class RetryPolicy
         return $planSeconds;
     }
 
+    /**
+     * 429, 502, 503 and 504: the receiver is overloaded, so its Retry-After
+     * is honoured and its concurrency halved (standards review R4, S7).
+     */
+    public static function isOverloadStatus(?int $httpStatus): bool
+    {
+        return in_array($httpStatus, [429, 502, 503, 504], true);
+    }
+
     private function floorSeconds(?int $httpStatus, ?int $retryAfterSeconds): int
     {
         if (! $this->respectRetryAfter || $retryAfterSeconds === null) {
             return 0;
         }
 
-        return in_array($httpStatus, [429, 502, 503, 504], true) ? $retryAfterSeconds : 0;
+        return self::isOverloadStatus($httpStatus) ? $retryAfterSeconds : 0;
     }
 }

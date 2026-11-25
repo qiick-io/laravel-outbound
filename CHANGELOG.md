@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependency register `docs/dependencies.md`: one row per runtime
   `composer.json` `require` entry with constraint rationale, usage,
   maintainer, license, known risk and an in-package exit plan.
+- Per-endpoint throttle (standards review S7): `rate_limit_per_minute` caps
+  the attempts started per minute, and a 429, 502, 503 or 504 halves the
+  endpoint's concurrency until its next success. `webhook_endpoints` gains
+  `rate_window_started_at`, `rate_window_attempts` and `throttled_at`.
+
 - `Contracts\MetadataPolicyContract` (standards review S4): a product adds
   metadata hosts the guard always refuses; the union with the package's list
   can never unblock one.

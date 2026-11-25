@@ -49,7 +49,7 @@ it('allows mass assignment of the listed attributes only', function (string $mod
 })->with([
     'endpoint' => [WebhookEndpoint::class, [
         'name', 'description', 'url', 'payload_version', 'legacy_profile', 'https_only',
-        'timeout_seconds', 'max_concurrency', 'rate_limit_per_minute',
+        'timeout_seconds', 'max_concurrency',
         'retry_preset', 'max_attempts', 'headers', 'metadata',
     ]],
     'endpoint secret' => [WebhookEndpointSecret::class, ['metadata']],

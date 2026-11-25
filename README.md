@@ -358,6 +358,13 @@ schedule above, and a retry 24 h away survives a queue loss.
   a crashed worker's lease simply expires. A run takes at most each
   endpoint's concurrency from its backlog, so one busy endpoint (or tenant)
   cannot starve the others.
+- **Throttle (standards review S7):** an endpoint's `rate_limit_per_minute`
+  (null or 0: no limit; set by the product's code, not mass-assignable)
+  caps the attempts started for it in a fixed one-minute window; a delivery
+  over the limit stays due and goes out in a later run. After a 429, 502, 503
+  or 504 the endpoint's concurrency is halved (at least 1) until its next
+  success. Both are decided under the same endpoint row lock as the
+  concurrency, so parallel workers agree.
 - **Private hosts:** an endpoint's `allow_private_hosts` loosens the SSRF
   guard, so it is not mass-assignable and counts only when the product sets
   `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
