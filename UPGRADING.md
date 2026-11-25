@@ -1,8 +1,9 @@
 # Upgrading
 
-This package has not published a stable release yet. Until `0.1.0`, treat every
-public surface as unstable: read the `[Unreleased]` section of `CHANGELOG.md`
-and the approved design before adopting a commit from `develop`.
+This package has not published a stable release yet. Until `1.0.0`, treat every
+public surface as unstable: read the release's section of `CHANGELOG.md` and
+the approved design before upgrading, and prefer a tagged release to a commit
+from `develop`.
 
 ## From unreleased commits
 
@@ -15,7 +16,7 @@ and the approved design before adopting a commit from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
-## To the next release (webhook tables)
+## To 0.2.0-beta.1 (webhook delivery)
 
 - Run `php artisan migrate`: the package now loads the migrations of five
   tables (`webhook_endpoints`, `webhook_endpoint_secrets`,

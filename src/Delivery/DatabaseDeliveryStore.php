@@ -199,7 +199,9 @@ final class DatabaseDeliveryStore
                 ->where('claimed_until', '>', $now)
                 ->count();
 
-            if ($leasedCount >= self::concurrencyOf($endpoint, $defaultMaxConcurrency) || self::attemptsLeftInWindow($endpoint, $now) === 0) {
+            $attemptsLeft = self::attemptsLeftInWindow($endpoint, $now);
+
+            if ($leasedCount >= self::concurrencyOf($endpoint, $defaultMaxConcurrency) || $attemptsLeft === 0) {
                 return null;
             }
 
@@ -213,10 +215,13 @@ final class DatabaseDeliveryStore
                 return null;
             }
 
-            WebhookEndpoint::withTrashed()->whereKey($endpoint->id)->update([
-                'rate_window_started_at' => $isNewWindow ? $now : $endpoint->rate_window_started_at,
-                'rate_window_attempts' => ($isNewWindow ? 0 : $endpoint->rate_window_attempts) + 1,
-            ]);
+            // Only a limited endpoint counts its window.
+            if ($attemptsLeft !== null) {
+                WebhookEndpoint::withTrashed()->whereKey($endpoint->id)->update([
+                    'rate_window_started_at' => $isNewWindow ? $now : $endpoint->rate_window_started_at,
+                    'rate_window_attempts' => ($isNewWindow ? 0 : $endpoint->rate_window_attempts) + 1,
+                ]);
+            }
 
             return WebhookDelivery::query()->findOrFail($deliveryId)->setRelation('endpoint', $endpoint);
         });
@@ -461,10 +466,6 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * The streak the auto-disable policy reads: a success clears it, a
-     * failure extends it and keeps the time it started.
-     */
-    /**
      * The endpoint's concurrency, halved (at least 1) while an overload
      * answer throttles it, until its next success (standards review S7).
      */
@@ -498,6 +499,11 @@ final class DatabaseDeliveryStore
         return $endpoint->rate_window_started_at === null || $endpoint->rate_window_started_at->lessThanOrEqualTo($now->subMinute());
     }
 
+    /**
+     * The streak the auto-disable policy reads: a success clears it, a
+     * failure extends it and keeps the time it started. An overload status
+     * also throttles the endpoint, until a success lifts it.
+     */
     private function moveFailureStreak(int $endpointId, bool $isSuccess, ?int $httpStatus): void
     {
         $now = CarbonImmutable::now('UTC');
