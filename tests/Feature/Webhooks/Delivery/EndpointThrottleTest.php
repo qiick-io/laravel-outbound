@@ -137,3 +137,70 @@ it('throttles an endpoint on 429, 502, 503 and 504, never on another failure, an
     '500' => [500, false],
     '400' => [400, false],
 ]);
+
+/*
+ * Review of #62: an endpoint at its limit must not take the batch, a limit of
+ * 0 means none, and only the product's code sets it.
+ */
+
+it('leaves an endpoint whose window is full out of the batch, so the others still go out', function (): void {
+    $limited = throttledEndpoint(['max_concurrency' => 50, 'rate_limit_per_minute' => 1, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 1]);
+    $other = throttledEndpoint(['url' => 'https://hooks.example.com/other']);
+    foreach (range(1, 20) as $number) {
+        app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage("msg_{$number}", 'invoice.paid', new DateTimeImmutable('2026-11-23 09:59:00'), ['n' => $number]));
+    }
+    WebhookDelivery::query()->where('endpoint_id', $limited->id)->update(['next_attempt_at' => '2026-11-23 09:00:00']);
+    WebhookDelivery::query()->where('endpoint_id', $other->id)->where('event_id', '!=', 'msg_1')->delete();
+
+    $otherDeliveryId = WebhookDelivery::query()->where('endpoint_id', $other->id)->sole()->id;
+
+    // One endpoint slot in the batch: the oldest endpoint, at its limit, must not take it.
+    expect(app(DatabaseDeliveryStore::class)->dueCandidates(1, 2))->toBe([$otherDeliveryId])
+        ->and(app(DatabaseDeliveryStore::class)->claim(WebhookDelivery::query()->where('endpoint_id', $limited->id)->value('id'), 600, 2))->toBeNull()
+        ->and(app(WebhookDeliveryCoordinator::class)->work(10))->toBe(1)
+        ->and(WebhookDelivery::query()->whereKey($otherDeliveryId)->sole()->attempts_count)->toBe(1)
+        ->and(app(DatabaseDeliveryStore::class)->dueCandidates(10, 2))->toBe([]);
+});
+
+it('takes no more of an endpoint into the batch than its halved concurrency and its window allow', function (array $attributes, int $expectedCandidates): void {
+    throttledEndpoint($attributes);
+    dispatchInvoices(6);
+
+    expect(app(DatabaseDeliveryStore::class)->dueCandidates(50, 2))->toHaveCount($expectedCandidates);
+})->with([
+    'throttled, four lanes' => [['max_concurrency' => 4, 'throttled_at' => '2026-11-23 09:00:00'], 2],
+    'three attempts left in the window' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 5, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 2], 3],
+    'a window a minute old' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 5, 'rate_window_started_at' => '2026-11-23 09:59:00', 'rate_window_attempts' => 5], 5],
+    'a limit lowered below the attempts made' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 2, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 5], 0],
+    'no limit, with the window claim() keeps counting' => [['max_concurrency' => 10, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 9], 6],
+    'a limit of 0, with a counted window' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 0, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 9], 6],
+]);
+
+it('refuses a claim once the window is used up, even when the limit was lowered below it', function (int $limit, int $attemptsMade): void {
+    throttledEndpoint(['max_concurrency' => 10, 'rate_limit_per_minute' => $limit, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => $attemptsMade]);
+    dispatchInvoices(1);
+
+    expect(app(DatabaseDeliveryStore::class)->claim(WebhookDelivery::query()->sole()->id, 600, 2))->toBeNull();
+})->with([
+    'at the limit' => [3, 3],
+    'above a lowered limit' => [2, 5],
+]);
+
+it('reads a rate limit of 0 as no limit', function (): void {
+    throttledEndpoint(['rate_limit_per_minute' => 0, 'max_concurrency' => 10]);
+    dispatchInvoices(3);
+
+    expect(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(3);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:30');
+    dispatchInvoices(1);
+
+    expect(app(DatabaseDeliveryStore::class)->dueCandidates(50, 2))->toBe([]);
+});
+
+it('never mass-assigns the rate limit, which only the product code sets', function (): void {
+    $endpoint = (new WebhookEndpoint)->fill(['url' => 'https://hooks.example.com/receive', 'rate_limit_per_minute' => 1]);
+
+    expect($endpoint->isFillable('rate_limit_per_minute'))->toBeFalse()
+        ->and($endpoint->getAttributes())->not->toHaveKey('rate_limit_per_minute');
+});

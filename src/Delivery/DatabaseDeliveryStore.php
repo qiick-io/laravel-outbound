@@ -133,8 +133,16 @@ final class DatabaseDeliveryStore
             ->where('webhook_endpoints.is_active', true)
             ->whereNull('webhook_endpoints.deleted_at')
             ->where('webhook_deliveries.next_attempt_at', '<=', $now)
-            ->groupBy('webhook_deliveries.endpoint_id', 'webhook_endpoints.max_concurrency')
-            ->select(['webhook_deliveries.endpoint_id', 'webhook_endpoints.max_concurrency'])
+            // An endpoint at its rate limit would only take slots it cannot use.
+            ->where(function (Builder $windowQuery) use ($now): void {
+                $windowQuery->whereNull('webhook_endpoints.rate_limit_per_minute')
+                    ->orWhere('webhook_endpoints.rate_limit_per_minute', '<', 1)
+                    ->orWhereNull('webhook_endpoints.rate_window_started_at')
+                    ->orWhere('webhook_endpoints.rate_window_started_at', '<=', $now->subMinute())
+                    ->orWhereColumn('webhook_endpoints.rate_window_attempts', '<', 'webhook_endpoints.rate_limit_per_minute');
+            })
+            ->groupBy('webhook_deliveries.endpoint_id')
+            ->select('webhook_deliveries.endpoint_id')
             ->selectRaw('min(next_attempt_at) as oldest_due_at')
             ->orderBy('oldest_due_at')
             ->orderBy('webhook_deliveries.endpoint_id')
@@ -145,14 +153,14 @@ final class DatabaseDeliveryStore
         /** @var \Illuminate\Support\Collection<int, WebhookDelivery> $candidateDeliveries */
         $candidateDeliveries = new \Illuminate\Support\Collection;
 
-        /** @var object{endpoint_id: int, max_concurrency: int|null} $endpointWithDueDeliveries */
-        foreach ($endpointsWithDueDeliveries as $endpointWithDueDeliveries) {
+        // As many of each endpoint as claim() would lease now.
+        foreach (WebhookEndpoint::query()->findMany($endpointsWithDueDeliveries->pluck('endpoint_id')) as $endpoint) {
             $candidateDeliveries->push(...$this->claimable(WebhookDelivery::query(), $now)
-                ->where('endpoint_id', $endpointWithDueDeliveries->endpoint_id)
+                ->where('endpoint_id', $endpoint->id)
                 ->where('next_attempt_at', '<=', $now)
                 ->orderBy('next_attempt_at')
                 ->orderBy('id')
-                ->limit($endpointWithDueDeliveries->max_concurrency ?? $defaultMaxConcurrency)
+                ->limit(min(self::concurrencyOf($endpoint, $defaultMaxConcurrency), self::attemptsLeftInWindow($endpoint, $now) ?? PHP_INT_MAX))
                 ->get(['id', 'next_attempt_at']));
         }
 
@@ -191,26 +199,11 @@ final class DatabaseDeliveryStore
                 ->where('claimed_until', '>', $now)
                 ->count();
 
-            $maxConcurrency = $endpoint->max_concurrency ?? $defaultMaxConcurrency;
-
-            // An endpoint that answered an overload gets half its concurrency
-            // until its next success (standards review S7).
-            if ($endpoint->throttled_at !== null) {
-                $maxConcurrency = max(1, intdiv($maxConcurrency, 2));
-            }
-
-            if ($leasedCount >= $maxConcurrency) {
+            if ($leasedCount >= self::concurrencyOf($endpoint, $defaultMaxConcurrency) || self::attemptsLeftInWindow($endpoint, $now) === 0) {
                 return null;
             }
 
-            // rate_limit_per_minute counts the attempts started in a fixed
-            // window, which a minute after its start begins again.
-            $isNewWindow = $endpoint->rate_window_started_at === null || $endpoint->rate_window_started_at->lessThanOrEqualTo($now->subMinute());
-            $attemptsInWindow = $isNewWindow ? 0 : $endpoint->rate_window_attempts;
-
-            if ($endpoint->rate_limit_per_minute !== null && $attemptsInWindow >= $endpoint->rate_limit_per_minute) {
-                return null;
-            }
+            $isNewWindow = self::isNewWindow($endpoint, $now);
 
             $leasedRows = $this->claimable(WebhookDelivery::query()->whereKey($deliveryId), $now)
                 ->where('next_attempt_at', '<=', $now)
@@ -222,7 +215,7 @@ final class DatabaseDeliveryStore
 
             WebhookEndpoint::withTrashed()->whereKey($endpoint->id)->update([
                 'rate_window_started_at' => $isNewWindow ? $now : $endpoint->rate_window_started_at,
-                'rate_window_attempts' => $attemptsInWindow + 1,
+                'rate_window_attempts' => ($isNewWindow ? 0 : $endpoint->rate_window_attempts) + 1,
             ]);
 
             return WebhookDelivery::query()->findOrFail($deliveryId)->setRelation('endpoint', $endpoint);
@@ -471,6 +464,40 @@ final class DatabaseDeliveryStore
      * The streak the auto-disable policy reads: a success clears it, a
      * failure extends it and keeps the time it started.
      */
+    /**
+     * The endpoint's concurrency, halved (at least 1) while an overload
+     * answer throttles it, until its next success (standards review S7).
+     */
+    private static function concurrencyOf(WebhookEndpoint $endpoint, int $defaultMaxConcurrency): int
+    {
+        $maxConcurrency = $endpoint->max_concurrency ?? $defaultMaxConcurrency;
+
+        return $endpoint->throttled_at === null ? $maxConcurrency : max(1, intdiv($maxConcurrency, 2));
+    }
+
+    /**
+     * The attempts the endpoint may still start in its current one-minute
+     * window; null without a limit (`rate_limit_per_minute` null or 0).
+     */
+    private static function attemptsLeftInWindow(WebhookEndpoint $endpoint, CarbonImmutable $now): ?int
+    {
+        $limit = $endpoint->rate_limit_per_minute;
+
+        if (! ($limit > 0)) {
+            return null;
+        }
+
+        return max(0, $limit - (self::isNewWindow($endpoint, $now) ? 0 : $endpoint->rate_window_attempts));
+    }
+
+    /**
+     * A window begins with the first attempt and lasts a minute.
+     */
+    private static function isNewWindow(WebhookEndpoint $endpoint, CarbonImmutable $now): bool
+    {
+        return $endpoint->rate_window_started_at === null || $endpoint->rate_window_started_at->lessThanOrEqualTo($now->subMinute());
+    }
+
     private function moveFailureStreak(int $endpointId, bool $isSuccess, ?int $httpStatus): void
     {
         $now = CarbonImmutable::now('UTC');

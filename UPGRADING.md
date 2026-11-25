@@ -92,8 +92,9 @@ and the approved design before adopting a commit from `develop`.
   `create()` ignore it now.
 - `webhook_endpoints` gains `rate_window_started_at`, `rate_window_attempts`
   and `throttled_at` (the throttle's state): recreate the database. An
-  endpoint's `rate_limit_per_minute`, if set, now caps its attempts per
-  minute.
+  endpoint's `rate_limit_per_minute` now caps its attempts per minute (null
+  or 0: no limit), and is no longer mass-assignable: set it with
+  `forceFill()`.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

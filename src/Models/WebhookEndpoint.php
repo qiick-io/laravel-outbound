@@ -92,8 +92,9 @@ class WebhookEndpoint extends Model
      * disable reason and the failure streak) is not mass-assignable. Nor are
      * the columns a request must never choose, which the product sets in its
      * own code: `allow_private_hosts` loosens the SSRF guard, `auto_disable`
-     * can opt an endpoint out of auto-disable, `created_by` is the user the
-     * disable email goes to, and the product's scope column (in
+     * can opt an endpoint out of auto-disable, `rate_limit_per_minute` sets
+     * how fast the package sends, `created_by` is the user the disable email
+     * goes to, and the product's scope column (in
      * `outbound.webhooks.scope_column`) decides the tenant: a request that
      * chose it could create an endpoint in another tenant.
      *
@@ -110,7 +111,6 @@ class WebhookEndpoint extends Model
             'https_only',
             'timeout_seconds',
             'max_concurrency',
-            'rate_limit_per_minute',
             'retry_preset',
             'max_attempts',
             'headers',
