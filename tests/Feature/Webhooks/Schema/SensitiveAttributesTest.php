@@ -60,14 +60,14 @@ it('allows mass assignment of the listed attributes only', function (string $mod
     'attempt' => [WebhookDeliveryAttempt::class, []],
 ]);
 
-it('lets the product fill its own scope column on endpoints', function (): void {
+it('never mass-assigns the product scope column, which decides the tenant', function (): void {
     config()->set('outbound.webhooks.scope_column', 'project_id');
+    $endpoint = (new WebhookEndpoint)->fill(['url' => 'https://hooks.example.com/receive', 'project_id' => 7]);
 
-    expect((new WebhookEndpoint)->isFillable('project_id'))->toBeTrue();
-
-    config()->set('outbound.webhooks.scope_column', '');
-
-    expect((new WebhookEndpoint)->getFillable())->not->toContain('');
+    expect($endpoint->isFillable('project_id'))->toBeFalse()
+        ->and($endpoint->getAttributes())->not->toHaveKey('project_id')
+        ->and($endpoint->url)->toBe('https://hooks.example.com/receive')
+        ->and($endpoint->forceFill(['project_id' => 7])->getAttribute('project_id'))->toBe(7);
 });
 
 it('never mass-assigns a sensitive attribute', function (string $modelClass, array $sensitiveAttributes): void {

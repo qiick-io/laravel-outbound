@@ -34,9 +34,10 @@ final class StandardWebhookVerifier
 
     /**
      * @param  list<WebhookSecret>  $secrets
-     * @param  non-empty-string  $dedupeScope  MUST identify the verifying secret or
-     *                                         endpoint — sharing the default across
-     *                                         tenants collides claims on the same id
+     * @param  non-empty-string  $dedupeScope  identifies the verifying secret or
+     *                                         endpoint: required, because one scope
+     *                                         shared by tenants turns the same
+     *                                         webhook-id into a false duplicate
      * @return WebhookIdClaim|null the claim on the webhook id, which only this
      *                             request can release; null without a store
      *
@@ -50,7 +51,7 @@ final class StandardWebhookVerifier
         string $webhookSignatureHeader,
         array $secrets,
         DateTimeImmutable $now,
-        string $dedupeScope = 'default',
+        string $dedupeScope,
     ): ?WebhookIdClaim {
         StandardWebhookSigner::assertValidWebhookId($webhookId);
 

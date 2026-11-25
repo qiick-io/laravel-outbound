@@ -110,7 +110,7 @@ it('returns no claim when the verifier has no store', function (): void {
     $secret = WebhookSecret::generate();
     $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
 
-    expect((new StandardWebhookVerifier)->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000')))->toBeNull();
+    expect((new StandardWebhookVerifier)->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))->toBeNull();
 });
 
 it('draws a fresh token for every claim', function (): void {
@@ -122,7 +122,7 @@ it('draws a fresh token for every claim', function (): void {
 it('refuses on verify the webhook ids the signer refuses (M4)', function (string $webhookId, string $message): void {
     $secret = WebhookSecret::generate();
 
-    expect(fn () => (new StandardWebhookVerifier)->verify('{}', $webhookId, '1700000000', 'v1,x', [$secret], new DateTimeImmutable('@1700000000')))
+    expect(fn () => (new StandardWebhookVerifier)->verify('{}', $webhookId, '1700000000', 'v1,x', [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))
         ->toThrow(WebhookException::class, $message);
 })->with([
     ['msg.1', 'Webhook id must not contain a dot.'],
@@ -175,4 +175,10 @@ it('announces each signature without secrets or the body (M13)', function (): vo
         ->and($seen[0]->signatureCount)->toBe(2)
         ->and($seen[0]->payloadBytes)->toBe(17)
         ->and(serialize($seen[0]))->not->toContain('body')->not->toContain(base64_encode($secret->signingKey()));
+});
+
+it('makes every caller name its dedupe scope, so tenants never share one', function (): void {
+    $dedupeScope = new ReflectionParameter([StandardWebhookVerifier::class, 'verify'], 'dedupeScope');
+
+    expect($dedupeScope->isOptional())->toBeFalse();
 });

@@ -35,6 +35,7 @@ it('verifies the official sign vector at the vector timestamp', function (): voi
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'test-scope',
     ))->not->toThrow(WebhookException::class);
 });
 
@@ -50,6 +51,7 @@ it('verifies a freshly signed payload within tolerance', function (): void {
         $signed->headers['webhook-signature'],
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -74,6 +76,7 @@ it('accepts any matching signature among space-separated rotation entries', func
         $header,
         [$current, $previous],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -92,6 +95,7 @@ it('ignores non-v1 versions while still matching a later v1 signature', function
         $header,
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -109,6 +113,7 @@ it('refuses timestamps outside tolerance in both directions', function (int $ske
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'test-scope',
     ))->toThrow(WebhookException::class);
 })->with([
     'too old' => 301,
@@ -127,6 +132,7 @@ it('accepts timestamps at the exact tolerance boundary', function (int $skew): v
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -139,7 +145,7 @@ it('refuses non-integer timestamps', function (string $timestamp): void {
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1700000000');
 
-    expect(fn () => swVerifier()->verify('{}', 'msg_1', $timestamp, 'v1,'.base64_encode('x'), [$secret], $now))
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', $timestamp, 'v1,'.base64_encode('x'), [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'Webhook timestamp must be an integer unix second.');
 })->with(['abc', '1.5', '-1', '1e3', ' 1', '']);
 
@@ -147,7 +153,7 @@ it('refuses an oversize payload before comparing signatures', function (): void 
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier(maxPayload: 4)->verify('12345', 'msg_1', '1', 'v1,'.base64_encode('x'), [$secret], $now))
+    expect(fn () => swVerifier(maxPayload: 4)->verify('12345', 'msg_1', '1', 'v1,'.base64_encode('x'), [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class);
 });
 
@@ -157,7 +163,7 @@ it('refuses more signature tokens than maxSignatures', function (): void {
     $token = 'v1,'.base64_encode(str_repeat('a', 32));
     $header = implode(' ', array_fill(0, 3, $token));
 
-    expect(fn () => swVerifier(maxSigs: 2)->verify('{}', 'msg_1', '1700000000', $header, [$secret], $now))
+    expect(fn () => swVerifier(maxSigs: 2)->verify('{}', 'msg_1', '1700000000', $header, [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class);
 });
 
@@ -165,9 +171,9 @@ it('refuses empty and oversized secret lists', function (): void {
     $now = new DateTimeImmutable('@1');
     $secrets = [WebhookSecret::generate(24), WebhookSecret::generate(24), WebhookSecret::generate(24)];
 
-    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), [], $now))
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), [], $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'At least one webhook secret is required.')
-        ->and(fn () => swVerifier(maxSecrets: 2)->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), $secrets, $now))
+        ->and(fn () => swVerifier(maxSecrets: 2)->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), $secrets, $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'Too many webhook secrets.');
 });
 
@@ -184,6 +190,7 @@ it('accepts exactly maxSecrets secrets when one of them matches', function (): v
         $signed->headers['webhook-signature'],
         [...$others, $matching],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -201,6 +208,7 @@ it('refuses a wrong signature and a v2-only header with the correct digest', fun
         'v1,'.base64_encode(str_repeat('z', 32)),
         [$secret],
         $now,
+        'test-scope',
     ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.')
         ->and(fn () => swVerifier()->verify(
             OfficialVectors::SIGN_PAYLOAD,
@@ -209,6 +217,7 @@ it('refuses a wrong signature and a v2-only header with the correct digest', fun
             'v2,'.$digest,
             [$secret],
             $now,
+            'test-scope',
         ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.');
 });
 
@@ -216,7 +225,7 @@ it('refuses malformed signature tokens', function (string $header, string $messa
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', $header, [$secret], $now))
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', $header, [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class, $message);
 })->with([
     'no comma' => ['v1only', 'Webhook signature header is malformed.'],
@@ -237,6 +246,7 @@ it('refuses verification when the raw body differs by a single byte', function (
         OfficialVectors::SIGN_EXPECTED,
         [$secret],
         $now,
+        'test-scope',
     ))->toThrow(InvalidWebhookSignatureException::class, 'No matching webhook signature found.');
 });
 
@@ -262,6 +272,7 @@ it('uses hash_equals semantics — a matching signature still wins among decoys'
         $header,
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -283,6 +294,7 @@ it('allows exactly maxSignatures tokens and exact payload size', function (): vo
         $header,
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -292,14 +304,14 @@ it('refuses a completely empty signature header string', function (): void {
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', '', [$secret], $now))
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', '', [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'Webhook signature header must not be empty.');
 });
 
 it('refuses a non-WebhookSecret entry during verify', function (): void {
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), ['nope'], $now))
+    expect(fn () => swVerifier()->verify('{}', 'msg_1', '1', 'v1,'.base64_encode('x'), ['nope'], $now, 'test-scope'))
         ->toThrow(WebhookException::class);
 });
 
@@ -315,6 +327,7 @@ it('accepts a padded signature header with surrounding whitespace', function ():
         $header,
         [$secret],
         $now,
+        'test-scope',
     );
 
     expect(true)->toBeTrue();
@@ -324,7 +337,7 @@ it('refuses an empty webhook id', function (): void {
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier()->verify('{}', '', '1', 'v1,'.base64_encode('x'), [$secret], $now))
+    expect(fn () => swVerifier()->verify('{}', '', '1', 'v1,'.base64_encode('x'), [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'Webhook id must not be empty.');
 });
 
@@ -340,6 +353,7 @@ it('refuses a malformed base64 token even when a later signature is valid', func
         $header,
         [$secret],
         $now,
+        'test-scope',
     ))->toThrow(WebhookException::class, 'Webhook signature header is malformed.');
 });
 
@@ -570,7 +584,7 @@ it('refuses webhook ids with control characters', function (): void {
     $secret = WebhookSecret::generate(24);
     $now = new DateTimeImmutable('@1');
 
-    expect(fn () => swVerifier()->verify('{}', "msg\nid", '1', 'v1,'.base64_encode('x'), [$secret], $now))
+    expect(fn () => swVerifier()->verify('{}', "msg\nid", '1', 'v1,'.base64_encode('x'), [$secret], $now, 'test-scope'))
         ->toThrow(WebhookException::class, 'Webhook id must not contain control characters.');
 });
 
@@ -583,7 +597,7 @@ it('accepts by default a timestamp 300 s off, 1 MiB, 8 signatures and 4 secrets,
     $secrets = [WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate()];
     $now = 1_700_000_000;
     $signedAt = fn (int $timestamp, string $body) => (new StandardWebhookSigner(2_000_000))->sign('msg_1', $timestamp, $body, $secrets);
-    $verify = fn (string $body, int $timestamp, string $header, array $verifySecrets) => $verifier->verify($body, 'msg_1', (string) $timestamp, $header, $verifySecrets, new DateTimeImmutable('@'.$now));
+    $verify = fn (string $body, int $timestamp, string $header, array $verifySecrets) => $verifier->verify($body, 'msg_1', (string) $timestamp, $header, $verifySecrets, new DateTimeImmutable('@'.$now), 'test-scope');
     $padding = str_repeat(' v1,'.base64_encode(str_repeat('x', 32)), 4);
 
     $oldest = $signedAt($now - 300, '{}');
@@ -601,7 +615,7 @@ it('skips a signature of an unknown scheme even when it holds commas', function 
     $secret = WebhookSecret::generate();
     $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
 
-    expect(swVerifier()->verify('{}', 'msg_1', '1700000000', 'v9,a,b '.$signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000')))->toBeNull();
+    expect(swVerifier()->verify('{}', 'msg_1', '1700000000', 'v9,a,b '.$signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))->toBeNull();
 });
 
 it('wraps a store that fails with anything but a WebhookException', function (): void {
@@ -618,7 +632,7 @@ it('wraps a store that fails with anything but a WebhookException', function ():
     $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
 
     try {
-        swVerifier(seenIds: $failingStore)->verify('{}', 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'));
+        swVerifier(seenIds: $failingStore)->verify('{}', 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope');
         $exception = null;
     } catch (WebhookIdStoreFailedException $caughtException) {
         $exception = $caughtException;

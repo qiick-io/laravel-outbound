@@ -190,7 +190,7 @@ $claim = $verifier->verify(
     $signed->headers['webhook-signature'],
     [$secret],
     new DateTimeImmutable('now'),
-    // Scope MUST identify the secret or endpoint — never share 'default' across tenants.
+    // Required: identifies the secret or endpoint, never shared by tenants.
     dedupeScope: 'orders-webhook',
 );
 ```
@@ -563,7 +563,9 @@ Schema::table('webhook_endpoints', function (Blueprint $table): void {
 // .env: OUTBOUND_WEBHOOK_SCOPE_COLUMN=project_id
 ```
 
-Null (the default) means one instance-wide scope. A product may add other
+The scope column is never mass-assignable, since it decides the tenant: set
+it in the product's own code (`$endpoint->forceFill(['project_id' => $project->id])`),
+never from request input. Null (the default) means one instance-wide scope. A product may add other
 columns the same way; the package reads only the scope column.
 
 Before `1.0.0` a schema change edits the package's `create_` migrations
