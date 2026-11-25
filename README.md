@@ -403,7 +403,11 @@ disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
 so a product can add its own channels. The package also emails the
 endpoint's `created_by` user, loaded with `auth.providers.users.model`
 (`WebhookEndpointDisabledNotification`, queued), for automatic disables only;
-turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
+turn that off with `outbound.webhooks.auto_disable.notify_owner`. To email
+someone else (a team, an operations address), bind a
+`Contracts\WebhookEndpointNoticeRecipientsContract` whose `recipientsFor()`
+returns the notifiables, users or `Notification::route('mail', ...)`; an
+empty list sends nothing. The mail
 carries no text a tenant wrote: a free-form name could hold a bare URL that
 mail clients turn into a link. It names the endpoint by its host (a valid
 host name or IP literal, else "an unknown host"; `WebhookEndpoint::displayHost()`

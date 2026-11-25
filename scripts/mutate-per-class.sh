@@ -36,6 +36,7 @@ webhook_classes=(
   'Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand'
   'Qiick\Outbound\Delivery\EndpointDisablePolicy'
   'Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener'
+  'Qiick\Outbound\Webhooks\EndpointCreatorRecipients'
   'Qiick\Outbound\Notifications\WebhookEndpointDisabledNotification'
 )
 
