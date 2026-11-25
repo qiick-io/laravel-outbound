@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A time budget for a worker run: `WebhookDeliveryCoordinator::work($limit,
+  $maxSeconds)` and `outbound:webhooks:work --max-seconds` start no attempt
+  once the budget is spent, next to the count limit.
+
 ## [0.2.0-beta.1] - 2026-11-25
 
 First pre-release with webhook delivery in the package (tables, coordinator,
