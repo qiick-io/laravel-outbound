@@ -173,7 +173,6 @@ final class OutboundServiceProvider extends ServiceProvider
                     ?? throw new InvalidArgumentException('outbound.webhooks.retry_preset must be standard or short.'),
                 defaultMaxConcurrency: self::configInt($config, 'outbound.webhooks.default_max_concurrency'),
                 maxResponseBytes: self::configInt($config, 'outbound.http.max_response_bytes'),
-                isEndpointPrivateHostsAllowed: self::configBool($config, 'outbound.webhooks.allow_endpoint_private_hosts'),
                 exceptionHandler: $app->make(ExceptionHandler::class),
                 disablePolicy: $app->make(EndpointDisablePolicy::class),
                 events: $app->make(EventDispatcher::class),

@@ -443,19 +443,14 @@ it('posts with a 15 s timeout, an endpoint override, and never above the configu
     'endpoint at 45 s, bounded by the 30 s chain deadline' => [45, 30],
 ]);
 
-it('applies the endpoint https and private-host overrides to the guard', function (): void {
-    config()->set('outbound.webhooks.allow_endpoint_private_hosts', true);
-    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+it('applies the endpoint https override to the guard', function (): void {
     deliveryEndpoint(['url' => 'http://hooks.example.com/plain', 'https_only' => true]);
-    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => true]);
     coordinator()->dispatch(invoicePaidMessage());
 
     coordinator()->work(50);
-    $errorCodes = WebhookDeliveryAttempt::query()->orderBy('id')->pluck('error_code')->all();
 
-    expect($errorCodes)->toBe(['ssrf_refused', null])
-        ->and($this->transfer->requests)->toHaveCount(1)
-        ->and((string) $this->transfer->requests[0]->getUri())->toBe('https://internal.example.com/hook');
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('ssrf_refused')
+        ->and($this->transfer->requests)->toBe([]);
 });
 
 it('keeps each endpoint within its concurrency, counting deliveries other workers hold', function (): void {
@@ -595,7 +590,6 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
         defaultRetryPreset: WebhookRetryPresetEnum::Standard,
         defaultMaxConcurrency: 2,
         maxResponseBytes: 1_048_576,
-        isEndpointPrivateHostsAllowed: false,
         exceptionHandler: app(ExceptionHandler::class),
         disablePolicy: app(EndpointDisablePolicy::class),
         events: app(Dispatcher::class),
@@ -841,20 +835,35 @@ it('does not send to an endpoint disabled after the batch was selected', functio
         ->and(WebhookDelivery::query()->where('endpoint_id', $first->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
 });
 
-it('never lets input switch private hosts on for an endpoint, and honours the switch only when the product allows it', function (bool $isAllowedByProduct): void {
-    config()->set('outbound.webhooks.allow_endpoint_private_hosts', $isAllowedByProduct);
+it('lets an endpoint only narrow the global private-host setting, never widen it', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver, allowPrivateHosts: $isAllowedGlobally),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        $this->transfer,
+    ));
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
-    $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
-    $endpoint->fill(['allow_private_hosts' => true])->save();
-    $isFillable = $endpoint->refresh()->allow_private_hosts === true;
-    $endpoint->forceFill(['allow_private_hosts' => true])->save();
+    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => $endpointSetting]);
     coordinator()->dispatch(invoicePaidMessage());
 
     coordinator()->work(50);
 
-    expect($isFillable)->toBeFalse()
-        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($isAllowedByProduct ? null : 'ssrf_refused');
-})->with(['product allows endpoint switches' => [true], 'product does not' => [false]]);
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($errorCode);
+})->with([
+    'allowed globally, the endpoint inherits' => [true, null, null],
+    'allowed globally, the endpoint narrows' => [true, false, 'ssrf_refused'],
+    'allowed globally, the endpoint agrees' => [true, true, null],
+    'refused globally, the endpoint cannot widen' => [false, true, 'ssrf_refused'],
+    'refused globally, the endpoint inherits' => [false, null, 'ssrf_refused'],
+]);
+
+it('never lets input set an endpoint private-host setting', function (): void {
+    $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
+    $endpoint->fill(['allow_private_hosts' => true])->save();
+
+    expect($endpoint->refresh()->allow_private_hosts)->toBeNull();
+});
 
 it('honours the first Retry-After when the header is repeated', function (): void {
     deliveryEndpoint();
