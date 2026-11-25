@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store implements the new signature and `release(WebhookIdClaim)`, freeing
   the id only for the claim's token. `StandardWebhookVerifier::verify()`
   returns the claim it won, or null without a store.
+- **`RetrySchedule::MAX_DELAY_SECONDS` is now `RetrySchedule::maxDelaySeconds()`**,
+  and `MAX_JITTER_SECONDS` is no longer public (both values are unchanged).
+- **`RemoteUrlGuard` refuses a host name outside dot-separated letters,
+  digits, hyphens and underscores** ("URL is invalid."); before, a name such
+  as `exa!mple.com` reached the resolver.
 
 ### Added
 

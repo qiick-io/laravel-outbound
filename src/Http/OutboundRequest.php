@@ -139,7 +139,7 @@ final class OutboundRequest
     }
 
     /**
-     * @return array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: string, payload: mixed, contentType: ?string}|null}
+     * @return array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form'|'multipart', payload: array<string, mixed>, contentType: ?string}|null}
      */
     public function snapshot(): array
     {

@@ -123,7 +123,7 @@ final class StandardWebhookVerifier
         } catch (WebhookException $e) {
             throw $e;
         } catch (Throwable $e) {
-            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, $e);
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $e);
         }
 
         if (! $claimed) {
@@ -140,15 +140,7 @@ final class StandardWebhookVerifier
      */
     private function parseSignatureHeader(string $header): array
     {
-        // Empty falls through to trim/filter with the same empty-header message.
-        if ($header === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
-            throw new WebhookException('Webhook signature header must not be empty.');
-        }
-
-        // trim + filter + values: empty tokens from whitespace are equivalent under
-        // the empty-header guard; unwrap mutants do not change observable rejects.
-        $tokens = preg_split('/\s+/', trim($header)) ?: []; // @pest-mutate-ignore: UnwrapTrim
-        $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== '')); // @pest-mutate-ignore: UnwrapArrayFilter,UnwrapArrayValues,EmptyStringToNotEmpty
+        $tokens = preg_split('/\s+/', $header, flags: PREG_SPLIT_NO_EMPTY) ?: [];
 
         if ($tokens === []) {
             throw new WebhookException('Webhook signature header must not be empty.');
@@ -161,8 +153,9 @@ final class StandardWebhookVerifier
         $candidates = [];
 
         foreach ($tokens as $token) {
-            // Limit 2 vs 3 is equivalent: base64 never contains commas.
-            $parts = explode(',', $token, 2); // @pest-mutate-ignore: IncrementInteger
+            // Split at the first comma only: a scheme this verifier does not
+            // know may carry commas in its signature, and is skipped.
+            $parts = explode(',', $token, 2);
             if (count($parts) !== 2) {
                 throw new WebhookException('Webhook signature header is malformed.');
             }
@@ -192,9 +185,9 @@ final class StandardWebhookVerifier
      */
     private function parseTimestamp(string $webhookTimestamp): int
     {
-        // Integer unix-seconds string only — refuse floats / signs / whitespace.
-        // Empty is already caught by ! ctype_digit('').
-        if ($webhookTimestamp === '' || ! ctype_digit($webhookTimestamp)) { // @pest-mutate-ignore: EmptyStringToNotEmpty
+        // Integer unix-seconds string only — refuse floats / signs / whitespace
+        // (and the empty string: ctype_digit('') is false).
+        if (! ctype_digit($webhookTimestamp)) {
             throw new WebhookException('Webhook timestamp must be an integer unix second.');
         }
 

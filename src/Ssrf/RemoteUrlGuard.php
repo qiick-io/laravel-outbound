@@ -18,70 +18,6 @@ use Symfony\Component\HttpFoundation\IpUtils;
  */
 final class RemoteUrlGuard
 {
-    private const int MaxUrlLength = 2048;
-
-    /**
-     * Blocked when private hosts are not allowed.
-     *
-     * @var list<string>
-     */
-    private const array BlockedNetworks = [
-        '0.0.0.0/8',
-        '10.0.0.0/8',
-        '100.64.0.0/10',
-        '127.0.0.0/8',
-        '169.254.0.0/16',
-        '172.16.0.0/12',
-        '192.0.0.0/24',
-        '192.0.2.0/24',
-        '192.168.0.0/16',
-        '198.18.0.0/15',
-        '198.51.100.0/24',
-        '203.0.113.0/24',
-        '224.0.0.0/4',
-        '240.0.0.0/4',
-        '::/128',
-        '::1/128',
-        'fc00::/7',
-        'fe80::/10',
-        'fec0::/10', // site-local (deprecated RFC 3879); blocked when private off
-        'ff00::/8',
-        '2001:db8::/32',
-    ];
-
-    /**
-     * Always blocked, also with allowPrivateHosts. Values for IP entries are the
-     * canonical inet_ntop(inet_pton()) form so isMetadataHost can compare after
-     * canonicalisation.
-     *
-     * @var list<string>
-     */
-    private const array MetadataHosts = [
-        'metadata',
-        'metadata.google.internal',
-        '169.254.169.254', // EC2/GCP link-local metadata
-        'fd00:ec2::254', // EC2 IPv6 metadata
-        '100.100.100.200', // Alibaba Cloud metadata
-        '192.0.0.192', // Oracle Cloud metadata
-        '169.254.170.2', // AWS ECS task metadata
-        '169.254.170.23', // AWS EKS pod IPv4 metadata
-        'fd00:ec2::23', // AWS EKS pod IPv6 metadata
-        'fd20:ce::254', // GCP IPv6 metadata
-        '168.63.129.16', // Azure wireserver / platform DNS
-    ];
-
-    /**
-     * Transition prefixes always blocked (even when private hosts are allowed).
-     *
-     * @var list<string>
-     */
-    private const array AlwaysBlockedTransitionNetworks = [
-        '64:ff9b::/96', // NAT64 well-known prefix (RFC 6052)
-        '64:ff9b:1::/48', // local-use NAT64 (RFC 8215); always — embedded metadata via local gateway
-        '2002::/16', // 6to4 (RFC 3056) — rejected outright
-        '2001:0::/32', // Teredo (RFC 4380)
-    ];
-
     public function __construct(
         private HostResolver $hostResolver,
         private bool $allowPrivateHosts = false,
@@ -102,13 +38,13 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('URL is required.');
         }
 
-        if (strlen($trimmed) > self::MaxUrlLength) {
+        if (strlen($trimmed) > self::maxUrlLength()) {
             throw new UnsafeUrl('URL is too long.');
         }
 
+        // isset() on the false parse_url() returns for a malformed URL is false too.
         $parts = parse_url($trimmed);
-        // parse_url does not return false for the string inputs we accept.
-        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue
+        if (! isset($parts['scheme'], $parts['host'])) {
             throw new UnsafeUrl('URL is not absolute.');
         }
 
@@ -116,7 +52,7 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('URL must not contain credentials.');
         }
 
-        $scheme = strtolower((string) $parts['scheme']); // @pest-mutate-ignore: RemoveStringCast
+        $scheme = strtolower($parts['scheme']);
 
         if ($httpsOnly) {
             if ($scheme !== 'https') {
@@ -126,10 +62,8 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('Only http and https URLs are allowed.');
         }
 
-        $rawHost = strtolower((string) $parts['host']); // @pest-mutate-ignore: RemoveStringCast
-        $port = isset($parts['port'])
-            ? (int) $parts['port'] // @pest-mutate-ignore: RemoveIntegerCast
-            : ($scheme === 'https' ? 443 : 80);
+        $rawHost = strtolower($parts['host']);
+        $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
 
         $host = $this->normalizeHost($rawHost);
 
@@ -207,12 +141,12 @@ final class RemoteUrlGuard
         $httpsOnly = $options->httpsOnly || $this->httpsOnly;
         $trimmed = trim($url);
 
-        if ($trimmed === '' || strlen($trimmed) > self::MaxUrlLength) {
+        if ($trimmed === '' || strlen($trimmed) > self::maxUrlLength()) {
             throw new UnsafeUrl($trimmed === '' ? 'URL is required.' : 'URL is too long.');
         }
 
         $parts = parse_url($trimmed);
-        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) { // @pest-mutate-ignore: FalseToTrue
+        if (! isset($parts['scheme'], $parts['host'])) {
             throw new UnsafeUrl('URL is not absolute.');
         }
 
@@ -220,7 +154,7 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('URL must not contain credentials.');
         }
 
-        $scheme = strtolower((string) $parts['scheme']); // @pest-mutate-ignore: RemoveStringCast
+        $scheme = strtolower($parts['scheme']);
 
         if ($httpsOnly) {
             if ($scheme !== 'https') {
@@ -236,7 +170,8 @@ final class RemoteUrlGuard
      */
     private function normalizeHost(string $host): string
     {
-        if (str_contains($host, '[') || str_contains($host, ']')) {
+        // A bracket anywhere else is refused with the other characters below.
+        if (str_starts_with($host, '[')) {
             $literal = $this->unwrapIpv6Literal($host);
 
             if ($literal === null) {
@@ -276,23 +211,19 @@ final class RemoteUrlGuard
             INTL_IDNA_VARIANT_UTS46,
         );
 
-        if ($ascii === false || $ascii === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
+        if ($ascii === false) {
             throw new UnsafeUrl('URL is invalid.');
         }
-
-        $ascii = strtolower($ascii);
 
         // Ideographic full stop and similar can map to '.' — strip after IDN.
         if (str_ends_with($ascii, '.')) {
             $ascii = substr($ascii, 0, -1);
         }
 
-        if ($ascii === '') { // @pest-mutate-ignore: EmptyStringToNotEmpty
-            throw new UnsafeUrl('URL is invalid.');
-        }
-
-        // An IP must arrive as a URL IP literal, never through IDN mapping.
-        if (strpbrk($ascii, ':[]%@/\\?#') !== false || filter_var($ascii, FILTER_VALIDATE_IP) !== false || $this->readIpv4Address($ascii) !== null) {
+        // Dot-separated labels of letters, digits, hyphens and underscores
+        // (curl and S3 accept them), nothing else and never empty; an IP must
+        // arrive as a URL IP literal, never through IDN mapping.
+        if (preg_match('/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/D', $ascii) !== 1 || $this->readIpv4Address($ascii) !== null) {
             throw new UnsafeUrl('URL is invalid.');
         }
 
@@ -315,101 +246,54 @@ final class RemoteUrlGuard
     /**
      * NAT64 / 6to4 / Teredo: design allows rejecting the whole prefix outright
      * (chosen here) rather than extracting and re-checking embedded IPv4.
+     * IpUtils matches IPv6 prefixes only against IPv6 addresses, so a name or
+     * an IPv4 address never matches.
      */
     private function isAlwaysBlockedTransition(string $address): bool
     {
-        foreach ($this->addressForms($address) as $form) {
-            if (! filter_var($form, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                continue; // @pest-mutate-ignore: ContinueToBreak
-            }
-
-            if (IpUtils::checkIp($form, self::AlwaysBlockedTransitionNetworks)) {
-                return true;
-            }
-        }
-
-        return false;
+        return IpUtils::checkIp($address, self::alwaysBlockedTransitionNetworks());
     }
 
+    /**
+     * Every host and address reaching here is canonical (a lowercased name,
+     * a dotted-decimal IPv4, an inet_ntop() IPv6), like the list entries.
+     */
     private function isMetadataHost(string $host): bool
     {
-        foreach ($this->addressForms($host) as $form) {
-            foreach ($this->metadataCompareForms($form) as $candidate) {
-                if (in_array($candidate, self::MetadataHosts, true)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return in_array($this->comparableForm($host), self::metadataHosts(), true);
     }
 
     /**
-     * @return list<string>
-     */
-    private function metadataCompareForms(string $form): array
-    {
-        $forms = [$form];
-        $packed = @inet_pton($form);
-
-        if ($packed !== false) {
-            $canonical = inet_ntop($packed);
-
-            if ($canonical !== false) { // @pest-mutate-ignore: IfNegated,NotIdenticalToIdentical,FalseToTrue
-                $forms[] = $canonical;
-            }
-        }
-
-        return array_values(array_unique($forms)); // @pest-mutate-ignore: UnwrapArrayUnique,UnwrapArrayValues
-    }
-
-    /**
-     * Curl / inet_aton(3) IPv4 reading. Null when the host is a name to both.
+     * Curl / inet_aton(3) IPv4 reading: one to four parts in decimal, octal
+     * (leading 0) or hex (0x), the last part filling the remaining bytes. Null
+     * when the host is a name to both.
      */
     private function readIpv4Address(string $host): ?string
     {
-        if (preg_match('/^[0-9a-fx.]+$/', $host) !== 1) {
-            return null; // @pest-mutate-ignore: RemoveEarlyReturn
-        }
-
         $parts = explode('.', $host);
 
         if (count($parts) > 4) {
             return null;
         }
 
-        $numbers = [];
+        $last = $this->readIpv4Number(array_pop($parts));
 
-        foreach ($parts as $part) {
-            $number = $this->readIpv4Number($part);
-
-            if ($number === null) {
-                return null;
-            }
-
-            $numbers[] = $number;
-        }
-
-        $last = (int) array_pop($numbers); // @pest-mutate-ignore: RemoveIntegerCast
-        $value = 0;
-
-        foreach ($numbers as $number) {
-            if ($number > 255) {
-                return null;
-            }
-
-            $value = $value * 256 + $number;
-        }
-
-        $remainingBytes = 4 - count($numbers);
-
-        if ($last >= 256 ** $remainingBytes) {
+        if ($last === null || $last >= 256 ** (4 - count($parts))) {
             return null;
         }
 
-        // Power→multiply is equivalent on dotted-decimal (remainingBytes=1) and on
-        // short forms that authorize() refuses after the spelling check anyway.
-        $ipLong = $value * 256 ** $remainingBytes + $last; // @pest-mutate-ignore: PowerToMultiplication
+        $ipLong = $last;
+
+        // Each leading part is one byte, from the most significant down.
+        foreach ($parts as $position => $part) {
+            $number = $this->readIpv4Number($part);
+
+            if ($number === null || $number > 255) {
+                return null;
+            }
+
+            $ipLong += $number * 256 ** (3 - $position);
+        }
 
         return sprintf(
             '%d.%d.%d.%d',
@@ -420,78 +304,61 @@ final class RemoteUrlGuard
         );
     }
 
+    /**
+     * An overlong part saturates intval() at PHP_INT_MAX, which the byte
+     * limits in readIpv4Address() then refuse.
+     */
     private function readIpv4Number(string $part): ?int
     {
-        [$digits, $base] = match (true) {
-            // substr offset / hex+octal bases: authorize() only sees dotted-decimal vs refuse-as-name
-            preg_match('/^0x[0-9a-f]+$/', $part) === 1 => [substr($part, 2), 16], // @pest-mutate-ignore: UnwrapSubstr,DecrementInteger,IncrementInteger
-            preg_match('/^0[0-7]*$/', $part) === 1 => [$part, 8], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
-            preg_match('/^[1-9][0-9]*$/', $part) === 1 => [$part, 10],
-            default => [null, 0], // @pest-mutate-ignore: DecrementInteger,IncrementInteger
+        // intval() reads the `0x` prefix in base 16 and a leading 0 in base 8.
+        $base = match (true) {
+            preg_match('/^0x[0-9a-f]+$/', $part) === 1 => 16,
+            preg_match('/^0[0-7]*$/', $part) === 1 => 8,
+            preg_match('/^[1-9][0-9]*$/', $part) === 1 => 10,
+            default => null,
         };
 
-        if ($digits === null) {
-            return null;
-        }
-
-        $digits = ltrim($digits, '0');
-
-        if (strlen($digits) > 11) {
-            return null;
-        }
-
-        $number = $digits === '' ? 0 : intval($digits, $base); // @pest-mutate-ignore: EmptyStringToNotEmpty
-
-        return $number > 0xFFFFFFFF ? null : $number;
+        return $base === null ? null : intval($part, $base);
     }
 
     private function unwrapIpv6Literal(string $host): ?string
     {
-        if (! str_starts_with($host, '[') || ! str_ends_with($host, ']')) {
+        if (preg_match('/^\[(.*)\]$/D', $host, $bracketed) !== 1) {
             return null;
         }
 
-        $literal = substr($host, 1, -1);
-
-        if (str_contains($literal, '%')) {
-            return null;
-        }
+        // filter_var() also refuses a zone id (`fe80::1%eth0`).
+        $literal = $bracketed[1];
 
         if (filter_var($literal, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
             return null;
         }
 
-        $packed = inet_pton($literal);
-
-        // inet_pton cannot fail after FILTER_VALIDATE_IP succeeded for the same literal.
-        return $packed === false ? $literal : (string) inet_ntop($packed); // @pest-mutate-ignore: TernaryNegated,FalseToTrue,IdenticalToNotIdentical,RemoveStringCast
+        return self::canonicalIp($literal);
     }
 
     /**
-     * @return list<string>
+     * The embedded IPv4 address of an IPv4-mapped (::ffff:0:0/96) or
+     * IPv4-compatible (::/96) address, the form the lists judge it by;
+     * anything else as it is. `::` and `::1` are compatible forms of 0.0.0.0
+     * and 0.0.0.1, inside 0.0.0.0/8.
      */
-    private function addressForms(string $address): array
+    private function comparableForm(string $address): string
     {
-        $packed = @inet_pton($address);
-
-        if ($packed === false || strlen($packed) !== 16) {
-            return [$address];
-        }
-
+        $packed = (string) @inet_pton($address);
         $prefix = substr($packed, 0, 12);
 
-        // Mapped (::ffff:0:0/96) and compatible (::/96) IPv4-in-IPv6 forms.
         if ($prefix !== str_repeat("\0", 10)."\xff\xff" && $prefix !== str_repeat("\0", 12)) {
-            return [$address];
+            return $address;
         }
 
-        $embedded = inet_ntop(substr($packed, 12));
-
-        // Four bytes from a valid v6 pack always yield an IPv4 string from inet_ntop.
-        return $embedded === false ? [$address] : [$address, $embedded]; // @pest-mutate-ignore: TernaryNegated,FalseToTrue,RemoveArrayItem
+        return implode('.', array_map(ord(...), str_split(substr($packed, 12))));
     }
 
     /**
+     * The resolver's answers that are IP addresses, in canonical form; the
+     * pin is the first IPv4 one, so duplicates change nothing.
+     *
      * @param  list<mixed>  $addresses
      * @return list<string>
      */
@@ -500,15 +367,12 @@ final class RemoteUrlGuard
         $canonical = [];
 
         foreach ($addresses as $address) {
-            $packed = is_string($address) ? @inet_pton($address) : false; // @pest-mutate-ignore: FalseToTrue
-
-            if ($packed !== false) {
-                $canonical[] = (string) inet_ntop($packed); // @pest-mutate-ignore: RemoveStringCast
+            if (is_string($address) && filter_var($address, FILTER_VALIDATE_IP) !== false) {
+                $canonical[] = self::canonicalIp($address);
             }
         }
 
-        // Single preferred pin does not depend on duplicate/order of resolver answers.
-        return array_values(array_unique($canonical)); // @pest-mutate-ignore: UnwrapArrayValues,UnwrapArrayUnique
+        return $canonical;
     }
 
     /**
@@ -535,13 +399,17 @@ final class RemoteUrlGuard
 
     private function isBlockedAddress(string $address): bool
     {
-        foreach ($this->addressForms($address) as $form) {
-            if (IpUtils::checkIp($form, self::BlockedNetworks)) {
-                return true;
-            }
-        }
+        return IpUtils::checkIp($this->comparableForm($address), self::blockedNetworks());
+    }
 
-        return false;
+    /**
+     * The canonical text of an address filter_var() already accepted.
+     */
+    private static function canonicalIp(string $address): string
+    {
+        // Both functions fail only on an address filter_var() refused, which
+        // never reaches here; the address as given would then be the answer.
+        return inet_ntop(inet_pton($address) ?: $address) ?: $address;
     }
 
     private function destination(string $url, string $host, int $port, string $pinnedAddress): AuthorizedDestination
@@ -564,5 +432,86 @@ final class RemoteUrlGuard
         }
 
         return $address;
+    }
+
+    /**
+     * Blocked when private hosts are not allowed.
+     *
+     * A method rather than a constant, like the lists below: a constant's
+     * lines have no coverage, so mutation testing could not check that each
+     * entry is needed.
+     *
+     * @return list<string>
+     */
+    private static function blockedNetworks(): array
+    {
+        return [
+            '0.0.0.0/8',
+            '10.0.0.0/8',
+            '100.64.0.0/10',
+            '127.0.0.0/8',
+            '169.254.0.0/16',
+            '172.16.0.0/12',
+            '192.0.0.0/24',
+            '192.0.2.0/24',
+            '192.168.0.0/16',
+            '198.18.0.0/15',
+            '198.51.100.0/24',
+            '203.0.113.0/24',
+            '224.0.0.0/4',
+            '240.0.0.0/4',
+            'fc00::/7',
+            'fe80::/10',
+            'fec0::/10', // site-local (deprecated RFC 3879); blocked when private off
+            'ff00::/8',
+            '2001:db8::/32',
+        ];
+    }
+
+    /**
+     * Always blocked, also with allowPrivateHosts. Values for IP entries are the
+     * canonical inet_ntop(inet_pton()) form so isMetadataHost can compare after
+     * canonicalisation.
+     *
+     * @return list<string>
+     */
+    private static function metadataHosts(): array
+    {
+        return [
+            'metadata',
+            'metadata.google.internal',
+            '169.254.169.254', // EC2/GCP link-local metadata
+            'fd00:ec2::254', // EC2 IPv6 metadata
+            '100.100.100.200', // Alibaba Cloud metadata
+            '192.0.0.192', // Oracle Cloud metadata
+            '169.254.170.2', // AWS ECS task metadata
+            '169.254.170.23', // AWS EKS pod IPv4 metadata
+            'fd00:ec2::23', // AWS EKS pod IPv6 metadata
+            'fd20:ce::254', // GCP IPv6 metadata
+            '168.63.129.16', // Azure wireserver / platform DNS
+        ];
+    }
+
+    /**
+     * Transition prefixes always blocked (even when private hosts are allowed).
+     *
+     * @return list<string>
+     */
+    private static function alwaysBlockedTransitionNetworks(): array
+    {
+        return [
+            '64:ff9b::/96', // NAT64 well-known prefix (RFC 6052)
+            '64:ff9b:1::/48', // local-use NAT64 (RFC 8215); always — embedded metadata via local gateway
+            '2002::/16', // 6to4 (RFC 3056) — rejected outright
+            '2001:0::/32', // Teredo (RFC 4380)
+        ];
+    }
+
+    /**
+     * The longest URL accepted, in bytes.
+     */
+    private static function maxUrlLength(): int
+    {
+        return 2048;
     }
 }

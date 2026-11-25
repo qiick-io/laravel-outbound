@@ -77,6 +77,10 @@ and the approved design before adopting a commit from `develop`.
 - `webhook_deliveries.payload_expires_at` is required: a product that
   inserts delivery rows itself (seeders, imports) sets it, or the insert
   fails. Recreate the database.
+- Replace `RetrySchedule::MAX_DELAY_SECONDS` with
+  `RetrySchedule::maxDelaySeconds()`; `MAX_JITTER_SECONDS` is gone (one hour,
+  internal). `RemoteUrlGuard` now refuses host names with characters other
+  than letters, digits, hyphens, underscores and dots.
 - A product that scopes endpoints adds its scope foreign key to
   `webhook_endpoints` with its own migration and sets
   `OUTBOUND_WEBHOOK_SCOPE_COLUMN` (see the README, "Webhook tables").

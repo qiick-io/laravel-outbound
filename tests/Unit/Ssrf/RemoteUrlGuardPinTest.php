@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
+use Qiick\Outbound\Testing\FakeHostResolver;
 
 /**
  * Curl-style IPv4 + CONNECT_TO pin surface. Ported from
@@ -254,4 +255,90 @@ it('resolves once per authorize and returns CONNECT_TO for the checked address',
         ->and(fn () => $guard->authorize('https://rebind.example.com/token'))
         ->toThrow(UnsafeUrl::class)
         ->and($box[0])->toBe(2);
+});
+
+/*
+ * The reason of each refusal, not only the refusal: a metadata address in any
+ * spelling is a refused host, any other non-dotted spelling an invalid URL.
+ * Getting the address wrong (a base, the bytes left for the last part) turns
+ * one into the other, so these pin how the guard reads what curl reads.
+ */
+
+function guardRefusalReason(RemoteUrlGuard $guard, string $url): ?string
+{
+    $result = $guard->tryAuthorize($url);
+
+    return $result['ok'] ? null : $result['reason'];
+}
+
+it('refuses every spelling of a metadata address as a refused host', function (string $url, bool $allowPrivate): void {
+    expect(guardRefusalReason(ssrfGuardThatMustNotResolve($allowPrivate), $url))->toBe('Host is not allowed.');
+})->with('metadata ipv4 spellings')->with('private host setting');
+
+it('refuses every spelling of the alibaba and oracle metadata addresses as a refused host', function (string $url, bool $allowPrivate): void {
+    expect(guardRefusalReason(ssrfGuardThatMustNotResolve($allowPrivate), $url))->toBe('Host is not allowed.');
+})->with('cloud metadata ipv4 spellings')->with('private host setting');
+
+it('refuses any other non-dotted spelling as an invalid URL', function (string $url, bool $allowPrivate): void {
+    expect(guardRefusalReason(ssrfGuardThatMustNotResolve($allowPrivate), $url))->toBe('URL is invalid.');
+})->with([
+    'short form' => 'https://169.254.65534/token',
+    'hex, two parts' => 'https://0x7f.1/token',
+    'octal' => 'https://012.0.0.1/token',
+    'one octal number' => 'https://017700000001/token',
+    'a padded octal zero' => 'https://127.00.0.1/token',
+    'trailing dot' => 'https://93.184.216.34./token',
+    'a leading part of 255' => 'https://0xff.1/token',
+])->with('private host setting');
+
+it('refuses a host that is not dot-separated letters, digits, hyphens and underscores', function (string $url): void {
+    expect(guardRefusalReason(ssrfGuardResolving(), $url))->toBe('URL is invalid.');
+})->with([
+    'a full-width colon, mapped to a colon' => 'https://a：b/token',
+    'a closing bracket' => 'https://a]/token',
+    'an opening bracket' => 'https://a[b/token',
+    'an unterminated ipv6 literal' => 'https://[::1/token',
+    'a symbol' => 'https://exa!mple.com/token',
+    'an empty label' => 'https://a..b/token',
+]);
+
+it('refuses each private and reserved network unless private hosts are allowed', function (string $address): void {
+    expect(guardRefusalReason(ssrfGuardResolving(), "https://{$address}/token"))->toBe('Host is not allowed.')
+        ->and(guardRefusalReason(ssrfGuardResolving(allowPrivate: true), "https://{$address}/token"))->toBeNull();
+})->with([
+    '0.0.0.0/8' => '0.1.2.3',
+    '10.0.0.0/8' => '10.1.2.3',
+    '100.64.0.0/10' => '100.64.1.2',
+    '127.0.0.0/8' => '127.1.2.3',
+    '169.254.0.0/16' => '169.254.1.2',
+    '172.16.0.0/12' => '172.16.1.2',
+    '192.0.0.0/24' => '192.0.0.8',
+    '192.0.2.0/24' => '192.0.2.8',
+    '192.168.0.0/16' => '192.168.1.2',
+    '198.18.0.0/15' => '198.18.1.2',
+    '198.51.100.0/24' => '198.51.100.8',
+    '203.0.113.0/24' => '203.0.113.8',
+    '224.0.0.0/4' => '224.1.2.3',
+    '240.0.0.0/4' => '240.1.2.3',
+    ':: (compatible 0.0.0.0)' => '[::]',
+    '::1 (compatible 0.0.0.1)' => '[::1]',
+    'fc00::/7' => '[fc00::8]',
+    'fe80::/10' => '[fe80::8]',
+    'fec0::/10' => '[fec0::8]',
+    'ff00::/8' => '[ff02::8]',
+    '2001:db8::/32' => '[2001:db8::8]',
+    'ipv4 mapped private' => '[::ffff:10.1.2.3]',
+]);
+
+it('pins only the resolver answers that are ip addresses, in canonical form', function (): void {
+    $guard = new RemoteUrlGuard((new FakeHostResolver)->with('app.example', [123, 'not-an-ip', '2001:DB8:0:0:0:0:0:1', '93.184.216.34']), allowPrivateHosts: true);
+
+    expect($guard->authorize('https://app.example/token')->pinnedAddress)->toBe('93.184.216.34');
+});
+
+it('pins and names an ipv6 address in its canonical form', function (): void {
+    $guard = new RemoteUrlGuard((new FakeHostResolver)->with('app.example', ['2001:DB8:0:0:0:0:0:1']), allowPrivateHosts: true);
+
+    expect($guard->authorize('https://app.example/token')->pinnedAddress)->toBe('2001:db8::1')
+        ->and($guard->authorize('https://[2001:DB8:0:0:0:0:0:1]/token')->host)->toBe('2001:db8::1');
 });

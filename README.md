@@ -617,12 +617,10 @@ composer lint      # Pint
 composer analyse   # PHPStan level max
 ```
 
-Mutation (CI): `bash scripts/mutate-per-class.sh` — each listed security class
-must score ≥95% (`RemoteUrlGuard`, `AuthorizedDestination`, `PinnedHttpClient`,
-`WebhookSecret`, `StandardWebhookSigner`, `StandardWebhookVerifier`,
-`CacheSeenWebhookIdStore`, `RetrySchedule`), and every class added for the
-delivery layer, without `--covered-only`. No method-level
-`@pest-mutate-ignore`.
+Mutation (CI): `bash scripts/mutate-per-class.sh` — every listed class must
+score ≥95% without `--covered-only`, and `src/` has no `@pest-mutate-ignore`.
+A constant's line has no coverage, so values mutation testing must check live
+in methods.
 
 The suite runs on in-memory SQLite by default; CI also runs it on PostgreSQL,
 MySQL and MariaDB. Point it at a server with the usual `DB_*` variables

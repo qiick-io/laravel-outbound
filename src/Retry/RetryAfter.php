@@ -31,7 +31,7 @@ final class RetryAfter
 
     /**
      * @return int|null seconds to wait, from 0 (a date now or in the past) up
-     *                  to {@see RetrySchedule::MAX_DELAY_SECONDS}; null when
+     *                  to {@see RetrySchedule::maxDelaySeconds()}; null when
      *                  the value is malformed, so the plain schedule applies
      */
     public static function parse(string $headerValue, DateTimeImmutable $now): ?int
@@ -44,8 +44,8 @@ final class RetryAfter
 
             // Longer than the cap's own digits is above it; a cast would
             // overflow, and past ~308 digits even become 0 through INF.
-            return strlen($digits) > strlen((string) RetrySchedule::MAX_DELAY_SECONDS)
-                ? RetrySchedule::MAX_DELAY_SECONDS
+            return strlen($digits) > strlen((string) RetrySchedule::maxDelaySeconds())
+                ? RetrySchedule::maxDelaySeconds()
                 : self::capped((int) $digits);
         }
 
@@ -62,7 +62,7 @@ final class RetryAfter
 
     private static function capped(int $seconds): int
     {
-        return min($seconds, RetrySchedule::MAX_DELAY_SECONDS);
+        return min($seconds, RetrySchedule::maxDelaySeconds());
     }
 
     private static function httpDate(string $headerValue, DateTimeImmutable $now): ?DateTimeImmutable

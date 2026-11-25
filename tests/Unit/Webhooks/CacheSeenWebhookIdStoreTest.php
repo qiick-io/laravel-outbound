@@ -174,3 +174,11 @@ it('wraps cache failures as WebhookIdStoreFailedException', function (): void {
     expect(fn () => $store->claim(WebhookIdClaim::generate('s', 'id'), 10))
         ->toThrow(WebhookIdStoreFailedException::class, 'Webhook id dedupe store failed.');
 });
+
+it('names the refused store and the accepted ones', function (): void {
+    expect(fn () => new CacheSeenWebhookIdStore(new Repository(new NullStore)))
+        ->toThrow(
+            UnsupportedWebhookIdCacheStoreException::class,
+            'CacheSeenWebhookIdStore refuses cache store Illuminate\Cache\NullStore; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.',
+        );
+});

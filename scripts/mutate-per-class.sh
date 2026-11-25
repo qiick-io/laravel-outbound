@@ -15,19 +15,7 @@ unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
 pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
 webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Unit/Retry tests/Feature/Webhooks}"
 
-# Classes from before the 1.0 completeness work still run with --covered-only.
-covered_only_classes=(
-  'Qiick\Outbound\Ssrf\RemoteUrlGuard'
-  'Qiick\Outbound\Ssrf\AuthorizedDestination'
-  'Qiick\Outbound\Http\PinnedHttpClient'
-  'Qiick\Outbound\Webhooks\WebhookSecret'
-  'Qiick\Outbound\Webhooks\StandardWebhookSigner'
-  'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
-  'Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore'
-  'Qiick\Outbound\Retry\RetrySchedule'
-)
-
-# Every class added since: no --covered-only, so every mutated line must be killed.
+# No class runs with --covered-only: every mutated line must be killed.
 webhook_classes=(
   'Qiick\Outbound\Models\WebhookEndpoint'
   'Qiick\Outbound\Models\WebhookEndpointSecret'
@@ -72,22 +60,31 @@ in_this_shard() {
   classes_run=$((classes_run + 1))
 }
 
-for class in "${covered_only_classes[@]}"; do
-  in_this_shard || continue
-  paths="$unit_paths"
-  if [[ "$class" == 'Qiick\Outbound\Http\PinnedHttpClient' ]]; then
-    paths="$pin_paths"
-  fi
-
+echo_and_mutate() {
+  local class="$1"
+  shift
   echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
-  if ! vendor/bin/pest --mutate --class="${class}" --covered-only --min="${min}" ${paths} "$@"; then
+  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" "$@"; then
     status=1
   fi
-done
+}
 
-# Classes added since whose tests are unit tests: no --covered-only either.
+# PinnedHttpClient's transport mutants are killed only on the real wire.
+if in_this_shard; then
+  # shellcheck disable=SC2086
+  echo_and_mutate 'Qiick\Outbound\Http\PinnedHttpClient' ${pin_paths} "$@"
+fi
+
+# Classes whose tests are unit tests.
 unit_classes=(
+  'Qiick\Outbound\Ssrf\RemoteUrlGuard'
+  'Qiick\Outbound\Ssrf\AuthorizedDestination'
+  'Qiick\Outbound\Webhooks\WebhookSecret'
+  'Qiick\Outbound\Webhooks\StandardWebhookSigner'
+  'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
+  'Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore'
+  'Qiick\Outbound\Retry\RetrySchedule'
   'Qiick\Outbound\Http\OutboundHttpException'
   'Qiick\Outbound\Http\EgressProxy'
   'Qiick\Outbound\Webhooks\WebhookMessage'
@@ -96,20 +93,14 @@ unit_classes=(
 
 for class in "${unit_classes[@]}"; do
   in_this_shard || continue
-  echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
-  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${unit_paths} "$@"; then
-    status=1
-  fi
+  echo_and_mutate "${class}" ${unit_paths} "$@"
 done
 
 for class in "${webhook_classes[@]}"; do
   in_this_shard || continue
-  echo "==> mutate ${class} (min=${min})"
   # shellcheck disable=SC2086
-  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" ${webhook_paths} "$@"; then
-    status=1
-  fi
+  echo_and_mutate "${class}" ${webhook_paths} "$@"
 done
 
 echo "==> shard ${shard} ran ${classes_run} class(es)"
