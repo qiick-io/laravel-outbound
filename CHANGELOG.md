@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WebhookDeliveredEvent`: fired once a 2xx attempt is stored, after the
+  commit, with the delivery's and the endpoint's public ids, the webhook id
+  and the attempt number; the counterpart of `WebhookDeliveryFailedEvent`.
+
 ## [0.2.0-beta.1] - 2026-11-25
 
 First pre-release with webhook delivery in the package (tables, coordinator,

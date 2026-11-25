@@ -5,8 +5,10 @@ declare(strict_types=1);
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
@@ -17,6 +19,7 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveredEvent;
 use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
@@ -1132,3 +1135,59 @@ it('refuses a legacy profile entry that is not a name and a profile binding', fu
     'no name' => [['test.legacy-profile']],
     'not a map at all' => ['test.legacy-profile'],
 ]);
+
+/*
+ * Excubia adoption: a delivered webhook is announced, like an exhausted one.
+ */
+
+/**
+ * @param  list<WebhookDeliveredEvent>  $deliveredEvents  filled as the events arrive
+ */
+function listenForDeliveredEvents(array &$deliveredEvents): void
+{
+    app(Dispatcher::class)->listen(WebhookDeliveredEvent::class, function (WebhookDeliveredEvent $event) use (&$deliveredEvents): void {
+        $deliveredEvents[] = $event;
+    });
+}
+
+it('announces a delivered webhook with its ids and the attempt that delivered it', function (): void {
+    $deliveredEvents = [];
+    listenForDeliveredEvents($deliveredEvents);
+    $endpoint = deliveryEndpoint();
+    $this->transfer->respond(503)->respond(200);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($deliveredEvents)->toBe([]);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+    coordinator()->work(50);
+
+    expect($deliveredEvents)->toHaveCount(1)
+        ->and($deliveredEvents[0]->deliveryPublicId)->toBe(onlyDelivery()->public_id)
+        ->and($deliveredEvents[0]->eventId)->toBe('msg_2KWPBgLlAfxdpx2AI54pPJ85f4W')
+        ->and($deliveredEvents[0]->endpointPublicId)->toBe($endpoint->public_id)
+        ->and($deliveredEvents[0]->attempt)->toBe(2)
+        ->and($deliveredEvents[0]->deliveredAt->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($deliveredEvents[0])->toBeInstanceOf(ShouldDispatchAfterCommit::class);
+});
+
+it('announces no delivery that an outer transaction rolls back', function (): void {
+    $deliveredEvents = [];
+    listenForDeliveredEvents($deliveredEvents);
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    try {
+        DB::transaction(function (): void {
+            coordinator()->work(50);
+
+            throw new RuntimeException('roll back');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect($this->transfer->requests)->toHaveCount(1)
+        ->and($deliveredEvents)->toBe([]);
+});
