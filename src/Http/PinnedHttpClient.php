@@ -161,7 +161,7 @@ final class PinnedHttpClient
     }
 
     /**
-     * @param  array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form'|'multipart', payload: array<string, mixed>, contentType: ?string}|null}  $snapshot
+     * @param  array{headers: array<string, string>, query: array<string, scalar|null>, body: array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form', payload: array<string, mixed>, contentType: ?string}|array{type: 'multipart', payload: list<array<string, mixed>>, contentType: null}|null}  $snapshot
      *
      * @throws OutboundHttpException
      */
@@ -263,7 +263,7 @@ final class PinnedHttpClient
      * The payload's type follows from `type`: OutboundRequest accepts only a
      * string for a raw body and an array for the others.
      *
-     * @param  array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form'|'multipart', payload: array<string, mixed>, contentType: ?string}  $body
+     * @param  array{type: 'raw', payload: string, contentType: ?string}|array{type: 'json'|'form', payload: array<string, mixed>, contentType: ?string}|array{type: 'multipart', payload: list<array<string, mixed>>, contentType: null}  $body
      * @return array{0: PendingRequest, 1: array<string, mixed>}
      */
     private function applyBody(PendingRequest $pending, array $body): array

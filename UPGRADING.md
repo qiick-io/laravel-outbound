@@ -77,6 +77,11 @@ and the approved design before adopting a commit from `develop`.
 - `webhook_deliveries.payload_expires_at` is required: a product that
   inserts delivery rows itself (seeders, imports) sets it, or the insert
   fails. Recreate the database.
+- Replace `DeliveryAttempt::MAX_ERROR_MESSAGE_BYTES` with
+  `DeliveryAttempt::maxErrorMessageBytes()`. Check a published
+  `config/outbound.php`: a value of the wrong type (a quoted number, `'yes'`
+  for a boolean) or an unknown `retry_preset` now stops the boot with the
+  key's name. Pass `asMultipart()` a list of parts.
 - Replace `RetrySchedule::MAX_DELAY_SECONDS` with
   `RetrySchedule::maxDelaySeconds()`; `MAX_JITTER_SECONDS` is gone (one hour,
   internal). `RemoteUrlGuard` now refuses host names with characters other

@@ -19,14 +19,16 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
     /** @var array<string, array{expiresAt: int, token: string}> hashed key => claim */
     private array $entries = [];
 
-    private bool $failNextWrite = false;
+    private bool $failNextWrite;
 
     /**
      * @param  (callable(): int)|null  $clock  Unix-seconds clock; defaults to time()
      */
     public function __construct(
         private readonly mixed $clock = null,
-    ) {}
+    ) {
+        $this->failNextWrite = false;
+    }
 
     public function failNextWrite(): self
     {
@@ -40,7 +42,7 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
         if ($this->failNextWrite) {
             $this->failNextWrite = false;
 
-            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', 0, new RuntimeException('forced cache write failure'));
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: new RuntimeException('forced cache write failure'));
         }
 
         $key = self::keyFor($claim);
@@ -72,7 +74,7 @@ final class FakeSeenWebhookIdStore implements SeenWebhookIdStore
     private function now(): int
     {
         if (is_callable($this->clock)) {
-            return (int) ($this->clock)();
+            return ($this->clock)();
         }
 
         return time();
