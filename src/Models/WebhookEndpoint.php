@@ -88,6 +88,21 @@ class WebhookEndpoint extends Model
     }
 
     /**
+     * The URL's host, lowercased, when it is a host name or an IP literal;
+     * anything else (no host, spaces, punctuation) is "an unknown host". For
+     * a notice about the endpoint: it never carries free text from the URL,
+     * which mail clients could turn into a link.
+     *
+     * @api
+     */
+    public function displayHost(): string
+    {
+        $host = strtolower((string) parse_url($this->url, PHP_URL_HOST));
+
+        return preg_match('/^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])$/D', $host) === 1 ? $host : 'an unknown host';
+    }
+
+    /**
      * What a product edits. The state the package manages (`is_active`, the
      * disable reason and the failure streak) is not mass-assignable. Nor are
      * the columns a request must never choose, which the product sets in its
