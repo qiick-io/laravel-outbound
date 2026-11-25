@@ -172,7 +172,7 @@ it('takes no more of an endpoint into the batch than its halved concurrency and 
     'three attempts left in the window' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 5, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 2], 3],
     'a window a minute old' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 5, 'rate_window_started_at' => '2026-11-23 09:59:00', 'rate_window_attempts' => 5], 5],
     'a limit lowered below the attempts made' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 2, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 5], 0],
-    'no limit, with the window claim() keeps counting' => [['max_concurrency' => 10, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 9], 6],
+    'no limit, with a window left from an earlier limit' => [['max_concurrency' => 10, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 9], 6],
     'a limit of 0, with a counted window' => [['max_concurrency' => 10, 'rate_limit_per_minute' => 0, 'rate_window_started_at' => '2026-11-23 10:00:00', 'rate_window_attempts' => 9], 6],
 ]);
 
@@ -204,3 +204,18 @@ it('never mass-assigns the rate limit, which only the product code sets', functi
     expect($endpoint->isFillable('rate_limit_per_minute'))->toBeFalse()
         ->and($endpoint->getAttributes())->not->toHaveKey('rate_limit_per_minute');
 });
+
+it('counts the window of a limited endpoint only', function (?int $limit, ?string $windowStartedAt, int $windowAttempts): void {
+    $endpoint = throttledEndpoint(['max_concurrency' => 10, 'rate_limit_per_minute' => $limit]);
+    dispatchInvoices(2);
+
+    app(WebhookDeliveryCoordinator::class)->work(50);
+    $endpoint->refresh();
+
+    expect($endpoint->rate_window_started_at?->toDateTimeString())->toBe($windowStartedAt)
+        ->and($endpoint->rate_window_attempts)->toBe($windowAttempts);
+})->with([
+    'limited' => [5, '2026-11-23 10:00:00', 2],
+    'no limit' => [null, null, 0],
+    'a limit of 0' => [0, null, 0],
+]);

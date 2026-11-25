@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-11-25
+
+First pre-release with webhook delivery in the package (tables, coordinator,
+retries, auto-disable, redelivery, body retention, egress proxy, throttle).
+Public APIs may still change in any 0.x minor; recreate the database after
+each pre-1.0 upgrade.
+
 ### Upgrade notes
 
 - **New tables.** The provider loads five migrations (`webhook_endpoints`,
@@ -289,6 +296,7 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...HEAD
+[0.2.0-beta.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...v0.2.0-beta.1
 [0.1.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qiick-io/laravel-outbound/releases/tag/v0.1.0
