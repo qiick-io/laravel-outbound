@@ -33,7 +33,8 @@ return new class extends Migration
             $table->unsignedSmallInteger('attempt');
             $table->string('trigger', 16)->default('schedule');
 
-            $triggeredBy = $table->foreignId('triggered_by')->nullable();
+            // Indexed: PostgreSQL and SQLite do not index a foreign key, and a user deletion would scan the table.
+            $triggeredBy = $table->foreignId('triggered_by')->nullable()->index();
 
             if (is_string($usersTable) && $usersTable !== '') {
                 $triggeredBy->constrained($usersTable)->nullOnDelete();
