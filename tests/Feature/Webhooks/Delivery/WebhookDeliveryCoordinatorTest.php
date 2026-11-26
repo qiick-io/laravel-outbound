@@ -1165,7 +1165,6 @@ function coordinatorOnAClockThatTicksPerRead(?array $readings = null): WebhookDe
         defaultRetryPreset: WebhookRetryPresetEnum::Standard,
         defaultMaxConcurrency: 10,
         maxResponseBytes: 1_048_576,
-        isEndpointPrivateHostsAllowed: false,
         exceptionHandler: app(ExceptionHandler::class),
         disablePolicy: app(EndpointDisablePolicy::class),
         events: app(Dispatcher::class),
