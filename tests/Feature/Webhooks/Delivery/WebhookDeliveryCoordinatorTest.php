@@ -9,6 +9,7 @@ use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
@@ -691,6 +692,7 @@ it('records nothing for a delivery deleted while it was being sent', function ()
 });
 
 it('keeps a delivery cancelled while it was being sent cancelled, with no attempt recorded', function (): void {
+    Event::fake([WebhookDeliveredEvent::class]);
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
     $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
@@ -712,6 +714,7 @@ it('keeps a delivery cancelled while it was being sent cancelled, with no attemp
     expect(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
         ->and(onlyDelivery()->delivered_at)->toBeNull()
         ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+    Event::assertNotDispatched(WebhookDeliveredEvent::class);
 });
 
 it('stores the subject public id the product names at dispatch, and only a UUID', function (): void {
