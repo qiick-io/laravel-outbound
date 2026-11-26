@@ -18,6 +18,23 @@ from `develop`.
 
 ## To the next release
 
+- **Private hosts: the global setting is now the ceiling.**
+  `ssrf.allow_private_hosts` (`OUTBOUND_ALLOW_PRIVATE_HOSTS`) decides whether
+  private, loopback and link-local addresses can be reached at all; a call or
+  an endpoint can only narrow it.
+  - `UrlGuardOptions(allowPrivateHosts: true)` no longer opens private hosts
+    on a guard that refuses them. Pass `null` (the new default) to inherit
+    the guard's setting, or `false` to refuse private hosts for one call.
+  - `outbound.webhooks.allow_endpoint_private_hosts`
+    (`OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS`) is removed. An
+    endpoint's `allow_private_hosts` now reads: null inherits the global
+    setting, `false` refuses private hosts for that endpoint, `true` never
+    allows what the global setting refuses.
+  - A product that let a few endpoints reach internal hosts with the global
+    setting off now turns `ssrf.allow_private_hosts` on and sets
+    `allow_private_hosts = false` (with `forceFill()`) on every endpoint that
+    must stay public; with the global setting on, an endpoint left at null
+    reaches private hosts.
 - The `create_` migrations index three foreign keys (pre-1.0, so they
   changed). A database migrated with `0.2.0-beta.1` runs `migrate:fresh`, or
   adds the indexes once (MySQL and MariaDB already have them from the

@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those tables. A test requires an index on every foreign key of the package
   tables, on all four engines.
 
+### Security
+
+- **`ssrf.allow_private_hosts` is a ceiling.** `RemoteUrlGuard` used to OR
+  it with the per-call `UrlGuardOptions::$allowPrivateHosts`, and a webhook
+  endpoint could reach private hosts with the global setting off through
+  `outbound.webhooks.allow_endpoint_private_hosts`. A call or an endpoint now
+  only narrows the global setting: `UrlGuardOptions::$allowPrivateHosts` is
+  `?bool` (null inherits, false refuses, true never widens), and the
+  `allow_endpoint_private_hosts` key is removed.
+
 ## [0.2.0-beta.1] - 2026-11-25
 
 First pre-release with webhook delivery in the package (tables, coordinator,
