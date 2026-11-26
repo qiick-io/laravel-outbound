@@ -7,6 +7,7 @@ namespace Qiick\Outbound\Erasure;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use PDOException;
@@ -27,7 +28,8 @@ use SensitiveParameter;
  *
  * - the person is unlinked from the endpoints they created
  *   (`created_by`), the redeliveries they asked for
- *   (`next_attempt_triggered_by`) and the attempts those sent
+ *   (`next_attempt_triggered_by`, and `claimed_triggered_by` while one is
+ *   on the wire) and the attempts those sent
  *   (`triggered_by`);
  * - a delivery the product queued about them (`subject_public_id`, set at
  *   dispatch) loses its payload, its hash and the reference, and a pending one is
@@ -89,11 +91,18 @@ final readonly class OutboundEraser
         try {
             /** @var ErasureReport $report Laravel 12 types transaction() as mixed. */
             $report = $connection->transaction(function () use ($connection, $mode, $dryRun, $userKey, $subjectPublicIds): ErasureReport {
-                // Read before the deliveries lose their subject reference.
-                $attemptCount = $this->eraseAttempts($connection, $userKey, $subjectPublicIds, $dryRun);
+                // Lock the deliveries about the person first: a worker records
+                // an attempt under that lock, so none slips in between the
+                // scrub of their attempts and the cancel.
+                $deliveryIdsAboutThePerson = $connection->table('webhook_deliveries')
+                    ->whereIn('subject_public_id', $subjectPublicIds)
+                    ->lockForUpdate()
+                    ->pluck('id')
+                    ->all();
+                $attemptCount = $this->eraseAttempts($connection, $userKey, $deliveryIdsAboutThePerson, $dryRun);
                 $report = new ErasureReport('qiick/laravel-outbound', $mode, $dryRun, [
                     'webhook_endpoints' => $this->anonymised($this->unlinkEndpoints($connection, $userKey, $dryRun)),
-                    'webhook_deliveries' => $this->anonymised($this->eraseDeliveries($connection, $userKey, $subjectPublicIds, $dryRun)),
+                    'webhook_deliveries' => $this->anonymised($this->eraseDeliveries($connection, $userKey, $deliveryIdsAboutThePerson, $dryRun)),
                     'webhook_delivery_attempts' => $this->anonymised($attemptCount),
                 ]);
 
@@ -138,37 +147,42 @@ final readonly class OutboundEraser
     }
 
     /**
-     * @param  non-empty-list<string>  $subjectPublicIds
+     * @param  array<mixed>  $deliveryIdsAboutThePerson  locked by the caller
      * @return int the deliveries about the person or redelivered at their request, each counted once
      */
-    private function eraseDeliveries(ConnectionInterface $connection, ?int $userKey, array $subjectPublicIds, bool $isDryRun): int
+    private function eraseDeliveries(ConnectionInterface $connection, ?int $userKey, array $deliveryIdsAboutThePerson, bool $isDryRun): int
     {
-        $deliveryIds = $connection->table('webhook_deliveries')
-            ->whereIn('subject_public_id', $subjectPublicIds)
-            ->when($userKey !== null, fn ($deliveriesQuery) => $deliveriesQuery->orWhere('next_attempt_triggered_by', $userKey))
+        $askedForIds = $userKey === null ? [] : $connection->table('webhook_deliveries')
+            ->where(fn (Builder $askedQuery) => $askedQuery->where('next_attempt_triggered_by', $userKey)->orWhere('claimed_triggered_by', $userKey))
             ->lockForUpdate()
             ->pluck('id')
             ->all();
+        $changedCount = collect([...$deliveryIdsAboutThePerson, ...$askedForIds])->unique()->count();
 
-        if ($isDryRun || $deliveryIds === []) {
-            return count($deliveryIds);
+        if ($isDryRun) {
+            return $changedCount;
         }
 
         $now = CarbonImmutable::now();
-        $aboutThePerson = fn () => $connection->table('webhook_deliveries')->whereIn('id', $deliveryIds)->whereIn('subject_public_id', $subjectPublicIds);
 
-        $aboutThePerson()->where('status', DeliveryStatus::Pending->value)->update([
-            'status' => DeliveryStatus::Cancelled->value,
-            'next_attempt_at' => null,
-        ]);
-        $aboutThePerson()->update(['payload' => null, 'payload_hash' => null, 'subject_public_id' => null, 'updated_at' => $now]);
-
-        if ($userKey !== null) {
-            $connection->table('webhook_deliveries')->whereIn('id', $deliveryIds)->where('next_attempt_triggered_by', $userKey)
-                ->update(['next_attempt_triggered_by' => null, 'updated_at' => $now]);
+        if ($deliveryIdsAboutThePerson !== []) {
+            $connection->table('webhook_deliveries')->whereIn('id', $deliveryIdsAboutThePerson)->where('status', DeliveryStatus::Pending->value)->update([
+                'status' => DeliveryStatus::Cancelled->value,
+                'next_attempt_at' => null,
+            ]);
+            $connection->table('webhook_deliveries')->whereIn('id', $deliveryIdsAboutThePerson)
+                ->update(['payload' => null, 'payload_hash' => null, 'subject_public_id' => null, 'updated_at' => $now]);
         }
 
-        return count($deliveryIds);
+        if ($askedForIds !== []) {
+            $connection->table('webhook_deliveries')->whereIn('id', $askedForIds)->where('next_attempt_triggered_by', $userKey)
+                ->update(['next_attempt_triggered_by' => null, 'updated_at' => $now]);
+            // An attempt on the wire for them records no asker.
+            $connection->table('webhook_deliveries')->whereIn('id', $askedForIds)->where('claimed_triggered_by', $userKey)
+                ->update(['claimed_triggered_by' => null, 'updated_at' => $now]);
+        }
+
+        return $changedCount;
     }
 
     /**
@@ -177,12 +191,11 @@ final readonly class OutboundEraser
      * answered (`response_headers`, `request_id`, `response_excerpt`): a
      * receiver may echo a customer reference in `X-Request-Id`.
      *
-     * @param  non-empty-list<string>  $subjectPublicIds
+     * @param  array<mixed>  $aboutThePerson  the deliveries about the person, locked by the caller
      * @return int the attempts changed, each counted once
      */
-    private function eraseAttempts(ConnectionInterface $connection, ?int $userKey, array $subjectPublicIds, bool $isDryRun): int
+    private function eraseAttempts(ConnectionInterface $connection, ?int $userKey, array $aboutThePerson, bool $isDryRun): int
     {
-        $aboutThePerson = $connection->table('webhook_deliveries')->whereIn('subject_public_id', $subjectPublicIds)->select('id');
         $attemptIds = $connection->table('webhook_delivery_attempts')
             ->whereIn('delivery_id', $aboutThePerson)
             ->when($userKey !== null, fn ($attemptsQuery) => $attemptsQuery->orWhere('triggered_by', $userKey))

@@ -47,6 +47,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int $max_attempts
  * @property CarbonImmutable|null $next_attempt_at
  * @property CarbonImmutable|null $claimed_until
+ * @property int|null $claimed_triggered_by
  * @property WebhookExhaustedReasonEnum|null $exhausted_reason
  * @property WebhookAttemptTriggerEnum|null $next_attempt_trigger
  * @property int|null $next_attempt_triggered_by
@@ -142,7 +143,7 @@ class WebhookDelivery extends Model
      */
     protected function privateAttributes(): array
     {
-        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by', 'subject_public_id'];
+        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by', 'claimed_triggered_by', 'subject_public_id'];
     }
 
     /**

@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **New column `webhook_deliveries.subject_public_id`**, and
+- **New columns `webhook_deliveries.subject_public_id` and
+  `claimed_triggered_by`**, and
   `payload_hash` is nullable, in the `create_` migration: recreate the
   database (pre-1.0 policy).
 - **`outbound.webhooks.payload_retention_days` is at most 30**: the boot
@@ -28,10 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A delivery cancelled while a worker was sending it stays cancelled: the
-  attempt is not recorded. A worker reads the status again right before the
-  transport, so a delivery cancelled after its claim is never sent.
-- An attempt records its asker from the locked delivery row, so an asker the
-  eraser unlinked during the send is not written back.
+  attempt is not recorded. A worker reads the row again after DNS, right
+  before the transport (`PinnedHttpClient::send(beforeTransport: …)`), so a
+  delivery cancelled after its claim, or whose body expired, is never sent;
+  an expired body is never claimed either.
+- An attempt records the asker the claim stored in the new
+  `webhook_deliveries.claimed_triggered_by`, which the eraser nulls, so an
+  asker unlinked during the send is never written back.
 - `subjectPublicId` is stored in lower case.
 - The eraser clears `payload_hash` on deliveries about the person.
 - The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.

@@ -199,6 +199,12 @@ final class WebhookDeliveryCoordinator
 
         try {
             $outcome = $this->send($delivery, $endpoint, $attemptedAt->getTimestamp());
+
+            // Nothing went out, and nothing is recorded: a cancelled delivery
+            // is never claimed again, and prune exhausts an expired one.
+            if ($outcome === null) {
+                return;
+            }
         } catch (Throwable) {
             // An endpoint row the request cannot be built from (a non-string
             // header, a value encrypted under a lost APP_KEY): the attempt
@@ -464,9 +470,12 @@ final class WebhookDeliveryCoordinator
     }
 
     /**
-     * @return array{status: WebhookAttemptStatusEnum, errorCode: string|null, errorMessage: string|null, response: Response|null, secretPublicIds: list<string>|null}
+     * Null when nothing was sent: the delivery was cancelled, or its body
+     * expired, since the claim.
+     *
+     * @return array{status: WebhookAttemptStatusEnum, errorCode: string|null, errorMessage: string|null, response: Response|null, secretPublicIds: list<string>|null}|null
      */
-    private function send(WebhookDelivery $delivery, WebhookEndpoint $endpoint, int $webhookTimestamp): array
+    private function send(WebhookDelivery $delivery, WebhookEndpoint $endpoint, int $webhookTimestamp): ?array
     {
         try {
             $signingSet = $this->secretResolver->signingSetFor($endpoint);
@@ -484,13 +493,6 @@ final class WebhookDeliveryCoordinator
             return $this->outcome(WebhookAttemptStatusEnum::Refused, 'legacy_profile', $exception->getMessage(), null, $secretPublicIds);
         }
 
-        // The eraser may have cancelled the delivery since this worker claimed
-        // it: read the status again at the last moment before the transport.
-        // A request already on the wire cannot be recalled.
-        if (! $this->store->isPending($delivery->id)) {
-            return $this->outcome(WebhookAttemptStatusEnum::Refused, 'cancelled', 'The delivery was cancelled before it was sent.');
-        }
-
         try {
             $response = $this->client->send(
                 'POST',
@@ -502,7 +504,19 @@ final class WebhookDeliveryCoordinator
                         ->withBody($signedWebhook->rawBody, 'application/json');
                 },
                 $this->requestOptionsFor($endpoint),
+                // The eraser may have cancelled the delivery, or its body may
+                // have expired, since this worker claimed it: read the row
+                // again after DNS, right before the transport. Known limit: a
+                // cancel committed after this read, while the request is
+                // being written, is not stopped; it cannot be recalled.
+                function () use ($delivery): void {
+                    if (! $this->store->isSendable($delivery->id)) {
+                        throw new DeliveryNotSendableException;
+                    }
+                },
             );
+        } catch (DeliveryNotSendableException) {
+            return null;
         } catch (UnsafeUrl $exception) {
             return $this->outcome(WebhookAttemptStatusEnum::Refused, 'ssrf_refused', $exception->getMessage(), null, $secretPublicIds);
         } catch (InvalidArgumentException $exception) {

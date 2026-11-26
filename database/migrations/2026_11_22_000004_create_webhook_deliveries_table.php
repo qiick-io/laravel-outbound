@@ -65,6 +65,14 @@ return new class extends Migration
             $table->unsignedSmallInteger('max_attempts');
             $table->dateTime('next_attempt_at')->nullable();
             $table->dateTime('claimed_until')->nullable();
+            // The asker of the attempt a worker holds the lease for: the
+            // eraser unlinks it like the other user columns.
+            $claimedTriggeredBy = $table->foreignId('claimed_triggered_by')->nullable()->index();
+
+            if (is_string($usersTable) && $usersTable !== '') {
+                $claimedTriggeredBy->constrained($usersTable)->nullOnDelete();
+            }
+
             $table->string('exhausted_reason', 32)->nullable();
             $table->string('next_attempt_trigger', 16)->nullable();
             // Indexed: PostgreSQL and SQLite do not index a foreign key, and a user deletion would scan the table.

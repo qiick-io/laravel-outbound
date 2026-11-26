@@ -573,14 +573,14 @@ organisation's, so nothing is deleted. In one transaction it:
 - nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
   they point at the person (a non-numeric `$userId` matches none of them).
 
-A worker that claimed a delivery before the cancel reads its status again
-right before the transport and sends nothing; a request already on the wire
-cannot be recalled, and its attempt is not recorded. An attempt finishing
-after its asker was unlinked is recorded without them. Known limit: when
-the delivery is asked again while that attempt is on the wire, the row names
-the new asker, so the in-flight attempt keeps the asker the worker claimed
-it for, even if the eraser unlinked them meanwhile; a rerun of the erasure
-step clears it. A deadlock is
+A worker that claimed a delivery before the cancel reads the row again after
+DNS, right before the transport, and sends nothing when the delivery was
+cancelled or its body expired (an expired body is never claimed either). An
+attempt on the wire records the asker the claim stored in
+`claimed_triggered_by`, which the eraser nulls too, so an unlinked asker is
+never written back. Known limit: a cancel committed after that last read,
+while the request is being written, does not stop it; a request on the wire
+cannot be recalled, and its attempt is not recorded. A deadlock is
 rethrown as `WebhookDeliveryConcurrencyException`, other database errors as
 a `RuntimeException`, both without the query's bindings.
 

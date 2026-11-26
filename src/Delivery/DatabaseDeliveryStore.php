@@ -221,7 +221,12 @@ final class DatabaseDeliveryStore
 
             $leasedRows = $this->claimable(WebhookDelivery::query()->whereKey($deliveryId), $now)
                 ->where('next_attempt_at', '<=', $now)
-                ->update(['claimed_until' => $now->addSeconds($leaseSeconds)]);
+                // The asker this attempt is for, on the row where the eraser
+                // can still unlink them while the attempt is on the wire.
+                ->update([
+                    'claimed_until' => $now->addSeconds($leaseSeconds),
+                    'claimed_triggered_by' => WebhookDelivery::query()->getQuery()->raw('next_attempt_triggered_by'),
+                ]);
 
             if ($leasedRows !== 1) {
                 return null;
@@ -242,12 +247,18 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * Whether the delivery is still pending, read from the database rather
-     * than from a model claimed earlier.
+     * Whether the delivery may still be sent: pending, with a body that has
+     * not expired. Read from the database rather than from a model claimed
+     * earlier.
      */
-    public function isPending(int $deliveryId): bool
+    public function isSendable(int $deliveryId): bool
     {
-        return WebhookDelivery::query()->whereKey($deliveryId)->where('status', DeliveryStatus::Pending->value)->exists();
+        return WebhookDelivery::query()
+            ->whereKey($deliveryId)
+            ->where('status', DeliveryStatus::Pending->value)
+            ->whereNotNull('payload')
+            ->where('payload_expires_at', '>', CarbonImmutable::now('UTC'))
+            ->exists();
     }
 
     /**
@@ -289,18 +300,17 @@ final class DatabaseDeliveryStore
             $askedTrigger = $storedDelivery->next_attempt_trigger;
             $askedBy = $storedDelivery->next_attempt_triggered_by;
 
-            // An asker the eraser unlinked while this attempt was on the wire
-            // stays unlinked. After a new request the row names the new
-            // asker, so the claimed one is kept.
-            if (! $redeliveryAskedMeanwhile) {
-                $attemptAttributes['triggered_by'] = $askedBy;
-            }
+            // The asker the claim recorded, as the row holds it now: the
+            // eraser nulls it when it unlinks them while the attempt is on
+            // the wire, so an unlinked asker is never written back.
+            $attemptAttributes['triggered_by'] = $storedDelivery->claimed_triggered_by;
 
             $storedDelivery->attempts()->make()->forceFill($attemptAttributes)->save();
             $storedDelivery->forceFill([
                 ...$deliveryChanges,
                 'attempts_count' => $delivery->attempts_count + 1,
                 'claimed_until' => null,
+                'claimed_triggered_by' => null,
             ])->save();
             if ($isReceiverOutcome) {
                 $httpStatus = $attemptAttributes['http_status'] ?? null;
@@ -485,7 +495,8 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * Pending deliveries no worker holds.
+     * Pending deliveries no worker holds, whose body has not expired: an
+     * expired body is never sent, even before prune clears it.
      *
      * @param  Builder<WebhookDelivery>  $deliveriesQuery
      * @return Builder<WebhookDelivery>
@@ -494,6 +505,7 @@ final class DatabaseDeliveryStore
     {
         return $deliveriesQuery
             ->where('status', DeliveryStatus::Pending->value)
+            ->where('payload_expires_at', '>', $now)
             ->where(function (Builder $leaseQuery) use ($now): void {
                 $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
             });
