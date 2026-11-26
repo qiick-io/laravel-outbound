@@ -325,7 +325,9 @@ Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
 message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
-(50) due deliveries, leases each one on its own right before its send, signs
+(50) due deliveries, and with `--max-seconds` starts no attempt once that
+long has passed (an attempt on the wire finishes, so a run can overrun by one
+send); it leases each delivery on its own right before its send, signs
 each attempt with the endpoint's signing set
 and a fresh `webhook-timestamp`, and POSTs it through `PinnedHttpClient`
 only: SSRF guard, pinned address, no proxy, never a redirect. Retries are
