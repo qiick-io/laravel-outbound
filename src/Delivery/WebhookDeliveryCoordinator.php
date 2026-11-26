@@ -618,8 +618,9 @@ final class WebhookDeliveryCoordinator
             urlOptions: new UrlGuardOptions(
                 // Only tightens: the guard ORs it with its own setting.
                 httpsOnly: $endpoint->https_only ?? false,
-                // Only narrows: ssrf.allow_private_hosts stays the ceiling.
-                allowPrivateHosts: $endpoint->allow_private_hosts,
+                // Private hosts only for an endpoint set to, under the
+                // ssrf.allow_private_hosts ceiling; anything else is false.
+                allowPrivateHosts: $endpoint->allow_private_hosts === true,
             ),
         );
     }

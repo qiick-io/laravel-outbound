@@ -50,7 +50,9 @@ return new class extends Migration
             $table->string('payload_version', 32)->default('1');
             $table->string('legacy_profile', 64)->nullable();
             $table->boolean('https_only')->nullable();
-            $table->boolean('allow_private_hosts')->nullable();
+            // Never null: an endpoint reaches private hosts only once the product
+            // sets it, and only under ssrf.allow_private_hosts.
+            $table->boolean('allow_private_hosts')->default(false);
             $table->unsignedSmallInteger('timeout_seconds')->nullable();
             $table->unsignedSmallInteger('max_concurrency')->nullable();
             $table->unsignedInteger('rate_limit_per_minute')->nullable();
