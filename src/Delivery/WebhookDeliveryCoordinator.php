@@ -11,6 +11,7 @@ use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
@@ -95,14 +96,23 @@ final class WebhookDeliveryCoordinator
      *
      * @param  string|null  $scope  the value of the product's scope column;
      *                              null for instance-level endpoints
+     * @param  string|null  $subjectPublicId  the public id of the person the
+     *                                        event is about, if any: the
+     *                                        eraser cancels their pending
+     *                                        deliveries; it is never sent
      * @return Collection<int, WebhookDelivery> the deliveries created
      *
-     * @throws InvalidArgumentException when a scope is given without a scope column
+     * @throws InvalidArgumentException when a scope is given without a scope
+     *                                  column, or the subject is not a UUID
      * @throws WebhookException when the message cannot be encoded
      * @throws WebhookDeliveryStorageException when a row cannot be written
      */
-    public function dispatch(WebhookMessage $message, ?string $scope = null): Collection
+    public function dispatch(WebhookMessage $message, ?string $scope = null, ?string $subjectPublicId = null): Collection
     {
+        if ($subjectPublicId !== null && ! Str::isUuid($subjectPublicId)) {
+            throw new InvalidArgumentException('The subject public id must be a UUID.');
+        }
+
         $rawBody = $message->toPayloadJson();
         $createdDeliveries = new Collection;
 
@@ -111,7 +121,7 @@ final class WebhookDeliveryCoordinator
             $maxAttempts = $endpoint->max_attempts ?? count($retryDelays) + 1;
             // An unknown profile keeps the plain body; every attempt is refused.
             $body = $this->legacyProfileOf($endpoint)?->body($message, $rawBody) ?? $rawBody;
-            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts));
+            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts), $subjectPublicId);
 
             if ($delivery !== null) {
                 $createdDeliveries->push($delivery);

@@ -84,6 +84,10 @@ return new class extends Migration
             $table->unsignedInteger('payload_bytes');
             $table->dateTime('payload_expires_at')->index();
             $table->string('trigger', 16)->default('event');
+            // The person the event is about, when the product names one at
+            // dispatch: the eraser cancels their pending deliveries and drops
+            // their payloads. A pseudonymous reference, never sent.
+            $table->uuid('subject_public_id')->nullable()->index();
             $table->json('metadata')->nullable();
             $table->timestamps();
 

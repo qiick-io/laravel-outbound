@@ -316,6 +316,7 @@ use Qiick\Outbound\Webhooks\WebhookMessage;
 app(WebhookDeliveryCoordinator::class)->dispatch(
     new WebhookMessage('msg_'.Str::ulid(), 'invoice.paid', now()->toDateTimeImmutable(), ['invoice' => $invoice->public_id]),
     scope: $project->public_id, // the product's scope column value; omit for instance scope
+    subjectPublicId: $customer->public_id, // the person the event is about, if any (see Erasure)
 );
 
 // routes/console.php
@@ -535,6 +536,44 @@ body has expired too; pending ones are kept. It works in blocks of 500, each in 
 - A pending delivery whose body expires (an endpoint disabled for weeks) is
   exhausted (`payload_expired`); one a worker is sending keeps its body until
   its lease ends.
+
+### Erasure
+
+```php
+use Qiick\Outbound\Erasure\OutboundEraser;
+
+$report = app(OutboundEraser::class)->erase(
+    userId: (string) $user->id,
+    userPublicId: $user->public_id,
+    mode: OutboundEraser::DELETE, // or ANONYMISE: outbound does the same in both
+    publicIds: $principalAndApiKeyPublicIds,
+    identifiers: [$user->email, $user->name],
+    dryRun: false,
+);
+```
+
+`OutboundEraser` is the package's step of the qiick fleet erasure standard
+(`.qiick/standards/erasure.md`); a product calls it only through its erasure
+orchestrator, after collecting the Art. 19 recipients (the endpoints of the
+person's delivered deliveries). Endpoints and the delivery log are the
+organisation's, so nothing is deleted. In one transaction it:
+
+- cancels every pending delivery whose `subject_public_id` is the person's
+  public id or one of `$publicIds`, and drops the payload and the reference
+  of every delivery about them, delivered ones included; a worker that
+  claimed one before the cancel records no attempt over it;
+- nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
+  they point at the person (a non-numeric `$userId` matches none of them).
+
+It returns an `ErasureReport` with counts only and, after the commit,
+dispatches `Events\SubjectErasedEvent`; a dry run writes and dispatches
+nothing. An organisation-scoped run throws
+`OrganisationScopeUnsupportedException`: endpoints have no organisation.
+
+A delivery is attributable only if the product passed `subjectPublicId` to
+`dispatch()`. A delivery queued without it keeps its encrypted payload until
+`payload_expires_at` (30 days by default), then only the hash: pass it for
+every event about a person.
 
 ### Retry schedule and delivery records
 

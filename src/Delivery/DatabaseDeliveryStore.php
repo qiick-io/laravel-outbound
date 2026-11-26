@@ -92,7 +92,7 @@ final class DatabaseDeliveryStore
      *
      * @throws WebhookDeliveryStorageException when the row cannot be written
      */
-    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts, int $retryPlanSeconds): ?WebhookDelivery
+    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts, int $retryPlanSeconds, ?string $subjectPublicId = null): ?WebhookDelivery
     {
         $delivery = $endpoint->deliveries()->make([
             'event_id' => $message->id,
@@ -102,6 +102,7 @@ final class DatabaseDeliveryStore
             'max_attempts' => $maxAttempts,
         ])->usePayload($rawBody)->forceFill([
             'next_attempt_at' => CarbonImmutable::now(),
+            'subject_public_id' => $subjectPublicId,
             'payload_expires_at' => CarbonImmutable::now()->addSeconds(max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
         ]);
 
@@ -251,6 +252,12 @@ final class DatabaseDeliveryStore
 
             // Gone (deleted while it was sent) or recorded by another worker.
             if ($storedDelivery?->attempts_count !== $delivery->attempts_count) {
+                return false;
+            }
+
+            // Cancelled while it was sent (the eraser cancels a person's
+            // pending deliveries): it stays cancelled, with no attempt row.
+            if ($storedDelivery->status === DeliveryStatus::Cancelled) {
                 return false;
             }
 

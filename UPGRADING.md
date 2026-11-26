@@ -16,6 +16,16 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
+## Unreleased (erasure)
+
+- `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) is new in
+  the `create_` migration (pre-1.0): recreate the database, or add the column
+  and its index.
+- Pass `subjectPublicId:` to `dispatch()` for every event about a person, and
+  call `OutboundEraser` from the product's erasure orchestrator only (README,
+  "Erasure"). A delivery queued without it keeps its encrypted payload until
+  it expires.
+
 ## To 0.2.0-beta.3 (endpoint private hosts)
 
 - `webhook_endpoints.allow_private_hosts` is `NOT NULL DEFAULT false` (the

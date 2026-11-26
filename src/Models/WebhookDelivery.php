@@ -59,6 +59,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int $payload_bytes
  * @property CarbonImmutable $payload_expires_at
  * @property WebhookDeliveryTriggerEnum $trigger
+ * @property string|null $subject_public_id
  * @property array<string, mixed>|null $metadata
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -140,7 +141,7 @@ class WebhookDelivery extends Model
      */
     protected function privateAttributes(): array
     {
-        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by'];
+        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by', 'subject_public_id'];
     }
 
     /**
