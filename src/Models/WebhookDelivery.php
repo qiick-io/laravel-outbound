@@ -27,7 +27,8 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * through {@see usePayload()}; the retry state is the package's to write.
  *
  * `payload_hash` is the plain SHA-256 of the body (review R5), used to
- * deduplicate and to verify a body after it is pruned. A short body can be
+ * deduplicate and to verify a body after it is pruned; the eraser clears it
+ * on a delivery about the person, since it derives from their data. A short body can be
  * guessed from it, so it is hidden from arrays, and a failed {@see save()}
  * is rethrown without its bindings. Writes through the query builder
  * (`insert()`, `update()`, `upsert()`) are not wrapped, and query recorders
@@ -46,6 +47,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int $max_attempts
  * @property CarbonImmutable|null $next_attempt_at
  * @property CarbonImmutable|null $claimed_until
+ * @property int|null $claimed_triggered_by
  * @property WebhookExhaustedReasonEnum|null $exhausted_reason
  * @property WebhookAttemptTriggerEnum|null $next_attempt_trigger
  * @property int|null $next_attempt_triggered_by
@@ -55,10 +57,11 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int|null $last_http_status
  * @property string|null $last_error
  * @property string|null $payload
- * @property string $payload_hash
+ * @property string|null $payload_hash
  * @property int $payload_bytes
  * @property CarbonImmutable $payload_expires_at
  * @property WebhookDeliveryTriggerEnum $trigger
+ * @property string|null $subject_public_id
  * @property array<string, mixed>|null $metadata
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -140,7 +143,7 @@ class WebhookDelivery extends Model
      */
     protected function privateAttributes(): array
     {
-        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by'];
+        return ['endpoint_id', 'payload', 'payload_hash', 'next_attempt_triggered_by', 'claimed_triggered_by', 'subject_public_id'];
     }
 
     /**

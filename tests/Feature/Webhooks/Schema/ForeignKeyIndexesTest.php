@@ -32,3 +32,13 @@ it('indexes every foreign key of the package tables', function (): void {
 
     expect($unindexedForeignKeys)->toBe([]);
 });
+
+it('indexes every column the eraser looks a person up by', function (string $table, string $column): void {
+    expect(array_column(Schema::getIndexes($table), 'columns'))->toContain([$column]);
+})->with([
+    ['webhook_endpoints', 'created_by'],
+    ['webhook_deliveries', 'subject_public_id'],
+    ['webhook_deliveries', 'next_attempt_triggered_by'],
+    ['webhook_deliveries', 'claimed_triggered_by'],
+    ['webhook_delivery_attempts', 'triggered_by'],
+]);

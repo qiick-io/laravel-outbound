@@ -131,9 +131,11 @@ return [
         /*
          * Days the encrypted body of a delivery is kept after dispatch, for
          * retries and manual redelivery (the maintainer's decision Q3 of
-         * 2026-11-22: 30); never less than the delivery's longest possible
-         * retry plan. `outbound:webhooks:prune` then clears it and keeps its
-         * hash and length.
+         * 2026-11-22: 30). At most 30: the boot fails above (fleet erasure
+         * decision). A delivery about a person the product named at dispatch
+         * keeps it until its longest possible retry plan ends, if later; one
+         * about nobody named never longer. `outbound:webhooks:prune` then
+         * clears it and keeps its hash and length.
          */
         'payload_retention_days' => (int) env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30),
 

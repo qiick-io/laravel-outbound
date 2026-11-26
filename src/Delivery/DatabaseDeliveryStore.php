@@ -39,7 +39,8 @@ final class DatabaseDeliveryStore
      * @param  int  $deliveryRetentionDays  `outbound.webhooks.delivery_retention_days`
      *
      * @throws InvalidArgumentException when the body retention is under a day
-     *                                  or the rows would outlast it less
+     *                                  or over 30, or the rows would outlast
+     *                                  it less
      */
     public function __construct(
         private readonly ?string $scopeColumn,
@@ -48,6 +49,12 @@ final class DatabaseDeliveryStore
     ) {
         if ($payloadRetentionDays < 1) {
             throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at least 1.');
+        }
+
+        // The fleet erasure decision: a body the eraser cannot attribute is
+        // kept 30 days at most.
+        if ($payloadRetentionDays > 30) {
+            throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at most 30.');
         }
 
         // A row deleted earlier would take its body with it before its time.
@@ -83,16 +90,18 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * A pending delivery, due now. Its body is kept for the retention period,
-     * or until its longest possible retry plan ends, plus an hour for the
-     * worker's own schedule, if that is later: a body must never expire
-     * mid-schedule.
+     * A pending delivery, due now. Its body is kept for the retention period.
+     * A delivery about a named person keeps it until its longest possible
+     * retry plan ends, plus an hour for the worker's own schedule, if that is
+     * later, so it never expires mid-schedule: the eraser can still find it.
+     * One about nobody named never outlives the retention (30 days at most):
+     * a retry plan longer than that is cut short, and prune exhausts it.
      *
      * @return WebhookDelivery|null null when the endpoint already has this event
      *
      * @throws WebhookDeliveryStorageException when the row cannot be written
      */
-    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts, int $retryPlanSeconds): ?WebhookDelivery
+    public function createDelivery(WebhookEndpoint $endpoint, WebhookMessage $message, string $rawBody, int $maxAttempts, int $retryPlanSeconds, ?string $subjectPublicId = null): ?WebhookDelivery
     {
         $delivery = $endpoint->deliveries()->make([
             'event_id' => $message->id,
@@ -102,7 +111,10 @@ final class DatabaseDeliveryStore
             'max_attempts' => $maxAttempts,
         ])->usePayload($rawBody)->forceFill([
             'next_attempt_at' => CarbonImmutable::now(),
-            'payload_expires_at' => CarbonImmutable::now()->addSeconds(max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
+            'subject_public_id' => $subjectPublicId,
+            'payload_expires_at' => CarbonImmutable::now()->addSeconds($subjectPublicId === null
+                ? $this->payloadRetentionDays * 86_400
+                : max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
         ]);
 
         try {
@@ -209,7 +221,12 @@ final class DatabaseDeliveryStore
 
             $leasedRows = $this->claimable(WebhookDelivery::query()->whereKey($deliveryId), $now)
                 ->where('next_attempt_at', '<=', $now)
-                ->update(['claimed_until' => $now->addSeconds($leaseSeconds)]);
+                // The asker this attempt is for, on the row where the eraser
+                // can still unlink them while the attempt is on the wire.
+                ->update([
+                    'claimed_until' => $now->addSeconds($leaseSeconds),
+                    'claimed_triggered_by' => WebhookDelivery::query()->getQuery()->raw('next_attempt_triggered_by'),
+                ]);
 
             if ($leasedRows !== 1) {
                 return null;
@@ -227,6 +244,21 @@ final class DatabaseDeliveryStore
         });
 
         return $claimedDelivery;
+    }
+
+    /**
+     * Whether the delivery may still be sent: pending, with a body that has
+     * not expired. Read from the database rather than from a model claimed
+     * earlier.
+     */
+    public function isSendable(int $deliveryId): bool
+    {
+        return WebhookDelivery::query()
+            ->whereKey($deliveryId)
+            ->where('status', DeliveryStatus::Pending->value)
+            ->whereNotNull('payload')
+            ->where('payload_expires_at', '>', CarbonImmutable::now('UTC'))
+            ->exists();
     }
 
     /**
@@ -254,6 +286,12 @@ final class DatabaseDeliveryStore
                 return false;
             }
 
+            // Cancelled while it was sent (the eraser cancels a person's
+            // pending deliveries): it stays cancelled, with no attempt row.
+            if ($storedDelivery->status === DeliveryStatus::Cancelled) {
+                return false;
+            }
+
             // A redelivery asked for while this attempt was on the wire: the
             // worker claimed the delivery without it, so recording must not
             // clear it. The request count, not the trigger or the user, tells
@@ -262,11 +300,17 @@ final class DatabaseDeliveryStore
             $askedTrigger = $storedDelivery->next_attempt_trigger;
             $askedBy = $storedDelivery->next_attempt_triggered_by;
 
+            // The asker the claim recorded, as the row holds it now: the
+            // eraser nulls it when it unlinks them while the attempt is on
+            // the wire, so an unlinked asker is never written back.
+            $attemptAttributes['triggered_by'] = $storedDelivery->claimed_triggered_by;
+
             $storedDelivery->attempts()->make()->forceFill($attemptAttributes)->save();
             $storedDelivery->forceFill([
                 ...$deliveryChanges,
                 'attempts_count' => $delivery->attempts_count + 1,
                 'claimed_until' => null,
+                'claimed_triggered_by' => null,
             ])->save();
             if ($isReceiverOutcome) {
                 $httpStatus = $attemptAttributes['http_status'] ?? null;
@@ -451,7 +495,8 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * Pending deliveries no worker holds.
+     * Pending deliveries no worker holds, whose body has not expired: an
+     * expired body is never sent, even before prune clears it.
      *
      * @param  Builder<WebhookDelivery>  $deliveriesQuery
      * @return Builder<WebhookDelivery>
@@ -460,6 +505,7 @@ final class DatabaseDeliveryStore
     {
         return $deliveriesQuery
             ->where('status', DeliveryStatus::Pending->value)
+            ->where('payload_expires_at', '>', $now)
             ->where(function (Builder $leaseQuery) use ($now): void {
                 $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
             });

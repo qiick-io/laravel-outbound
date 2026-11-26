@@ -44,16 +44,16 @@ function retentionEndpoint(): WebhookEndpoint
 /**
  * @param  array<string, mixed>  $attributes
  */
-function retainedDelivery(string $messageId, array $attributes = []): WebhookDelivery
+function retainedDelivery(string $messageId, array $attributes = [], ?string $subjectPublicId = null): WebhookDelivery
 {
-    app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage($messageId, 'invoice.paid', new DateTimeImmutable('2026-11-23 09:00:00'), ['n' => 1]));
+    app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage($messageId, 'invoice.paid', new DateTimeImmutable('2026-11-23 09:00:00'), ['n' => 1]), subjectPublicId: $subjectPublicId);
     $delivery = WebhookDelivery::query()->where('event_id', $messageId)->sole();
     $delivery->forceFill($attributes)->save();
 
     return $delivery->refresh();
 }
 
-it('keeps a dispatched body until 30 days after dispatch, or the configured days', function (?int $retentionDays, string $expiresAt): void {
+it('keeps a dispatched body about a person until 30 days after dispatch, or the configured days', function (?int $retentionDays, string $expiresAt): void {
     if ($retentionDays !== null) {
         config()->set('outbound.webhooks.payload_retention_days', $retentionDays);
         $this->app->forgetInstance(DatabaseDeliveryStore::class);
@@ -62,7 +62,7 @@ it('keeps a dispatched body until 30 days after dispatch, or the configured days
 
     retentionEndpoint();
 
-    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe($expiresAt);
+    expect(retainedDelivery('msg_1', subjectPublicId: (string) Str::uuid())->payload_expires_at?->toDateTimeString())->toBe($expiresAt);
 })->with([
     'default' => [null, '2026-12-23 10:00:00'],
     // The default plan (10 attempts, Retry-After up to 24 h honoured) can last
@@ -70,6 +70,17 @@ it('keeps a dispatched body until 30 days after dispatch, or the configured days
     'configured, shorter than the retry plan' => [7, '2026-12-02 11:04:30'],
     'configured, longer than the retry plan' => [12, '2026-12-05 10:00:00'],
 ]);
+
+it('keeps a body about nobody the product named for the retention only, even when the retry plan is longer', function (): void {
+    config()->set('outbound.webhooks.payload_retention_days', 7);
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    retentionEndpoint();
+
+    // The eraser cannot find it, so it never outlives the retention (the
+    // fleet erasure decision: 30 days at most); prune then exhausts it.
+    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe('2026-11-30 10:00:00');
+});
 
 it('clears expired bodies and keeps their hash and length', function (): void {
     retentionEndpoint();
@@ -131,6 +142,7 @@ it('refuses a retention of less than a day, or rows kept shorter than bodies, wh
 })->with([
     'no days' => [['outbound.webhooks.payload_retention_days' => 0], 'outbound.webhooks.payload_retention_days must be at least 1.'],
     'negative' => [['outbound.webhooks.payload_retention_days' => -1], 'outbound.webhooks.payload_retention_days must be at least 1.'],
+    'more than 30 days' => [['outbound.webhooks.payload_retention_days' => 31], 'outbound.webhooks.payload_retention_days must be at most 30.'],
     'rows shorter than bodies' => [['outbound.webhooks.payload_retention_days' => 30, 'outbound.webhooks.delivery_retention_days' => 29], 'outbound.webhooks.delivery_retention_days must be at least outbound.webhooks.payload_retention_days.'],
 ]);
 
@@ -174,7 +186,7 @@ it('keeps the body until the end of the retry plan when Retry-After is not honou
     retentionEndpoint();
 
     // 9 retries on the standard delays plus their jitter, plus an hour of slack.
-    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe('2026-11-26 14:39:07');
+    expect(retainedDelivery('msg_1', subjectPublicId: (string) Str::uuid())->payload_expires_at?->toDateTimeString())->toBe('2026-11-26 14:39:07');
 });
 
 it('deletes settled deliveries and their attempts once the row retention ends', function (): void {
@@ -256,7 +268,7 @@ it('keeps a settled delivery while its body may still be redelivered, even past 
     $this->app->forgetInstance(DatabaseDeliveryStore::class);
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
     retentionEndpoint();
-    $delivered = retainedDelivery('msg_live_body', ['status' => 'delivered', 'next_attempt_at' => null]);
+    $delivered = retainedDelivery('msg_live_body', ['status' => 'delivered', 'next_attempt_at' => null], (string) Str::uuid());
 
     expect($delivered->payload_expires_at?->toDateTimeString())->toBe('2026-12-02 11:04:30');
 

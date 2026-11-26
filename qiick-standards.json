@@ -1,5 +1,24 @@
 {
-    "$comment": "qiick standards pack: https://github.com/qiick-io/app-ui/tree/v0.11.0/standards. Sync: node <app-ui>/scripts/sync-standards.mjs --target .",
-    "ref": "v0.11.0",
-    "php": true
+    "$comment": "qiick standards pack: https://github.com/qiick-io/app-ui/tree/v0.15.0/standards. Sync: node <app-ui>/scripts/sync-standards.mjs --target .",
+    "ref": "v0.15.0",
+    "php": true,
+    "erasure": true,
+    "requiredChecks": [
+        "PHP 8.3 Laravel 12 lowest",
+        "PHP 8.3 Laravel 12 stable",
+        "PHP 8.3 Laravel 13 lowest",
+        "PHP 8.3 Laravel 13 stable",
+        "PHP 8.4 Laravel 12 lowest",
+        "PHP 8.4 Laravel 12 stable",
+        "PHP 8.4 Laravel 13 lowest",
+        "PHP 8.4 Laravel 13 stable",
+        "PHP 8.5 Laravel 12 lowest",
+        "PHP 8.5 Laravel 12 stable",
+        "PHP 8.5 Laravel 13 lowest",
+        "PHP 8.5 Laravel 13 stable",
+        "Mutation (per-class ≥95%)",
+        "Real transport Guzzle 7.12",
+        "Real transport Guzzle 8.5",
+        "standards / standards"
+    ]
 }

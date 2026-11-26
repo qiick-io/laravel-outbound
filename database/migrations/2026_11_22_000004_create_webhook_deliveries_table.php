@@ -18,10 +18,11 @@ use Illuminate\Support\Facades\Schema;
  * (`endpoint_id`, `event_id`) unique key, led by the endpoint, cannot.
  *
  * `payload` is the exact raw body under Laravel's `encrypted` cast, kept until
- * `payload_expires_at` (30 days by default, or the end of the retry plan if
- * later; required, so the prune can always delete the row) and then pruned
- * to null;
- * `payload_hash` and `payload_bytes` stay for good (review R5). Retries are
+ * `payload_expires_at` (the retention, 30 days at most; for a delivery about
+ * a named person, the end of the retry plan if later; required, so the prune
+ * can always delete the row) and then pruned to null;
+ * `payload_hash` and `payload_bytes` stay (review R5), except that the
+ * eraser clears the hash of a delivery about the person. Retries are
  * driven by `next_attempt_at` through the (`status`, `next_attempt_at`)
  * index, not by queue delays, so a retry 24 h away survives queue loss.
  *
@@ -64,6 +65,14 @@ return new class extends Migration
             $table->unsignedSmallInteger('max_attempts');
             $table->dateTime('next_attempt_at')->nullable();
             $table->dateTime('claimed_until')->nullable();
+            // The asker of the attempt a worker holds the lease for: the
+            // eraser unlinks it like the other user columns.
+            $claimedTriggeredBy = $table->foreignId('claimed_triggered_by')->nullable()->index();
+
+            if (is_string($usersTable) && $usersTable !== '') {
+                $claimedTriggeredBy->constrained($usersTable)->nullOnDelete();
+            }
+
             $table->string('exhausted_reason', 32)->nullable();
             $table->string('next_attempt_trigger', 16)->nullable();
             // Indexed: PostgreSQL and SQLite do not index a foreign key, and a user deletion would scan the table.
@@ -80,10 +89,15 @@ return new class extends Migration
             $table->unsignedSmallInteger('last_http_status')->nullable();
             $table->string('last_error', 500)->nullable();
             $table->longText('payload')->nullable();
-            $table->char('payload_hash', 64);
+            // Null once the eraser clears a delivery about a person: it derives from their data.
+            $table->char('payload_hash', 64)->nullable();
             $table->unsignedInteger('payload_bytes');
             $table->dateTime('payload_expires_at')->index();
             $table->string('trigger', 16)->default('event');
+            // The person the event is about, when the product names one at
+            // dispatch: the eraser cancels their pending deliveries and drops
+            // their payloads. A pseudonymous reference, never sent.
+            $table->uuid('subject_public_id')->nullable()->index();
             $table->json('metadata')->nullable();
             $table->timestamps();
 

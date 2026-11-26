@@ -11,6 +11,7 @@ use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
@@ -95,14 +96,23 @@ final class WebhookDeliveryCoordinator
      *
      * @param  string|null  $scope  the value of the product's scope column;
      *                              null for instance-level endpoints
+     * @param  string|null  $subjectPublicId  the public id of the person the
+     *                                        event is about, if any: the
+     *                                        eraser cancels their pending
+     *                                        deliveries; it is never sent
      * @return Collection<int, WebhookDelivery> the deliveries created
      *
-     * @throws InvalidArgumentException when a scope is given without a scope column
+     * @throws InvalidArgumentException when a scope is given without a scope
+     *                                  column, or the subject is not a UUID
      * @throws WebhookException when the message cannot be encoded
      * @throws WebhookDeliveryStorageException when a row cannot be written
      */
-    public function dispatch(WebhookMessage $message, ?string $scope = null): Collection
+    public function dispatch(WebhookMessage $message, ?string $scope = null, ?string $subjectPublicId = null): Collection
     {
+        if ($subjectPublicId !== null && ! Str::isUuid($subjectPublicId)) {
+            throw new InvalidArgumentException('The subject public id must be a UUID.');
+        }
+
         $rawBody = $message->toPayloadJson();
         $createdDeliveries = new Collection;
 
@@ -111,7 +121,7 @@ final class WebhookDeliveryCoordinator
             $maxAttempts = $endpoint->max_attempts ?? count($retryDelays) + 1;
             // An unknown profile keeps the plain body; every attempt is refused.
             $body = $this->legacyProfileOf($endpoint)?->body($message, $rawBody) ?? $rawBody;
-            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts));
+            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts), $subjectPublicId === null ? null : strtolower($subjectPublicId));
 
             if ($delivery !== null) {
                 $createdDeliveries->push($delivery);
@@ -189,6 +199,12 @@ final class WebhookDeliveryCoordinator
 
         try {
             $outcome = $this->send($delivery, $endpoint, $attemptedAt->getTimestamp());
+
+            // Nothing went out, and nothing is recorded: a cancelled delivery
+            // is never claimed again, and prune exhausts an expired one.
+            if ($outcome === null) {
+                return;
+            }
         } catch (Throwable) {
             // An endpoint row the request cannot be built from (a non-string
             // header, a value encrypted under a lost APP_KEY): the attempt
@@ -213,9 +229,9 @@ final class WebhookDeliveryCoordinator
         $errorMessage = DeliveryAttempt::sanitiseErrorMessage($outcome['errorMessage']);
 
         $attemptAttributes = [
-            // A redelivery request's trigger and user; otherwise `schedule`.
+            // A redelivery request's trigger; otherwise `schedule`. The store
+            // records its user from the claim (`claimed_triggered_by`).
             'trigger' => $delivery->next_attempt_trigger ?? WebhookAttemptTriggerEnum::Schedule,
-            'triggered_by' => $delivery->next_attempt_triggered_by,
             'attempt' => $attemptNumber,
             'status' => $outcome['status'],
             'webhook_timestamp' => $attemptedAt->getTimestamp(),
@@ -454,9 +470,12 @@ final class WebhookDeliveryCoordinator
     }
 
     /**
-     * @return array{status: WebhookAttemptStatusEnum, errorCode: string|null, errorMessage: string|null, response: Response|null, secretPublicIds: list<string>|null}
+     * Null when nothing was sent: the delivery was cancelled, or its body
+     * expired, since the claim.
+     *
+     * @return array{status: WebhookAttemptStatusEnum, errorCode: string|null, errorMessage: string|null, response: Response|null, secretPublicIds: list<string>|null}|null
      */
-    private function send(WebhookDelivery $delivery, WebhookEndpoint $endpoint, int $webhookTimestamp): array
+    private function send(WebhookDelivery $delivery, WebhookEndpoint $endpoint, int $webhookTimestamp): ?array
     {
         try {
             $signingSet = $this->secretResolver->signingSetFor($endpoint);
@@ -485,7 +504,19 @@ final class WebhookDeliveryCoordinator
                         ->withBody($signedWebhook->rawBody, 'application/json');
                 },
                 $this->requestOptionsFor($endpoint),
+                // The eraser may have cancelled the delivery, or its body may
+                // have expired, since this worker claimed it: read the row
+                // again after DNS, right before the transport. Known limit: a
+                // cancel committed after this read, while the request is
+                // being written, is not stopped; it cannot be recalled.
+                function () use ($delivery): void {
+                    if (! $this->store->isSendable($delivery->id)) {
+                        throw new DeliveryNotSendableException;
+                    }
+                },
             );
+        } catch (DeliveryNotSendableException) {
+            return null;
         } catch (UnsafeUrl $exception) {
             return $this->outcome(WebhookAttemptStatusEnum::Refused, 'ssrf_refused', $exception->getMessage(), null, $secretPublicIds);
         } catch (InvalidArgumentException $exception) {

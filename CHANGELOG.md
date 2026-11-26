@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **New columns `webhook_deliveries.subject_public_id` and
+  `claimed_triggered_by`**, and
+  `payload_hash` is nullable, in the `create_` migration: recreate the
+  database (pre-1.0 policy).
+- **`outbound.webhooks.payload_retention_days` is at most 30**: the boot
+  fails above. A delivery dispatched without `subjectPublicId` keeps its body
+  for the retention only, even when its retry plan is longer.
+
+### Added
+
+- `Qiick\Outbound\Erasure\OutboundEraser`, the fleet-standard eraser, with
+  `ErasureReport`, `OrganisationScopeUnsupportedException` and
+  `Events\SubjectErasedEvent`; the fleet erasure suite (E1–E14) runs in CI on
+  SQLite, PostgreSQL, MySQL and MariaDB (#51).
+- `WebhookDeliveryCoordinator::dispatch(subjectPublicId: …)` records the
+  person an event is about, so the eraser can cancel their pending deliveries.
+
+### Changed
+
+- A delivery cancelled while a worker was sending it stays cancelled: the
+  attempt is not recorded. A worker reads the row again after DNS, right
+  before the transport (`PinnedHttpClient::send(beforeTransport: …)`), so a
+  delivery cancelled after its claim, or whose body expired, is never sent;
+  an expired body is never claimed either.
+- An attempt records the asker the claim stored in the new
+  `webhook_deliveries.claimed_triggered_by`, which the eraser nulls, so an
+  asker unlinked during the send is never written back.
+- `subjectPublicId` is stored in lower case.
+- The eraser clears `payload_hash` on deliveries about the person.
+- The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
+
 ## [0.2.0-beta.3] - 2026-11-26
 
 Third pre-release: one security fix from the signaculum review. Public APIs

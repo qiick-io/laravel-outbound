@@ -6,4 +6,4 @@ use Qiick\Outbound\Tests\Support\PackageTestCase;
 
 require __DIR__.'/Support/SsrfHelpers.php';
 
-pest()->extend(PackageTestCase::class)->in('Feature', 'Unit', 'Arch');
+pest()->extend(PackageTestCase::class)->in('Feature', 'Unit', 'Arch', 'Erasure');

@@ -14,6 +14,7 @@ min="${MUTATE_MIN:-95}"
 unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
 pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
 webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Unit/Retry tests/Feature/Webhooks}"
+erasure_paths="${MUTATE_ERASURE_PATHS:-tests/Feature/Erasure tests/Erasure}"
 
 # No class runs with --covered-only: every mutated line must be killed.
 webhook_classes=(
@@ -71,9 +72,10 @@ echo_and_mutate() {
   fi
 }
 
-# The provider's bindings are exercised by the whole suite.
+# The provider's bindings are exercised by the whole suite. Listed by folder:
+# the synced tests/Conformance is for products and has no package test case.
 if in_this_shard; then
-  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests "$@"
+  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests/Arch tests/Unit tests/Feature tests/Erasure "$@"
 fi
 
 # PinnedHttpClient's transport mutants are killed only on the real wire.
@@ -117,6 +119,17 @@ for class in "${webhook_classes[@]}"; do
   in_this_shard || continue
   # shellcheck disable=SC2086
   echo_and_mutate "${class}" ${webhook_paths} "$@"
+done
+
+erasure_classes=(
+  'Qiick\Outbound\Erasure\OutboundEraser'
+  'Qiick\Outbound\Erasure\ErasureReport'
+)
+
+for class in "${erasure_classes[@]}"; do
+  in_this_shard || continue
+  # shellcheck disable=SC2086
+  echo_and_mutate "${class}" ${erasure_paths} "$@"
 done
 
 echo "==> shard ${shard} ran ${classes_run} class(es)"

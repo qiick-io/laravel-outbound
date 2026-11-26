@@ -84,6 +84,9 @@ jobs:
       - name: Pest
         run: vendor/bin/pest
 
+      # The fleet erasure suite (E1–E14), by path: phpunit.xml cannot leave it out.
+      - run: node tests/Erasure/run.mjs
+
   real-transport:
     name: Real transport Guzzle ${{ matrix.guzzle }}
     runs-on: ubuntu-latest
@@ -195,9 +198,10 @@ jobs:
             options: >-
               -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -e MYSQL_DATABASE=laravel_outbound
               --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval=5s --health-retries=20
-          - name: MariaDB 10.11
+          # The fleet package matrix (app-ui standards/package-matrix.json).
+          - name: MariaDB 11.4
             connection: mariadb
-            image: mariadb:10.11
+            image: mariadb:11.4
             port: 3306
             options: >-
               -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=yes -e MARIADB_DATABASE=laravel_outbound
@@ -242,10 +246,20 @@ jobs:
           DB_PASSWORD: ''
         run: vendor/bin/pest --exclude-group=real-transport
 
+      - name: Erasure suite
+        env:
+          DB_CONNECTION: ${{ matrix.database.connection }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ matrix.database.port }}
+          DB_DATABASE: laravel_outbound
+          DB_USERNAME: ${{ matrix.database.connection == 'pgsql' && 'postgres' || 'root' }}
+          DB_PASSWORD: ''
+        run: node tests/Erasure/run.mjs
+
   # The qiick standards pack (agent files, architecture test) must match app-ui.
   standards:
-    # qiick-io/app-ui@v0.11.0
-    uses: qiick-io/app-ui/.github/workflows/drift-check.yml@cbb1843eb1f50ef5a38e7e7bdf9b8dbec7b48bed # v0.11.0
+    # qiick-io/app-ui@v0.15.0
+    uses: qiick-io/app-ui/.github/workflows/drift-check.yml@0d97ae1429a856411c76e6de1ec258cae0eabab6 # v0.15.0
     with:
       standards: true
       registry: false

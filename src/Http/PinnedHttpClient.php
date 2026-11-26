@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Http;
 
+use Closure;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\Psr7\Uri;
@@ -57,6 +58,13 @@ final class PinnedHttpClient
 
     /**
      * @param  callable(OutboundRequest): void  $configure
+     * @param  (Closure(): void)|null  $beforeTransport  runs on every hop
+     *                                                   after the guard
+     *                                                   resolved the host,
+     *                                                   right before the
+     *                                                   request is handed to
+     *                                                   the transport; what it
+     *                                                   throws stops the send
      *
      * @throws UnsafeUrl
      * @throws OutboundHttpException
@@ -67,6 +75,7 @@ final class PinnedHttpClient
         string $url,
         callable $configure,
         HttpRequestOptions $options = new HttpRequestOptions,
+        ?Closure $beforeTransport = null,
     ): Response {
         $this->assertTimeoutBounds($options);
 
@@ -96,6 +105,10 @@ final class PinnedHttpClient
 
                 throw $unsafeUrl;
             }
+            if ($beforeTransport !== null) {
+                $beforeTransport();
+            }
+
             $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining)));
             $hopConnect = min($options->connectTimeoutSeconds, $hopTimeout);
 

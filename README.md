@@ -316,6 +316,7 @@ use Qiick\Outbound\Webhooks\WebhookMessage;
 app(WebhookDeliveryCoordinator::class)->dispatch(
     new WebhookMessage('msg_'.Str::ulid(), 'invoice.paid', now()->toDateTimeImmutable(), ['invoice' => $invoice->public_id]),
     scope: $project->public_id, // the product's scope column value; omit for instance scope
+    subjectPublicId: $customer->public_id, // the person the event is about, if any (see Erasure)
 );
 
 // routes/console.php
@@ -517,9 +518,13 @@ Schedule::command('outbound:webhooks:prune')->daily();
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
 (`encrypted` cast). It is kept until `payload_expires_at`: 30 days after
-dispatch by default (`outbound.webhooks.payload_retention_days`, at least 1;
-the maintainer's decision Q3 of 2026-11-22), or until the delivery's longest
-possible retry plan ends, plus an hour, if that is later. The plan counts
+dispatch by default (`outbound.webhooks.payload_retention_days`, from 1 to
+30, the boot fails outside; the maintainer's decision Q3 of 2026-11-22 and the
+fleet erasure decision). A delivery about a person named at dispatch
+(`subjectPublicId`) keeps it until its longest possible retry plan ends, plus
+an hour, if that is later; one about nobody named never longer than the
+retention, because the eraser cannot find it: prune exhausts it
+(`payload_expired`) even mid-schedule. The plan counts
 every retry at its delay plus the most jitter, or at the `Retry-After` cap
 when Retry-After is honoured, so a receiver that keeps answering `503` with
 a long `Retry-After`, or an endpoint with a higher `max_attempts`, never loses
@@ -535,6 +540,59 @@ body has expired too; pending ones are kept. It works in blocks of 500, each in 
 - A pending delivery whose body expires (an endpoint disabled for weeks) is
   exhausted (`payload_expired`); one a worker is sending keeps its body until
   its lease ends.
+
+### Erasure
+
+```php
+use Qiick\Outbound\Erasure\OutboundEraser;
+
+$report = app(OutboundEraser::class)->erase(
+    userId: (string) $user->id,
+    userPublicId: $user->public_id,
+    mode: OutboundEraser::DELETE, // or ANONYMISE: outbound does the same in both
+    publicIds: $principalAndApiKeyPublicIds,
+    identifiers: [$user->email, $user->name],
+    dryRun: false,
+);
+```
+
+`OutboundEraser` is the package's step of the qiick fleet erasure standard
+(`.qiick/standards/erasure.md`); a product calls it only through its erasure
+orchestrator, after collecting the Art. 19 recipients (the endpoints of the
+person's delivered deliveries). Endpoints and the delivery log are the
+organisation's, so nothing is deleted. In one transaction it:
+
+- cancels every pending delivery whose `subject_public_id` is the person's
+  public id or one of `$publicIds` (compared in lower case, as `dispatch()`
+  stores it), and drops the payload, its hash and the reference of every
+  delivery about them, delivered ones included (the erasure report is the
+  evidence that remains);
+- clears what receivers answered (`response_headers`, `request_id`,
+  `response_excerpt`) on every attempt of those deliveries, whoever
+  triggered it;
+- nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
+  they point at the person (a non-numeric `$userId` matches none of them).
+
+A worker that claimed a delivery before the cancel reads the row again after
+DNS, right before the transport, and sends nothing when the delivery was
+cancelled or its body expired (an expired body is never claimed either). An
+attempt on the wire records the asker the claim stored in
+`claimed_triggered_by`, which the eraser nulls too, so an unlinked asker is
+never written back. Known limit: a cancel committed after that last read,
+while the request is being written, does not stop it; a request on the wire
+cannot be recalled, and its attempt is not recorded. A deadlock is
+rethrown as `WebhookDeliveryConcurrencyException`, other database errors as
+a `RuntimeException`, both without the query's bindings.
+
+It returns an `ErasureReport` with counts only and, after the commit,
+dispatches `Events\SubjectErasedEvent`; a dry run writes and dispatches
+nothing. An organisation-scoped run throws
+`OrganisationScopeUnsupportedException`: endpoints have no organisation.
+
+A delivery is attributable only if the product passed `subjectPublicId` to
+`dispatch()`. A delivery queued without it keeps its encrypted payload for
+the payload retention only (30 days at most, whatever its retry plan), then
+only the hash: pass it for every event about a person.
 
 ### Retry schedule and delivery records
 
