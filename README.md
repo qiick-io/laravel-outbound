@@ -8,14 +8,14 @@
 
 # qiick/laravel-outbound
 
-> **Status:** `0.2.0-beta.1`. Pre-1.0: minor versions may break. Prefer a tagged release
+> **Status:** `0.2.0-beta.2`. Pre-1.0: minor versions may break. Prefer a tagged release
 > over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
 SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.
 
 ## Status
 
-Released as **`0.2.0-beta.1`** against the approved design
+Released as **`0.2.0-beta.2`** against the approved design
 (`projects/qiick/packages/laravel-outbound-design.md` in the qiick knowledge
 base). Public APIs, evaluation order and security properties follow SemVer;
 before `1.0.0`, a minor may break.

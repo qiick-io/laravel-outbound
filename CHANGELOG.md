@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-11-26
+
+Second pre-release, from the signaculum and excubia adoptions. Public APIs
+may still change in any 0.x minor; recreate the database after each pre-1.0
+upgrade.
+
+### Upgrade notes
+
+- **Breaking, private hosts: `ssrf.allow_private_hosts` is now the ceiling.**
+  A call's `UrlGuardOptions(allowPrivateHosts: true)` no longer opens
+  private hosts on a guard that refuses them, and
+  `outbound.webhooks.allow_endpoint_private_hosts` is removed: an endpoint's
+  `allow_private_hosts` can only narrow the global setting (null inherits,
+  `false` refuses, `true` never widens). A product that let some endpoints
+  reach internal hosts with the global setting off turns it on and sets
+  `allow_private_hosts = false` on every endpoint that must stay public.
+  Details in `UPGRADING.md`.
+- The `create_` migrations index three foreign keys: run `migrate:fresh`, or
+  add the three indexes listed in `UPGRADING.md` to a beta.1 database.
+
 ### Added
 
 - `WebhookDeliveredEvent`: fired once a 2xx attempt is stored, after the
@@ -329,7 +349,8 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.2...HEAD
+[0.2.0-beta.2]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...v0.2.0-beta.2
 [0.2.0-beta.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...v0.2.0-beta.1
 [0.1.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qiick-io/laravel-outbound/releases/tag/v0.1.0

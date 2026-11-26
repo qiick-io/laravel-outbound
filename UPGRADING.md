@@ -16,7 +16,10 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
-## To the next release
+## To 0.2.0-beta.2 (adoption fixes)
+
+Read the first item before upgrading: it changes which destinations can be
+reached.
 
 - **Private hosts: the global setting is now the ceiling.**
   `ssrf.allow_private_hosts` (`OUTBOUND_ALLOW_PRIVATE_HOSTS`) decides whether
