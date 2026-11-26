@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `WebhookDeliveredEvent`: fired once a 2xx attempt is stored, after the
+  commit, with the delivery's and the endpoint's public ids, the webhook id
+  and the attempt number; the counterpart of `WebhookDeliveryFailedEvent`.
 - A time budget for a worker run: `WebhookDeliveryCoordinator::work($limit,
   $maxSeconds)` and `outbound:webhooks:work --max-seconds` start no attempt
   once the budget is spent, next to the count limit.

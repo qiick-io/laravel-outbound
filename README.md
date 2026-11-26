@@ -428,6 +428,12 @@ $coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliv
 `enableEndpoint()` is the only supported way back: setting `is_active` by
 hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
 
+A delivered webhook (a 2xx) fires `WebhookDeliveredEvent` once the attempt
+is stored and committed: the delivery's public id, the webhook id
+(`event_id`), the endpoint's public id, the attempt number and the time, so a
+product records the outcome without querying the tables. A transaction the
+product wraps around the run that rolls back announces nothing.
+
 An attempt that leaves a delivery exhausted (every attempt used, a
 `Retry-After` above the cap, or 410 Gone) fires `WebhookDeliveryFailedEvent`
 once, after the attempt is stored: the delivery's and the endpoint's public
