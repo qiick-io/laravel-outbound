@@ -325,7 +325,9 @@ Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
 message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
-(50) due deliveries, leases each one on its own right before its send, signs
+(50) due deliveries, and with `--max-seconds` starts no attempt once that
+long has passed (an attempt on the wire finishes, so a run can overrun by one
+send); it leases each delivery on its own right before its send, signs
 each attempt with the endpoint's signing set
 and a fresh `webhook-timestamp`, and POSTs it through `PinnedHttpClient`
 only: SSRF guard, pinned address, no proxy, never a redirect. Retries are
@@ -403,10 +405,15 @@ disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
 so a product can add its own channels. The package also emails the
 endpoint's `created_by` user, loaded with `auth.providers.users.model`
 (`WebhookEndpointDisabledNotification`, queued), for automatic disables only;
-turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
+turn that off with `outbound.webhooks.auto_disable.notify_owner`. To email
+someone else (a team, an operations address), bind a
+`Contracts\WebhookEndpointNoticeRecipientsContract` whose `recipientsFor()`
+returns the notifiables, users or `Notification::route('mail', ...)`; an
+empty list sends nothing. The mail
 carries no text a tenant wrote: a free-form name could hold a bare URL that
 mail clients turn into a link. It names the endpoint by its host (a valid
-host name or IP literal, else "an unknown host") and its public id, never
+host name or IP literal, else "an unknown host"; `WebhookEndpoint::displayHost()`
+gives the same to a product's own notices) and its public id, never
 its URL, and its only link is the product's own endpoint page,
 `outbound.webhooks.auto_disable.endpoint_url` with `{endpoint}` replaced by
 the public id (no link when unset).

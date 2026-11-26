@@ -35,6 +35,13 @@ from `develop`.
     `allow_private_hosts = false` (with `forceFill()`) on every endpoint that
     must stay public; with the global setting on, an endpoint left at null
     reaches private hosts.
+- The `create_` migrations index three foreign keys (pre-1.0, so they
+  changed). A database migrated with `0.2.0-beta.1` runs `migrate:fresh`, or
+  adds the indexes once (MySQL and MariaDB already have them from the
+  foreign keys):
+  `CREATE INDEX webhook_endpoints_created_by_index ON webhook_endpoints (created_by)`,
+  `CREATE INDEX webhook_deliveries_next_attempt_triggered_by_index ON webhook_deliveries (next_attempt_triggered_by)`,
+  `CREATE INDEX webhook_delivery_attempts_triggered_by_index ON webhook_delivery_attempts (triggered_by)`.
 
 ## To 0.2.0-beta.1 (webhook delivery)
 

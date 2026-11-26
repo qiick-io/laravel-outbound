@@ -68,7 +68,8 @@ return new class extends Migration
             $table->text('headers')->nullable();
             $table->json('metadata')->nullable();
 
-            $createdBy = $table->foreignId('created_by')->nullable();
+            // Indexed: PostgreSQL and SQLite do not index a foreign key, and a user deletion would scan the table.
+            $createdBy = $table->foreignId('created_by')->nullable()->index();
 
             if (is_string($usersTable) && $usersTable !== '') {
                 $createdBy->constrained($usersTable)->nullOnDelete();

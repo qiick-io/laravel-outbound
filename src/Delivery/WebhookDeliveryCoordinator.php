@@ -121,7 +121,10 @@ final class WebhookDeliveryCoordinator
     }
 
     /**
-     * Send one attempt for each of up to `$limit` due deliveries.
+     * Send one attempt for each of up to `$limit` due deliveries, and, with
+     * `$maxSeconds`, start none once that long has passed since the run
+     * began: an attempt already on the wire finishes, so a run can overrun
+     * the budget by one send (at most the chain deadline).
      *
      * Each delivery is leased on its own, right before its send, for the
      * longest a send can take (the redirect-chain deadline) plus a minute: a
@@ -135,17 +138,26 @@ final class WebhookDeliveryCoordinator
      *
      * @return int the attempts sent or refused
      *
-     * @throws InvalidArgumentException when `$limit` is below 1
+     * @throws InvalidArgumentException when `$limit` or `$maxSeconds` is below 1
      */
-    public function work(int $limit): int
+    public function work(int $limit, ?int $maxSeconds = null): int
     {
         if ($limit < 1) {
             throw new InvalidArgumentException('The work limit must be at least 1.');
         }
 
+        if ($maxSeconds !== null && $maxSeconds < 1) {
+            throw new InvalidArgumentException('The work time budget must be at least 1 second.');
+        }
+
         $attemptCount = 0;
+        $deadline = $maxSeconds === null ? null : $this->nanoseconds() + $maxSeconds * 1_000_000_000;
 
         foreach ($this->store->dueCandidates($limit, $this->defaultMaxConcurrency) as $deliveryId) {
+            if ($deadline !== null && $this->nanoseconds() >= $deadline) {
+                return $attemptCount;
+            }
+
             $delivery = $this->store->claim($deliveryId, $this->limits->totalDeadlineSeconds + 60, $this->defaultMaxConcurrency);
 
             if ($delivery === null) {

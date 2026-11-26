@@ -1141,3 +1141,75 @@ it('refuses a legacy profile entry that is not a name and a profile binding', fu
     'no name' => [['test.legacy-profile']],
     'not a map at all' => ['test.legacy-profile'],
 ]);
+
+/*
+ * Signaculum adoption: a run bounded in time as well as in count.
+ */
+
+/**
+ * @param  list<int>|null  $readings  nanosecond readings in order; else one second per read
+ */
+function coordinatorOnAClockThatTicksPerRead(?array $readings = null): WebhookDeliveryCoordinator
+{
+    $seconds = 0;
+
+    return new WebhookDeliveryCoordinator(
+        app(DatabaseDeliveryStore::class),
+        app(WebhookSecretResolver::class),
+        app(StandardWebhookSigner::class),
+        app(PinnedHttpClient::class),
+        app(RetryPolicy::class),
+        app(OutboundHttpLimits::class),
+        timeoutSeconds: 15,
+        connectTimeoutSeconds: 3,
+        defaultRetryPreset: WebhookRetryPresetEnum::Standard,
+        defaultMaxConcurrency: 10,
+        maxResponseBytes: 1_048_576,
+        isEndpointPrivateHostsAllowed: false,
+        exceptionHandler: app(ExceptionHandler::class),
+        disablePolicy: app(EndpointDisablePolicy::class),
+        events: app(Dispatcher::class),
+        // One second per read: the run's start, each budget check, and an attempt's start and end.
+        nanosecondClock: function () use (&$seconds, &$readings): int {
+            return $readings === null ? $seconds++ * 1_000_000_000 : (int) array_shift($readings);
+        },
+    );
+}
+
+it('starts an attempt a nanosecond before the budget ends, and none at its end', function (): void {
+    deliveryEndpoint(['max_concurrency' => 10]);
+    foreach (range(1, 3) as $number) {
+        coordinator()->dispatch(invoicePaidMessage("msg_{$number}"));
+    }
+
+    // The run's start, the first check, the attempt's start and end, the second check.
+    expect(coordinatorOnAClockThatTicksPerRead([0, 999_999_999, 999_999_999, 999_999_999, 1_000_000_000])->work(50, 1))->toBe(1);
+});
+
+it('starts no new attempt once the time budget is spent', function (?int $maxSeconds, int $expectedAttempts): void {
+    deliveryEndpoint(['max_concurrency' => 10]);
+    foreach (range(1, 5) as $number) {
+        coordinator()->dispatch(invoicePaidMessage("msg_{$number}"));
+    }
+
+    expect(coordinatorOnAClockThatTicksPerRead()->work(50, $maxSeconds))->toBe($expectedAttempts)
+        ->and($this->transfer->requests)->toHaveCount($expectedAttempts);
+})->with([
+    'no budget' => [null, 5],
+    'spent exactly at the fourth check' => [10, 3],
+    'a second more' => [11, 4],
+]);
+
+it('refuses a time budget below one second', function (): void {
+    coordinator()->work(50, 0);
+})->throws(InvalidArgumentException::class, 'The work time budget must be at least 1 second.');
+
+it('takes the time budget from the command', function (): void {
+    foreach (['soon', '0'] as $refused) {
+        $this->artisan('outbound:webhooks:work', ['--max-seconds' => $refused])
+            ->expectsOutput('The --max-seconds option must be a positive integer.')
+            ->assertFailed();
+    }
+
+    $this->artisan('outbound:webhooks:work', ['--max-seconds' => '1'])->assertSuccessful();
+});

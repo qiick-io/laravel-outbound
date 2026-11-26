@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A time budget for a worker run: `WebhookDeliveryCoordinator::work($limit,
+  $maxSeconds)` and `outbound:webhooks:work --max-seconds` start no attempt
+  once the budget is spent, next to the count limit.
+- `WebhookEndpoint::displayHost()`: the endpoint's host, or "an unknown host",
+  for a product's own notices, as the disable email names it (it was private
+  to the listener).
+- `Contracts\WebhookEndpointNoticeRecipientsContract`: a product chooses who
+  gets the endpoint-disabled email (users, a team, a routed address) instead
+  of turning `notify_owner` off; the package binds the `created_by` user.
+
+### Fixed
+
+- `webhook_endpoints.created_by`, `webhook_deliveries.next_attempt_triggered_by`
+  and `webhook_delivery_attempts.triggered_by` have an index: PostgreSQL and
+  SQLite do not create one for a foreign key, so deleting a user scanned
+  those tables. A test requires an index on every foreign key of the package
+  tables, on all four engines.
+
 ### Security
 
 - **`ssrf.allow_private_hosts` is a ceiling.** `RemoteUrlGuard` used to OR

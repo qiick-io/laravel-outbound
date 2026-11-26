@@ -21,7 +21,9 @@ use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 final class WorkWebhookDeliveriesCommand extends Command
 {
     /** @var string */
-    protected $signature = 'outbound:webhooks:work {--limit=50 : Most deliveries to attempt in this run}';
+    protected $signature = 'outbound:webhooks:work
+        {--limit=50 : Most deliveries to attempt in this run}
+        {--max-seconds= : Start no attempt after this many seconds (none by default)}';
 
     /** @var string */
     protected $description = 'Send the due webhook delivery attempts';
@@ -36,7 +38,17 @@ final class WorkWebhookDeliveriesCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Sent {$coordinator->work($limit)} webhook delivery attempt(s).");
+        $maxSeconds = $this->option('max-seconds') === null
+            ? null
+            : filter_var($this->option('max-seconds'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        if ($maxSeconds === false) {
+            $this->error('The --max-seconds option must be a positive integer.');
+
+            return self::FAILURE;
+        }
+
+        $this->info("Sent {$coordinator->work($limit, $maxSeconds)} webhook delivery attempt(s).");
 
         return self::SUCCESS;
     }

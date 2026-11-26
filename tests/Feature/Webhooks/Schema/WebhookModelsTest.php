@@ -336,3 +336,14 @@ it('reads an attempt status only from the three attempt outcomes', function (str
         ->toBe(['delivered', 'failed', 'refused'])
         ->and(fn () => WebhookDeliveryAttempt::query()->findOrFail($attemptId)->status)->toThrow(ValueError::class);
 })->with(['pending', 'exhausted', 'cancelled']);
+
+it('names an endpoint by its host only, or as an unknown host', function (string $url, string $displayHost): void {
+    expect((new WebhookEndpoint)->forceFill(['url' => $url])->displayHost())->toBe($displayHost);
+})->with([
+    'a host name, lowercased' => ['https://Hooks.Example.COM/receive?token=x', 'hooks.example.com'],
+    'an ipv4 address' => ['http://93.184.216.34:8080/hook', '93.184.216.34'],
+    'an ipv6 literal' => ['https://[2001:DB8::1]/hook', '[2001:db8::1]'],
+    'no host' => ['not a url', 'an unknown host'],
+    'a host with a space' => ['https://evil example.com/', 'an unknown host'],
+    'a host with other characters' => ['https://click_here!.example/', 'an unknown host'],
+]);
