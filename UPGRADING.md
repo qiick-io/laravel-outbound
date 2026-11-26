@@ -16,7 +16,7 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
-## To the next release
+## To 0.2.0-beta.3 (endpoint private hosts)
 
 - `webhook_endpoints.allow_private_hosts` is `NOT NULL DEFAULT false` (the
   `create_` migration changed, pre-1.0): recreate the database, or set
