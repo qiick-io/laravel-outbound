@@ -88,11 +88,13 @@ it('cancels the pending deliveries about the person and drops the payload of eve
         ->and($delivered->refresh())
         ->status->toBe(DeliveryStatus::Delivered)
         ->payload->toBeNull()
+        ->payload_hash->toBeNull()
         ->subject_public_id->toBeNull()
         ->updated_at->toEqual(CarbonImmutable::now())
         ->and($someoneElse->refresh())
         ->status->toBe(DeliveryStatus::Pending)
         ->payload->not->toBeNull()
+        ->payload_hash->not->toBeNull()
         ->subject_public_id->not->toBeNull()
         ->and($unattributed->refresh()->payload)->not->toBeNull()
         ->and($report->stores['webhook_deliveries'])->toBe(['deleted' => 0, 'anonymised' => 2, 'kept' => 0, 'reason' => null]);

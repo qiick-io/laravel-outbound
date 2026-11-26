@@ -28,9 +28,7 @@ use Qiick\Standards\Erasure\Support\ErasurePerson;
  * Outbound writes no cache, disk or further connection with personal data:
  * the seen-webhook-id cache of the verifier holds receivers' webhook ids.
  *
- * `payload_hash` is classified `other`: the SHA-256 of a body that also holds
- * the event id and timestamp, kept as delivery evidence (standards review R5),
- * never the seeded value itself. Endpoint configuration (`name`, `url`,
+ * Endpoint configuration (`name`, `url`,
  * `headers`, `metadata`) is the organisation's, and `metadata` columns are
  * the product's to fill and to erase.
  */
@@ -68,10 +66,12 @@ return new class implements ErasureFixture
             'webhook_deliveries' => [
                 ...self::other(['id', 'public_id', 'endpoint_id', 'event_id', 'event_type', 'occurred_at', 'payload_version', 'status',
                     'attempts_count', 'max_attempts', 'next_attempt_at', 'claimed_until', 'exhausted_reason', 'next_attempt_trigger',
-                    'redelivery_requests', 'last_attempt_at', 'delivered_at', 'last_http_status', 'last_error', 'payload_hash',
+                    'redelivery_requests', 'last_attempt_at', 'delivered_at', 'last_http_status', 'last_error',
                     'payload_bytes', 'payload_expires_at', 'trigger', 'metadata', 'created_at', 'updated_at']),
                 'next_attempt_triggered_by' => 'personal',
                 'payload' => 'personal',
+                // Derived from the body: a known event schema makes it guessable.
+                'payload_hash' => 'personal',
                 'subject_public_id' => 'personal',
             ],
             'webhook_delivery_attempts' => [
