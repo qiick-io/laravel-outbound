@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-11-26
+
+Second pre-release, from the signaculum and excubia adoptions. Public APIs
+may still change in any 0.x minor; recreate the database after each pre-1.0
+upgrade.
+
+### Upgrade notes
+
+- **Breaking, private hosts: `ssrf.allow_private_hosts` is now the ceiling.**
+  A call's `UrlGuardOptions(allowPrivateHosts: true)` no longer opens
+  private hosts on a guard that refuses them, and
+  `outbound.webhooks.allow_endpoint_private_hosts` is removed: an endpoint's
+  `allow_private_hosts` can only narrow the global setting (null inherits,
+  `false` refuses, `true` never widens). A product that let some endpoints
+  reach internal hosts with the global setting off turns it on and sets
+  `allow_private_hosts = false` on every endpoint that must stay public.
+  Details in `UPGRADING.md`.
+- The `create_` migrations index three foreign keys: run `migrate:fresh`, or
+  add the three indexes listed in `UPGRADING.md` to a beta.1 database.
+
+### Added
+
+- `WebhookDeliveredEvent`: fired once a 2xx attempt is stored, after the
+  commit, with the delivery's and the endpoint's public ids, the webhook id
+  and the attempt number; the counterpart of `WebhookDeliveryFailedEvent`.
+- A time budget for a worker run: `WebhookDeliveryCoordinator::work($limit,
+  $maxSeconds)` and `outbound:webhooks:work --max-seconds` start no attempt
+  once the budget is spent, next to the count limit.
+- `WebhookEndpoint::displayHost()`: the endpoint's host, or "an unknown host",
+  for a product's own notices, as the disable email names it (it was private
+  to the listener).
+- `Contracts\WebhookEndpointNoticeRecipientsContract`: a product chooses who
+  gets the endpoint-disabled email (users, a team, a routed address) instead
+  of turning `notify_owner` off; the package binds the `created_by` user.
+
+### Fixed
+
+- `webhook_endpoints.created_by`, `webhook_deliveries.next_attempt_triggered_by`
+  and `webhook_delivery_attempts.triggered_by` have an index: PostgreSQL and
+  SQLite do not create one for a foreign key, so deleting a user scanned
+  those tables. A test requires an index on every foreign key of the package
+  tables, on all four engines.
+
+### Security
+
+- **`ssrf.allow_private_hosts` is a ceiling.** `RemoteUrlGuard` used to OR
+  it with the per-call `UrlGuardOptions::$allowPrivateHosts`, and a webhook
+  endpoint could reach private hosts with the global setting off through
+  `outbound.webhooks.allow_endpoint_private_hosts`. A call or an endpoint now
+  only narrows the global setting: `UrlGuardOptions::$allowPrivateHosts` is
+  `?bool` (null inherits, false refuses, true never widens), and the
+  `allow_endpoint_private_hosts` key is removed.
+
 ## [0.2.0-beta.1] - 2026-11-25
 
 First pre-release with webhook delivery in the package (tables, coordinator,
@@ -296,7 +349,8 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.2...HEAD
+[0.2.0-beta.2]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...v0.2.0-beta.2
 [0.2.0-beta.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...v0.2.0-beta.1
 [0.1.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/qiick-io/laravel-outbound/releases/tag/v0.1.0

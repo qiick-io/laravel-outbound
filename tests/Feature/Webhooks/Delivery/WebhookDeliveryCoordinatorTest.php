@@ -5,8 +5,10 @@ declare(strict_types=1);
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
@@ -17,6 +19,7 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveredEvent;
 use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
@@ -443,19 +446,14 @@ it('posts with a 15 s timeout, an endpoint override, and never above the configu
     'endpoint at 45 s, bounded by the 30 s chain deadline' => [45, 30],
 ]);
 
-it('applies the endpoint https and private-host overrides to the guard', function (): void {
-    config()->set('outbound.webhooks.allow_endpoint_private_hosts', true);
-    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+it('applies the endpoint https override to the guard', function (): void {
     deliveryEndpoint(['url' => 'http://hooks.example.com/plain', 'https_only' => true]);
-    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => true]);
     coordinator()->dispatch(invoicePaidMessage());
 
     coordinator()->work(50);
-    $errorCodes = WebhookDeliveryAttempt::query()->orderBy('id')->pluck('error_code')->all();
 
-    expect($errorCodes)->toBe(['ssrf_refused', null])
-        ->and($this->transfer->requests)->toHaveCount(1)
-        ->and((string) $this->transfer->requests[0]->getUri())->toBe('https://internal.example.com/hook');
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('ssrf_refused')
+        ->and($this->transfer->requests)->toBe([]);
 });
 
 it('keeps each endpoint within its concurrency, counting deliveries other workers hold', function (): void {
@@ -595,7 +593,6 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
         defaultRetryPreset: WebhookRetryPresetEnum::Standard,
         defaultMaxConcurrency: 2,
         maxResponseBytes: 1_048_576,
-        isEndpointPrivateHostsAllowed: false,
         exceptionHandler: app(ExceptionHandler::class),
         disablePolicy: app(EndpointDisablePolicy::class),
         events: app(Dispatcher::class),
@@ -841,20 +838,35 @@ it('does not send to an endpoint disabled after the batch was selected', functio
         ->and(WebhookDelivery::query()->where('endpoint_id', $first->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
 });
 
-it('never lets input switch private hosts on for an endpoint, and honours the switch only when the product allows it', function (bool $isAllowedByProduct): void {
-    config()->set('outbound.webhooks.allow_endpoint_private_hosts', $isAllowedByProduct);
+it('lets an endpoint only narrow the global private-host setting, never widen it', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver, allowPrivateHosts: $isAllowedGlobally),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        $this->transfer,
+    ));
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
-    $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
-    $endpoint->fill(['allow_private_hosts' => true])->save();
-    $isFillable = $endpoint->refresh()->allow_private_hosts === true;
-    $endpoint->forceFill(['allow_private_hosts' => true])->save();
+    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => $endpointSetting]);
     coordinator()->dispatch(invoicePaidMessage());
 
     coordinator()->work(50);
 
-    expect($isFillable)->toBeFalse()
-        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($isAllowedByProduct ? null : 'ssrf_refused');
-})->with(['product allows endpoint switches' => [true], 'product does not' => [false]]);
+    expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($errorCode);
+})->with([
+    'allowed globally, the endpoint inherits' => [true, null, null],
+    'allowed globally, the endpoint narrows' => [true, false, 'ssrf_refused'],
+    'allowed globally, the endpoint agrees' => [true, true, null],
+    'refused globally, the endpoint cannot widen' => [false, true, 'ssrf_refused'],
+    'refused globally, the endpoint inherits' => [false, null, 'ssrf_refused'],
+]);
+
+it('never lets input set an endpoint private-host setting', function (): void {
+    $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
+    $endpoint->fill(['allow_private_hosts' => true])->save();
+
+    expect($endpoint->refresh()->allow_private_hosts)->toBeNull();
+});
 
 it('honours the first Retry-After when the header is repeated', function (): void {
     deliveryEndpoint();
@@ -1132,3 +1144,130 @@ it('refuses a legacy profile entry that is not a name and a profile binding', fu
     'no name' => [['test.legacy-profile']],
     'not a map at all' => ['test.legacy-profile'],
 ]);
+
+/*
+ * Excubia adoption: a delivered webhook is announced, like an exhausted one.
+ */
+
+/**
+ * @param  list<WebhookDeliveredEvent>  $deliveredEvents  filled as the events arrive
+ */
+function listenForDeliveredEvents(array &$deliveredEvents): void
+{
+    app(Dispatcher::class)->listen(WebhookDeliveredEvent::class, function (WebhookDeliveredEvent $event) use (&$deliveredEvents): void {
+        $deliveredEvents[] = $event;
+    });
+}
+
+it('announces a delivered webhook with its ids and the attempt that delivered it', function (): void {
+    $deliveredEvents = [];
+    listenForDeliveredEvents($deliveredEvents);
+    $endpoint = deliveryEndpoint();
+    $this->transfer->respond(503)->respond(200);
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+
+    expect($deliveredEvents)->toBe([]);
+
+    CarbonImmutable::setTestNow('2026-11-23 10:00:05');
+    coordinator()->work(50);
+
+    expect($deliveredEvents)->toHaveCount(1)
+        ->and($deliveredEvents[0]->deliveryPublicId)->toBe(onlyDelivery()->public_id)
+        ->and($deliveredEvents[0]->eventId)->toBe('msg_2KWPBgLlAfxdpx2AI54pPJ85f4W')
+        ->and($deliveredEvents[0]->endpointPublicId)->toBe($endpoint->public_id)
+        ->and($deliveredEvents[0]->attempt)->toBe(2)
+        ->and($deliveredEvents[0]->deliveredAt->toDateTimeString())->toBe('2026-11-23 10:00:05')
+        ->and($deliveredEvents[0])->toBeInstanceOf(ShouldDispatchAfterCommit::class);
+});
+
+it('announces no delivery that an outer transaction rolls back', function (): void {
+    $deliveredEvents = [];
+    listenForDeliveredEvents($deliveredEvents);
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+
+    try {
+        DB::transaction(function (): void {
+            coordinator()->work(50);
+
+            throw new RuntimeException('roll back');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect($this->transfer->requests)->toHaveCount(1)
+        ->and($deliveredEvents)->toBe([]);
+});
+
+/*
+ * Signaculum adoption: a run bounded in time as well as in count.
+ */
+
+/**
+ * @param  list<int>|null  $readings  nanosecond readings in order; else one second per read
+ */
+function coordinatorOnAClockThatTicksPerRead(?array $readings = null): WebhookDeliveryCoordinator
+{
+    $seconds = 0;
+
+    return new WebhookDeliveryCoordinator(
+        app(DatabaseDeliveryStore::class),
+        app(WebhookSecretResolver::class),
+        app(StandardWebhookSigner::class),
+        app(PinnedHttpClient::class),
+        app(RetryPolicy::class),
+        app(OutboundHttpLimits::class),
+        timeoutSeconds: 15,
+        connectTimeoutSeconds: 3,
+        defaultRetryPreset: WebhookRetryPresetEnum::Standard,
+        defaultMaxConcurrency: 10,
+        maxResponseBytes: 1_048_576,
+        exceptionHandler: app(ExceptionHandler::class),
+        disablePolicy: app(EndpointDisablePolicy::class),
+        events: app(Dispatcher::class),
+        // One second per read: the run's start, each budget check, and an attempt's start and end.
+        nanosecondClock: function () use (&$seconds, &$readings): int {
+            return $readings === null ? $seconds++ * 1_000_000_000 : (int) array_shift($readings);
+        },
+    );
+}
+
+it('starts an attempt a nanosecond before the budget ends, and none at its end', function (): void {
+    deliveryEndpoint(['max_concurrency' => 10]);
+    foreach (range(1, 3) as $number) {
+        coordinator()->dispatch(invoicePaidMessage("msg_{$number}"));
+    }
+
+    // The run's start, the first check, the attempt's start and end, the second check.
+    expect(coordinatorOnAClockThatTicksPerRead([0, 999_999_999, 999_999_999, 999_999_999, 1_000_000_000])->work(50, 1))->toBe(1);
+});
+
+it('starts no new attempt once the time budget is spent', function (?int $maxSeconds, int $expectedAttempts): void {
+    deliveryEndpoint(['max_concurrency' => 10]);
+    foreach (range(1, 5) as $number) {
+        coordinator()->dispatch(invoicePaidMessage("msg_{$number}"));
+    }
+
+    expect(coordinatorOnAClockThatTicksPerRead()->work(50, $maxSeconds))->toBe($expectedAttempts)
+        ->and($this->transfer->requests)->toHaveCount($expectedAttempts);
+})->with([
+    'no budget' => [null, 5],
+    'spent exactly at the fourth check' => [10, 3],
+    'a second more' => [11, 4],
+]);
+
+it('refuses a time budget below one second', function (): void {
+    coordinator()->work(50, 0);
+})->throws(InvalidArgumentException::class, 'The work time budget must be at least 1 second.');
+
+it('takes the time budget from the command', function (): void {
+    foreach (['soon', '0'] as $refused) {
+        $this->artisan('outbound:webhooks:work', ['--max-seconds' => $refused])
+            ->expectsOutput('The --max-seconds option must be a positive integer.')
+            ->assertFailed();
+    }
+
+    $this->artisan('outbound:webhooks:work', ['--max-seconds' => '1'])->assertSuccessful();
+});

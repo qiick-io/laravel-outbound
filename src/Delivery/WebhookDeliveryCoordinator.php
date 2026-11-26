@@ -18,6 +18,7 @@ use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Events\WebhookDeliveredEvent;
 use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Events\WebhookRedeliveryRequestedEvent;
@@ -64,9 +65,6 @@ final class WebhookDeliveryCoordinator
      * @param  int  $timeoutSeconds  `outbound.webhooks.timeout_seconds` (15)
      * @param  int  $connectTimeoutSeconds  `outbound.http.connect_timeout_seconds`
      * @param  int|null  $maxResponseBytes  `outbound.http.max_response_bytes`
-     * @param  bool  $isEndpointPrivateHostsAllowed  `outbound.webhooks.allow_endpoint_private_hosts`:
-     *                                               whether an endpoint's own
-     *                                               `allow_private_hosts` counts
      * @param  (Closure(): int)|null  $nanosecondClock  monotonic clock for `duration_ms`
      * @param  array<string, LegacyWebhookProfileContract>  $legacyProfiles  `outbound.webhooks.legacy_profiles`, by name
      */
@@ -82,7 +80,6 @@ final class WebhookDeliveryCoordinator
         private readonly WebhookRetryPresetEnum $defaultRetryPreset,
         private readonly int $defaultMaxConcurrency,
         private readonly ?int $maxResponseBytes,
-        private readonly bool $isEndpointPrivateHostsAllowed,
         private readonly ExceptionHandler $exceptionHandler,
         private readonly EndpointDisablePolicy $disablePolicy,
         private readonly EventDispatcher $events,
@@ -125,7 +122,10 @@ final class WebhookDeliveryCoordinator
     }
 
     /**
-     * Send one attempt for each of up to `$limit` due deliveries.
+     * Send one attempt for each of up to `$limit` due deliveries, and, with
+     * `$maxSeconds`, start none once that long has passed since the run
+     * began: an attempt already on the wire finishes, so a run can overrun
+     * the budget by one send (at most the chain deadline).
      *
      * Each delivery is leased on its own, right before its send, for the
      * longest a send can take (the redirect-chain deadline) plus a minute: a
@@ -134,22 +134,32 @@ final class WebhookDeliveryCoordinator
      * batch carries on.
      *
      * Side effects: outbound HTTP POSTs; attempt rows; delivery and endpoint
-     * updates; {@see WebhookDeliveryFailedEvent} for a delivery an attempt
-     * left exhausted; unexpected errors reported to the exception handler.
+     * updates; {@see WebhookDeliveredEvent} for a delivered webhook and
+     * {@see WebhookDeliveryFailedEvent} for a delivery an attempt left
+     * exhausted; unexpected errors reported to the exception handler.
      *
      * @return int the attempts sent or refused
      *
-     * @throws InvalidArgumentException when `$limit` is below 1
+     * @throws InvalidArgumentException when `$limit` or `$maxSeconds` is below 1
      */
-    public function work(int $limit): int
+    public function work(int $limit, ?int $maxSeconds = null): int
     {
         if ($limit < 1) {
             throw new InvalidArgumentException('The work limit must be at least 1.');
         }
 
+        if ($maxSeconds !== null && $maxSeconds < 1) {
+            throw new InvalidArgumentException('The work time budget must be at least 1 second.');
+        }
+
         $attemptCount = 0;
+        $deadline = $maxSeconds === null ? null : $this->nanoseconds() + $maxSeconds * 1_000_000_000;
 
         foreach ($this->store->dueCandidates($limit, $this->defaultMaxConcurrency) as $deliveryId) {
+            if ($deadline !== null && $this->nanoseconds() >= $deadline) {
+                return $attemptCount;
+            }
+
             $delivery = $this->store->claim($deliveryId, $this->limits->totalDeadlineSeconds + 60, $this->defaultMaxConcurrency);
 
             if ($delivery === null) {
@@ -238,6 +248,10 @@ final class WebhookDeliveryCoordinator
             // it, the outcome still counts, so a delivered webhook is never
             // sent again and a failing one still moves towards exhausted.
             $isRecorded = $this->store->recordAttempt($delivery, [...$attemptAttributes, 'response_headers' => null, 'request_id' => null], $deliveryChanges, $isSuccess, $isReceiverOutcome);
+        }
+
+        if ($isRecorded && $isSuccess) {
+            $this->events->dispatch(new WebhookDeliveredEvent($delivery->public_id, $delivery->event_id, $endpoint->public_id, $attemptNumber, $attemptedAt));
         }
 
         // A redelivery asked during the send keeps the delivery pending, so
@@ -604,9 +618,8 @@ final class WebhookDeliveryCoordinator
             urlOptions: new UrlGuardOptions(
                 // Only tightens: the guard ORs it with its own setting.
                 httpsOnly: $endpoint->https_only ?? false,
-                // Loosens the guard, so an endpoint's switch counts only when
-                // the product allows endpoint switches at all.
-                allowPrivateHosts: $this->isEndpointPrivateHostsAllowed && $endpoint->allow_private_hosts === true,
+                // Only narrows: ssrf.allow_private_hosts stays the ceiling.
+                allowPrivateHosts: $endpoint->allow_private_hosts,
             ),
         );
     }

@@ -8,14 +8,14 @@
 
 # qiick/laravel-outbound
 
-> **Status:** `0.2.0-beta.1`. Pre-1.0: minor versions may break. Prefer a tagged release
+> **Status:** `0.2.0-beta.2`. Pre-1.0: minor versions may break. Prefer a tagged release
 > over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
 SSRF-safe outbound HTTP and Standard Webhooks signing for qiick Laravel products.
 
 ## Status
 
-Released as **`0.2.0-beta.1`** against the approved design
+Released as **`0.2.0-beta.2`** against the approved design
 (`projects/qiick/packages/laravel-outbound-design.md` in the qiick knowledge
 base). Public APIs, evaluation order and security properties follow SemVer;
 before `1.0.0`, a minor may break.
@@ -325,7 +325,9 @@ Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
 message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
-(50) due deliveries, leases each one on its own right before its send, signs
+(50) due deliveries, and with `--max-seconds` starts no attempt once that
+long has passed (an attempt on the wire finishes, so a run can overrun by one
+send); it leases each delivery on its own right before its send, signs
 each attempt with the endpoint's signing set
 and a fresh `webhook-timestamp`, and POSTs it through `PinnedHttpClient`
 only: SSRF guard, pinned address, no proxy, never a redirect. Retries are
@@ -365,10 +367,10 @@ schedule above, and a retry 24 h away survives a queue loss.
   or 504 the endpoint's concurrency is halved (at least 1) until its next
   success. Both are decided under the same endpoint row lock as the
   concurrency, so parallel workers agree.
-- **Private hosts:** an endpoint's `allow_private_hosts` loosens the SSRF
-  guard, so it is not mass-assignable and counts only when the product sets
-  `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
-  `ssrf.allow_private_hosts` decides, for every endpoint.
+- **Private hosts:** `ssrf.allow_private_hosts` is the ceiling. An
+  endpoint's `allow_private_hosts` can only narrow it: null inherits it,
+  `false` refuses private hosts for that endpoint, and `true` never allows
+  what the global setting refuses. The column is not mass-assignable.
 - **Records:** each attempt row keeps the status, HTTP status, error code
   (`http_status`, `gone`, `timeout`, `tls`, `dns`, `connection`, `transport`
   for a client refusal without a transport kind such as a response over
@@ -403,10 +405,15 @@ disable fires `WebhookEndpointDisabledEvent` (public id, reason, time) once,
 so a product can add its own channels. The package also emails the
 endpoint's `created_by` user, loaded with `auth.providers.users.model`
 (`WebhookEndpointDisabledNotification`, queued), for automatic disables only;
-turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
+turn that off with `outbound.webhooks.auto_disable.notify_owner`. To email
+someone else (a team, an operations address), bind a
+`Contracts\WebhookEndpointNoticeRecipientsContract` whose `recipientsFor()`
+returns the notifiables, users or `Notification::route('mail', ...)`; an
+empty list sends nothing. The mail
 carries no text a tenant wrote: a free-form name could hold a bare URL that
 mail clients turn into a link. It names the endpoint by its host (a valid
-host name or IP literal, else "an unknown host") and its public id, never
+host name or IP literal, else "an unknown host"; `WebhookEndpoint::displayHost()`
+gives the same to a product's own notices) and its public id, never
 its URL, and its only link is the product's own endpoint page,
 `outbound.webhooks.auto_disable.endpoint_url` with `{endpoint}` replaced by
 the public id (no link when unset).
@@ -420,6 +427,12 @@ $coordinator->enableEndpoint($endpoint);  // clean failure streak; pending deliv
 
 `enableEndpoint()` is the only supported way back: setting `is_active` by
 hand leaves `disabled_at`, `disabled_reason` and the failure streak behind.
+
+A delivered webhook (a 2xx) fires `WebhookDeliveredEvent` once the attempt
+is stored and committed: the delivery's public id, the webhook id
+(`event_id`), the endpoint's public id, the attempt number and the time, so a
+product records the outcome without querying the tables. A transaction the
+product wraps around the run that rolls back announces nothing.
 
 An attempt that leaves a delivery exhausted (every attempt used, a
 `Retry-After` above the cap, or 410 Gone) fires `WebhookDeliveryFailedEvent`
@@ -653,7 +666,6 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.respect_retry_after` | `OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER` | `true` |
 | `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
-| `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |

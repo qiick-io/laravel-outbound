@@ -25,7 +25,9 @@ return [
 
         /*
          * Allow private, ULA, link-local and CGNAT destinations. Metadata,
-         * NAT64, 6to4 and Teredo stay blocked either way.
+         * NAT64, 6to4 and Teredo stay blocked either way. The ceiling: a
+         * call's UrlGuardOptions or an endpoint's `allow_private_hosts` can
+         * only narrow it, never allow what this refuses.
          */
         'allow_private_hosts' => (bool) env('OUTBOUND_ALLOW_PRIVATE_HOSTS', false),
 
@@ -142,14 +144,6 @@ return [
          * expired yet, are never deleted.
          */
         'delivery_retention_days' => (int) env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90),
-
-        /*
-         * Let an endpoint's own `allow_private_hosts` reach private, loopback
-         * and link-local addresses (metadata stays blocked). Off: only
-         * `ssrf.allow_private_hosts` can, for every endpoint. The column is
-         * never mass-assignable; a product sets it in its own code.
-         */
-        'allow_endpoint_private_hosts' => (bool) env('OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS', false),
 
         /*
          * Disable an endpoint at once on 410 Gone, and after
