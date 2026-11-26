@@ -690,6 +690,50 @@ it('records nothing for a delivery deleted while it was being sent', function ()
         ->and($endpoint->refresh()->last_success_at)->toBeNull();
 });
 
+it('keeps a delivery cancelled while it was being sent cancelled, with no attempt recorded', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            // The eraser cancels the person's pending delivery after the claim.
+            WebhookDelivery::query()->update(['status' => DeliveryStatus::Cancelled->value, 'payload' => null]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and(onlyDelivery()->delivered_at)->toBeNull()
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+});
+
+it('stores the subject public id the product names at dispatch, and only a UUID', function (): void {
+    deliveryEndpoint();
+    $subjectPublicId = '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11';
+
+    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: $subjectPublicId);
+
+    expect(onlyDelivery()->subject_public_id)->toBe($subjectPublicId)
+        ->and(onlyDelivery()->toArray())->not->toHaveKey('subject_public_id')
+        ->and(fn () => coordinator()->dispatch(invoicePaidMessage('msg_other'), subjectPublicId: 'user-42'))
+        ->toThrow(InvalidArgumentException::class, 'The subject public id must be a UUID.');
+});
+
+it('stores no subject public id when the product names none', function (): void {
+    deliveryEndpoint();
+
+    coordinator()->dispatch(invoicePaidMessage());
+
+    expect(onlyDelivery()->subject_public_id)->toBeNull();
+});
+
 it('sends to a plain-http URL when neither the endpoint nor the config asks for https', function (): void {
     deliveryEndpoint(['url' => 'http://hooks.example.com/plain']);
     coordinator()->dispatch(invoicePaidMessage());
