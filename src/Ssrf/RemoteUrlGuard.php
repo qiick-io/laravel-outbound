@@ -31,7 +31,8 @@ final class RemoteUrlGuard
      */
     public function authorize(string $url, UrlGuardOptions $options = new UrlGuardOptions): AuthorizedDestination
     {
-        $allowPrivate = $options->allowPrivateHosts || $this->allowPrivateHosts;
+        // The guard's setting (ssrf.allow_private_hosts) is the ceiling: a call can only narrow it.
+        $allowPrivate = $this->allowPrivateHosts && ($options->allowPrivateHosts ?? true);
         $httpsOnly = $options->httpsOnly || $this->httpsOnly;
 
         $trimmed = trim($url);

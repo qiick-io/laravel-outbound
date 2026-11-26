@@ -367,10 +367,10 @@ schedule above, and a retry 24 h away survives a queue loss.
   or 504 the endpoint's concurrency is halved (at least 1) until its next
   success. Both are decided under the same endpoint row lock as the
   concurrency, so parallel workers agree.
-- **Private hosts:** an endpoint's `allow_private_hosts` loosens the SSRF
-  guard, so it is not mass-assignable and counts only when the product sets
-  `outbound.webhooks.allow_endpoint_private_hosts`; otherwise only
-  `ssrf.allow_private_hosts` decides, for every endpoint.
+- **Private hosts:** `ssrf.allow_private_hosts` is the ceiling. An
+  endpoint's `allow_private_hosts` can only narrow it: null inherits it,
+  `false` refuses private hosts for that endpoint, and `true` never allows
+  what the global setting refuses. The column is not mass-assignable.
 - **Records:** each attempt row keeps the status, HTTP status, error code
   (`http_status`, `gone`, `timeout`, `tls`, `dns`, `connection`, `transport`
   for a client refusal without a transport kind such as a response over
@@ -660,7 +660,6 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.respect_retry_after` | `OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER` | `true` |
 | `outbound.webhooks.retry_after_cap_seconds` | `OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS` | `86400` |
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
-| `outbound.webhooks.allow_endpoint_private_hosts` | `OUTBOUND_WEBHOOK_ALLOW_ENDPOINT_PRIVATE_HOSTS` | `false` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |

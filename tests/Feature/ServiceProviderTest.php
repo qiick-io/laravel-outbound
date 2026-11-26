@@ -52,7 +52,6 @@ it('merges the package defaults into the outbound config', function (): void {
             'respect_retry_after' => true,
             'retry_after_cap_seconds' => 86_400,
             'default_max_concurrency' => 2,
-            'allow_endpoint_private_hosts' => false,
             'payload_retention_days' => 30,
             'delivery_retention_days' => 90,
             'auto_disable' => [

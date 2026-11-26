@@ -64,9 +64,6 @@ final class WebhookDeliveryCoordinator
      * @param  int  $timeoutSeconds  `outbound.webhooks.timeout_seconds` (15)
      * @param  int  $connectTimeoutSeconds  `outbound.http.connect_timeout_seconds`
      * @param  int|null  $maxResponseBytes  `outbound.http.max_response_bytes`
-     * @param  bool  $isEndpointPrivateHostsAllowed  `outbound.webhooks.allow_endpoint_private_hosts`:
-     *                                               whether an endpoint's own
-     *                                               `allow_private_hosts` counts
      * @param  (Closure(): int)|null  $nanosecondClock  monotonic clock for `duration_ms`
      * @param  array<string, LegacyWebhookProfileContract>  $legacyProfiles  `outbound.webhooks.legacy_profiles`, by name
      */
@@ -82,7 +79,6 @@ final class WebhookDeliveryCoordinator
         private readonly WebhookRetryPresetEnum $defaultRetryPreset,
         private readonly int $defaultMaxConcurrency,
         private readonly ?int $maxResponseBytes,
-        private readonly bool $isEndpointPrivateHostsAllowed,
         private readonly ExceptionHandler $exceptionHandler,
         private readonly EndpointDisablePolicy $disablePolicy,
         private readonly EventDispatcher $events,
@@ -616,9 +612,8 @@ final class WebhookDeliveryCoordinator
             urlOptions: new UrlGuardOptions(
                 // Only tightens: the guard ORs it with its own setting.
                 httpsOnly: $endpoint->https_only ?? false,
-                // Loosens the guard, so an endpoint's switch counts only when
-                // the product allows endpoint switches at all.
-                allowPrivateHosts: $this->isEndpointPrivateHostsAllowed && $endpoint->allow_private_hosts === true,
+                // Only narrows: ssrf.allow_private_hosts stays the ceiling.
+                allowPrivateHosts: $endpoint->allow_private_hosts,
             ),
         );
     }
