@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-11-26
+
+Third pre-release: one security fix from the signaculum review. Public APIs
+may still change in any 0.x minor; recreate the database after each pre-1.0
+upgrade.
+
+### Upgrade notes
+
+- **`webhook_endpoints.allow_private_hosts` is `NOT NULL DEFAULT false`.**
+  An endpoint left at null used to inherit the global setting when the
+  webhook was sent; it now stays off private hosts until the product sets it
+  to `true`. Recreate the database, or backfill nulls to `false` and alter
+  the column (see `UPGRADING.md`).
+
 ### Security
 
 - **An endpoint's `allow_private_hosts` is never null and defaults to
@@ -358,7 +372,8 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.2...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.3...HEAD
+[0.2.0-beta.3]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.2...v0.2.0-beta.3
 [0.2.0-beta.2]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...v0.2.0-beta.2
 [0.2.0-beta.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...v0.2.0-beta.1
 [0.1.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.0...v0.1.1
