@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **An endpoint's `allow_private_hosts` is never null and defaults to
+  `false`.** A null inherited the global ceiling as it was when the webhook
+  was sent, so turning `ssrf.allow_private_hosts` on later opened private
+  hosts for every endpoint left at null. An endpoint now reaches private
+  hosts only when it is `true` and the global setting allows them; the
+  coordinator also treats anything but `true` as `false`.
+
 ## [0.2.0-beta.2] - 2026-11-26
 
 Second pre-release, from the signaculum and excubia adoptions. Public APIs

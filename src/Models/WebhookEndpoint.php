@@ -36,7 +36,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property string $payload_version
  * @property string|null $legacy_profile
  * @property bool|null $https_only
- * @property bool|null $allow_private_hosts
+ * @property bool $allow_private_hosts
  * @property int|null $timeout_seconds
  * @property int|null $max_concurrency
  * @property int|null $rate_limit_per_minute
@@ -150,6 +150,7 @@ class WebhookEndpoint extends Model
             'is_active' => true,
             'consecutive_failures' => 0,
             'rate_window_attempts' => 0,
+            'allow_private_hosts' => false,
             'payload_version' => '1',
         ];
     }

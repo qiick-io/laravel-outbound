@@ -79,6 +79,7 @@ it('reads a fresh endpoint like a stored row and casts every endpoint attribute'
     expect($fresh->is_active)->toBeTrue()
         ->and($fresh->consecutive_failures)->toBe(0)
         ->and($fresh->rate_window_attempts)->toBe(0)
+        ->and($fresh->allow_private_hosts)->toBeFalse()
         ->and($fresh->payload_version)->toBe('1');
 
     $userId = (int) DB::table('users')->insertGetId(['name' => 'Owner', 'email' => 'owner@example.com', 'password' => 'x']);

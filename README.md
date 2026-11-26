@@ -367,10 +367,11 @@ schedule above, and a retry 24 h away survives a queue loss.
   or 504 the endpoint's concurrency is halved (at least 1) until its next
   success. Both are decided under the same endpoint row lock as the
   concurrency, so parallel workers agree.
-- **Private hosts:** `ssrf.allow_private_hosts` is the ceiling. An
-  endpoint's `allow_private_hosts` can only narrow it: null inherits it,
-  `false` refuses private hosts for that endpoint, and `true` never allows
-  what the global setting refuses. The column is not mass-assignable.
+- **Private hosts:** `ssrf.allow_private_hosts` is the ceiling, and an
+  endpoint reaches private hosts only when its `allow_private_hosts` is
+  `true` too. The column is never null and defaults to `false`, so turning
+  the global setting on opens no endpoint by itself; it is not
+  mass-assignable.
 - **Records:** each attempt row keeps the status, HTTP status, error code
   (`http_status`, `gone`, `timeout`, `tls`, `dns`, `connection`, `transport`
   for a client refusal without a transport kind such as a response over

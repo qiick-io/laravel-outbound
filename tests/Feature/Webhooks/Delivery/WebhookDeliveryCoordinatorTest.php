@@ -838,7 +838,7 @@ it('does not send to an endpoint disabled after the batch was selected', functio
         ->and(WebhookDelivery::query()->where('endpoint_id', $first->id)->sole()->status)->toBe(DeliveryStatus::Delivered);
 });
 
-it('lets an endpoint only narrow the global private-host setting, never widen it', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
+it('reaches private hosts only for an endpoint set to, under a global setting that allows them', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
     $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver, allowPrivateHosts: $isAllowedGlobally),
@@ -847,25 +847,26 @@ it('lets an endpoint only narrow the global private-host setting, never widen it
         $this->transfer,
     ));
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
-    deliveryEndpoint(['url' => 'https://internal.example.com/hook', 'allow_private_hosts' => $endpointSetting]);
+    deliveryEndpoint(['url' => 'https://internal.example.com/hook', ...($endpointSetting === null ? [] : ['allow_private_hosts' => $endpointSetting])]);
     coordinator()->dispatch(invoicePaidMessage());
 
     coordinator()->work(50);
 
     expect(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe($errorCode);
 })->with([
-    'allowed globally, the endpoint inherits' => [true, null, null],
-    'allowed globally, the endpoint narrows' => [true, false, 'ssrf_refused'],
-    'allowed globally, the endpoint agrees' => [true, true, null],
+    // A later change of the global setting must not open every endpoint left at its default.
+    'allowed globally, the endpoint at its default' => [true, null, 'ssrf_refused'],
+    'allowed globally, the endpoint refuses' => [true, false, 'ssrf_refused'],
+    'allowed globally, the endpoint set to' => [true, true, null],
     'refused globally, the endpoint cannot widen' => [false, true, 'ssrf_refused'],
-    'refused globally, the endpoint inherits' => [false, null, 'ssrf_refused'],
+    'refused globally, the endpoint at its default' => [false, null, 'ssrf_refused'],
 ]);
 
 it('never lets input set an endpoint private-host setting', function (): void {
     $endpoint = deliveryEndpoint(['url' => 'https://internal.example.com/hook']);
     $endpoint->fill(['allow_private_hosts' => true])->save();
 
-    expect($endpoint->refresh()->allow_private_hosts)->toBeNull();
+    expect($endpoint->refresh()->allow_private_hosts)->toBeFalse();
 });
 
 it('honours the first Retry-After when the header is repeated', function (): void {
