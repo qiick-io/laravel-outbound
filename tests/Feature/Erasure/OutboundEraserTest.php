@@ -366,13 +366,14 @@ it('locks the deliveries about the person before it scrubs their attempts', func
     ])->save();
     $statements = [];
     DB::listen(function ($query) use (&$statements): void {
-        $statements[] = $query->sql;
+        // Without identifier quotes, which differ between engines.
+        $statements[] = str_replace(['"', '`'], '', $query->sql);
     });
 
     eraseSubject('100001', $userPublicId);
 
-    $deliveriesLocked = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'select "id" from "webhook_deliveries"')));
-    $attemptsScrubbed = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'update "webhook_delivery_attempts"')));
+    $deliveriesLocked = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'select id from webhook_deliveries')));
+    $attemptsScrubbed = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'update webhook_delivery_attempts')));
 
     expect($deliveriesLocked)->not->toBeNull()
         ->and($attemptsScrubbed)->not->toBeNull()
