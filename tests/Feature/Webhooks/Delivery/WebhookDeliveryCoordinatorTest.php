@@ -788,8 +788,9 @@ it('stores the subject public id the product names at dispatch, and only a UUID'
     deliveryEndpoint();
     $subjectPublicId = '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11';
 
-    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: $subjectPublicId);
+    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: strtoupper($subjectPublicId));
 
+    // Stored in lower case, the spelling the eraser compares.
     expect(onlyDelivery()->subject_public_id)->toBe($subjectPublicId)
         ->and(onlyDelivery()->toArray())->not->toHaveKey('subject_public_id')
         ->and(fn () => coordinator()->dispatch(invoicePaidMessage('msg_other'), subjectPublicId: 'user-42'))
