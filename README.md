@@ -518,9 +518,13 @@ Schedule::command('outbound:webhooks:prune')->daily();
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
 (`encrypted` cast). It is kept until `payload_expires_at`: 30 days after
-dispatch by default (`outbound.webhooks.payload_retention_days`, at least 1;
-the maintainer's decision Q3 of 2026-11-22), or until the delivery's longest
-possible retry plan ends, plus an hour, if that is later. The plan counts
+dispatch by default (`outbound.webhooks.payload_retention_days`, from 1 to
+30, the boot fails outside; the maintainer's decision Q3 of 2026-11-22 and the
+fleet erasure decision). A delivery about a person named at dispatch
+(`subjectPublicId`) keeps it until its longest possible retry plan ends, plus
+an hour, if that is later; one about nobody named never longer than the
+retention, because the eraser cannot find it: prune exhausts it
+(`payload_expired`) even mid-schedule. The plan counts
 every retry at its delay plus the most jitter, or at the `Retry-After` cap
 when Retry-After is honoured, so a receiver that keeps answering `503` with
 a long `Retry-After`, or an endpoint with a higher `max_attempts`, never loses
@@ -560,8 +564,9 @@ organisation's, so nothing is deleted. In one transaction it:
 
 - cancels every pending delivery whose `subject_public_id` is the person's
   public id or one of `$publicIds` (compared in lower case, as `dispatch()`
-  stores it), and drops the payload and the reference of every delivery
-  about them, delivered ones included;
+  stores it), and drops the payload, its hash and the reference of every
+  delivery about them, delivered ones included (the erasure report is the
+  evidence that remains);
 - clears what receivers answered (`response_headers`, `request_id`,
   `response_excerpt`) on every attempt of those deliveries, whoever
   triggered it;
@@ -571,7 +576,11 @@ organisation's, so nothing is deleted. In one transaction it:
 A worker that claimed a delivery before the cancel reads its status again
 right before the transport and sends nothing; a request already on the wire
 cannot be recalled, and its attempt is not recorded. An attempt finishing
-after its asker was unlinked is recorded without them. A deadlock is
+after its asker was unlinked is recorded without them. Known limit: when
+the delivery is asked again while that attempt is on the wire, the row names
+the new asker, so the in-flight attempt keeps the asker the worker claimed
+it for, even if the eraser unlinked them meanwhile; a rerun of the erasure
+step clears it. A deadlock is
 rethrown as `WebhookDeliveryConcurrencyException`, other database errors as
 a `RuntimeException`, both without the query's bindings.
 
@@ -581,9 +590,9 @@ nothing. An organisation-scoped run throws
 `OrganisationScopeUnsupportedException`: endpoints have no organisation.
 
 A delivery is attributable only if the product passed `subjectPublicId` to
-`dispatch()`. A delivery queued without it keeps its encrypted payload until
-`payload_expires_at` (30 days by default), then only the hash: pass it for
-every event about a person.
+`dispatch()`. A delivery queued without it keeps its encrypted payload for
+the payload retention only (30 days at most, whatever its retry plan), then
+only the hash: pass it for every event about a person.
 
 ### Retry schedule and delivery records
 

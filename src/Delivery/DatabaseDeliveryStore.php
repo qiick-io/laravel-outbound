@@ -39,7 +39,8 @@ final class DatabaseDeliveryStore
      * @param  int  $deliveryRetentionDays  `outbound.webhooks.delivery_retention_days`
      *
      * @throws InvalidArgumentException when the body retention is under a day
-     *                                  or the rows would outlast it less
+     *                                  or over 30, or the rows would outlast
+     *                                  it less
      */
     public function __construct(
         private readonly ?string $scopeColumn,
@@ -48,6 +49,12 @@ final class DatabaseDeliveryStore
     ) {
         if ($payloadRetentionDays < 1) {
             throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at least 1.');
+        }
+
+        // The fleet erasure decision: a body the eraser cannot attribute is
+        // kept 30 days at most.
+        if ($payloadRetentionDays > 30) {
+            throw new InvalidArgumentException('outbound.webhooks.payload_retention_days must be at most 30.');
         }
 
         // A row deleted earlier would take its body with it before its time.
@@ -83,10 +90,12 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * A pending delivery, due now. Its body is kept for the retention period,
-     * or until its longest possible retry plan ends, plus an hour for the
-     * worker's own schedule, if that is later: a body must never expire
-     * mid-schedule.
+     * A pending delivery, due now. Its body is kept for the retention period.
+     * A delivery about a named person keeps it until its longest possible
+     * retry plan ends, plus an hour for the worker's own schedule, if that is
+     * later, so it never expires mid-schedule: the eraser can still find it.
+     * One about nobody named never outlives the retention (30 days at most):
+     * a retry plan longer than that is cut short, and prune exhausts it.
      *
      * @return WebhookDelivery|null null when the endpoint already has this event
      *
@@ -103,7 +112,9 @@ final class DatabaseDeliveryStore
         ])->usePayload($rawBody)->forceFill([
             'next_attempt_at' => CarbonImmutable::now(),
             'subject_public_id' => $subjectPublicId,
-            'payload_expires_at' => CarbonImmutable::now()->addSeconds(max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
+            'payload_expires_at' => CarbonImmutable::now()->addSeconds($subjectPublicId === null
+                ? $this->payloadRetentionDays * 86_400
+                : max($this->payloadRetentionDays * 86_400, $retryPlanSeconds + 3_600)),
         ]);
 
         try {

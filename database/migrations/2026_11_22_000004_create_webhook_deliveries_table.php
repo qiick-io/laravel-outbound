@@ -18,10 +18,11 @@ use Illuminate\Support\Facades\Schema;
  * (`endpoint_id`, `event_id`) unique key, led by the endpoint, cannot.
  *
  * `payload` is the exact raw body under Laravel's `encrypted` cast, kept until
- * `payload_expires_at` (30 days by default, or the end of the retry plan if
- * later; required, so the prune can always delete the row) and then pruned
- * to null;
- * `payload_hash` and `payload_bytes` stay for good (review R5). Retries are
+ * `payload_expires_at` (the retention, 30 days at most; for a delivery about
+ * a named person, the end of the retry plan if later; required, so the prune
+ * can always delete the row) and then pruned to null;
+ * `payload_hash` and `payload_bytes` stay (review R5), except that the
+ * eraser clears the hash of a delivery about the person. Retries are
  * driven by `next_attempt_at` through the (`status`, `next_attempt_at`)
  * index, not by queue delays, so a retry 24 h away survives queue loss.
  *
@@ -80,7 +81,8 @@ return new class extends Migration
             $table->unsignedSmallInteger('last_http_status')->nullable();
             $table->string('last_error', 500)->nullable();
             $table->longText('payload')->nullable();
-            $table->char('payload_hash', 64);
+            // Null once the eraser clears a delivery about a person: it derives from their data.
+            $table->char('payload_hash', 64)->nullable();
             $table->unsignedInteger('payload_bytes');
             $table->dateTime('payload_expires_at')->index();
             $table->string('trigger', 16)->default('event');

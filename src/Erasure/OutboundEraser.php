@@ -30,13 +30,13 @@ use SensitiveParameter;
  *   (`next_attempt_triggered_by`) and the attempts those sent
  *   (`triggered_by`);
  * - a delivery the product queued about them (`subject_public_id`, set at
- *   dispatch) loses its payload and the reference, and a pending one is
+ *   dispatch) loses its payload, its hash and the reference, and a pending one is
  *   cancelled, so it is never sent; the coordinator never records an attempt
  *   over a cancelled delivery, even one a worker claimed before the cancel.
  *
  * A delivery queued without a subject cannot be attributed: its payload stays
- * encrypted until `payload_expires_at` (30 days by default) and is then
- * pruned. Endpoint configuration (`name`, `url`, `headers`) is the
+ * encrypted for the payload retention only (30 days at most, whatever its
+ * retry plan) and is then pruned. Endpoint configuration (`name`, `url`, `headers`) is the
  * organisation's, not the person's.
  *
  * @api
@@ -161,7 +161,7 @@ final readonly class OutboundEraser
             'status' => DeliveryStatus::Cancelled->value,
             'next_attempt_at' => null,
         ]);
-        $aboutThePerson()->update(['payload' => null, 'subject_public_id' => null, 'updated_at' => $now]);
+        $aboutThePerson()->update(['payload' => null, 'payload_hash' => null, 'subject_public_id' => null, 'updated_at' => $now]);
 
         if ($userKey !== null) {
             $connection->table('webhook_deliveries')->whereIn('id', $deliveryIds)->where('next_attempt_triggered_by', $userKey)

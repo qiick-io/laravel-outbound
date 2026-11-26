@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **New column `webhook_deliveries.subject_public_id`** in the `create_`
-  migration: recreate the database (pre-1.0 policy).
+- **New column `webhook_deliveries.subject_public_id`**, and
+  `payload_hash` is nullable, in the `create_` migration: recreate the
+  database (pre-1.0 policy).
+- **`outbound.webhooks.payload_retention_days` is at most 30**: the boot
+  fails above. A delivery dispatched without `subjectPublicId` keeps its body
+  for the retention only, even when its retry plan is longer.
 
 ### Added
 
@@ -29,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An attempt records its asker from the locked delivery row, so an asker the
   eraser unlinked during the send is not written back.
 - `subjectPublicId` is stored in lower case.
+- The eraser clears `payload_hash` on deliveries about the person.
 - The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
 
 ## [0.2.0-beta.3] - 2026-11-26

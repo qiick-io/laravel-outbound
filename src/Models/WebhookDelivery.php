@@ -27,7 +27,8 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * through {@see usePayload()}; the retry state is the package's to write.
  *
  * `payload_hash` is the plain SHA-256 of the body (review R5), used to
- * deduplicate and to verify a body after it is pruned. A short body can be
+ * deduplicate and to verify a body after it is pruned; the eraser clears it
+ * on a delivery about the person, since it derives from their data. A short body can be
  * guessed from it, so it is hidden from arrays, and a failed {@see save()}
  * is rethrown without its bindings. Writes through the query builder
  * (`insert()`, `update()`, `upsert()`) are not wrapped, and query recorders
@@ -55,7 +56,7 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property int|null $last_http_status
  * @property string|null $last_error
  * @property string|null $payload
- * @property string $payload_hash
+ * @property string|null $payload_hash
  * @property int $payload_bytes
  * @property CarbonImmutable $payload_expires_at
  * @property WebhookDeliveryTriggerEnum $trigger

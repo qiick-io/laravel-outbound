@@ -19,8 +19,11 @@ from `develop`.
 ## Unreleased (erasure)
 
 - `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) is new in
-  the `create_` migration (pre-1.0): recreate the database, or add the column
-  and its index.
+  the `create_` migration, and `payload_hash` is nullable (pre-1.0): recreate
+  the database, or add the column and its index and alter `payload_hash`.
+- `outbound.webhooks.payload_retention_days` above 30 now fails the boot.
+  Deliveries dispatched without `subjectPublicId` keep their body for the
+  retention only: a retry plan longer than that is cut short.
 - Pass `subjectPublicId:` to `dispatch()` for every event about a person, and
   call `OutboundEraser` from the product's erasure orchestrator only (README,
   "Erasure"). A delivery queued without it keeps its encrypted payload until
