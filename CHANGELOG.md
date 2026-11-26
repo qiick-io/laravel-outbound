@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WebhookEndpoint::displayHost()`: the endpoint's host, or "an unknown host",
+  for a product's own notices, as the disable email names it (it was private
+  to the listener).
+
 ### Fixed
 
 - `webhook_endpoints.created_by`, `webhook_deliveries.next_attempt_triggered_by`

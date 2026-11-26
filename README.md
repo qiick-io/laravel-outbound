@@ -406,7 +406,8 @@ endpoint's `created_by` user, loaded with `auth.providers.users.model`
 turn that off with `outbound.webhooks.auto_disable.notify_owner`. The mail
 carries no text a tenant wrote: a free-form name could hold a bare URL that
 mail clients turn into a link. It names the endpoint by its host (a valid
-host name or IP literal, else "an unknown host") and its public id, never
+host name or IP literal, else "an unknown host"; `WebhookEndpoint::displayHost()`
+gives the same to a product's own notices) and its public id, never
 its URL, and its only link is the product's own endpoint page,
 `outbound.webhooks.auto_disable.endpoint_url` with `{endpoint}` replaced by
 the public id (no link when unset).
