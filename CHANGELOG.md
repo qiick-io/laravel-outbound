@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets the endpoint-disabled email (users, a team, a routed address) instead
   of turning `notify_owner` off; the package binds the `created_by` user.
 
+### Fixed
+
+- `webhook_endpoints.created_by`, `webhook_deliveries.next_attempt_triggered_by`
+  and `webhook_delivery_attempts.triggered_by` have an index: PostgreSQL and
+  SQLite do not create one for a foreign key, so deleting a user scanned
+  those tables. A test requires an index on every foreign key of the package
+  tables, on all four engines.
+
 ## [0.2.0-beta.1] - 2026-11-25
 
 First pre-release with webhook delivery in the package (tables, coordinator,

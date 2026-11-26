@@ -16,6 +16,16 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
+## To the next release
+
+- The `create_` migrations index three foreign keys (pre-1.0, so they
+  changed). A database migrated with `0.2.0-beta.1` runs `migrate:fresh`, or
+  adds the indexes once (MySQL and MariaDB already have them from the
+  foreign keys):
+  `CREATE INDEX webhook_endpoints_created_by_index ON webhook_endpoints (created_by)`,
+  `CREATE INDEX webhook_deliveries_next_attempt_triggered_by_index ON webhook_deliveries (next_attempt_triggered_by)`,
+  `CREATE INDEX webhook_delivery_attempts_triggered_by_index ON webhook_delivery_attempts (triggered_by)`.
+
 ## To 0.2.0-beta.1 (webhook delivery)
 
 - Run `php artisan migrate`: the package now loads the migrations of five
