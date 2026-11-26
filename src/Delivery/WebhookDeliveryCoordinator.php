@@ -229,9 +229,9 @@ final class WebhookDeliveryCoordinator
         $errorMessage = DeliveryAttempt::sanitiseErrorMessage($outcome['errorMessage']);
 
         $attemptAttributes = [
-            // A redelivery request's trigger and user; otherwise `schedule`.
+            // A redelivery request's trigger; otherwise `schedule`. The store
+            // records its user from the claim (`claimed_triggered_by`).
             'trigger' => $delivery->next_attempt_trigger ?? WebhookAttemptTriggerEnum::Schedule,
-            'triggered_by' => $delivery->next_attempt_triggered_by,
             'attempt' => $attemptNumber,
             'status' => $outcome['status'],
             'webhook_timestamp' => $attemptedAt->getTimestamp(),

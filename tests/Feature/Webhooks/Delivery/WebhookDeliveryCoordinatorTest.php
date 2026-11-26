@@ -787,6 +787,18 @@ it('never sends a body that expires between the claim and the transport', functi
     expect($this->transfer->requests)->toBe([]);
 });
 
+it('records the asker the claim stored, and clears it from the delivery once recorded', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $askerId = (int) DB::table('users')->insertGetId(['name' => 'Asker', 'email' => 'asker@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $askerId])->save();
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBe($askerId)
+        ->and(onlyDelivery()->claimed_triggered_by)->toBeNull();
+});
+
 it('does not attribute an attempt to an asker erased while it was being sent', function (): void {
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11');

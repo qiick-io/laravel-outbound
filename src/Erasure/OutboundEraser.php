@@ -179,7 +179,7 @@ final readonly class OutboundEraser
                 ->update(['next_attempt_triggered_by' => null, 'updated_at' => $now]);
             // An attempt on the wire for them records no asker.
             $connection->table('webhook_deliveries')->whereIn('id', $askedForIds)->where('claimed_triggered_by', $userKey)
-                ->update(['claimed_triggered_by' => null, 'updated_at' => $now]);
+                ->update(['claimed_triggered_by' => null]);
         }
 
         return $changedCount;
