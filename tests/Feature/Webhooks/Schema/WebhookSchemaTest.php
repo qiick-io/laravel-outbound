@@ -125,6 +125,13 @@ it('requires a body expiry on every delivery, so the prune can always delete the
     ]))->toThrow(QueryException::class);
 });
 
+it('keeps an endpoint off private hosts unless the product sets it, and never null', function (): void {
+    $endpointId = insertEndpointRow();
+
+    expect((bool) DB::table('webhook_endpoints')->where('id', $endpointId)->value('allow_private_hosts'))->toBeFalse()
+        ->and(fn () => DB::table('webhook_endpoints')->where('id', $endpointId)->update(['allow_private_hosts' => null]))->toThrow(QueryException::class);
+});
+
 it('keeps one subscription per endpoint and event type, compared case-sensitively', function (): void {
     $endpointId = insertEndpointRow();
     $subscribe = fn (string $eventType) => DB::table('webhook_subscriptions')->insert([
