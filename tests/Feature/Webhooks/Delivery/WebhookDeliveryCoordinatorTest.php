@@ -22,6 +22,7 @@ use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Events\WebhookDeliveredEvent;
 use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
+use Qiick\Outbound\Events\WebhookSignedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookDelivery;
@@ -715,6 +716,72 @@ it('keeps a delivery cancelled while it was being sent cancelled, with no attemp
         ->and(onlyDelivery()->delivered_at)->toBeNull()
         ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
     Event::assertNotDispatched(WebhookDeliveredEvent::class);
+});
+
+it('never sends a claimed delivery that is cancelled before its transport starts', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    // The eraser commits its cancel between this worker's claim and its send.
+    Event::listen(WebhookSignedEvent::class, function (): void {
+        WebhookDelivery::query()->update(['status' => DeliveryStatus::Cancelled->value, 'payload' => null]);
+    });
+
+    coordinator()->work(50);
+
+    expect($this->transfer->requests)->toBe([])
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+});
+
+it('does not attribute an attempt to an asker erased while it was being sent', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11');
+    $askerId = (int) DB::table('users')->insertGetId(['name' => 'Asker', 'email' => 'asker@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $askerId])->save();
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            // The eraser unlinks the asker; the delivery is someone else's, so it goes on.
+            WebhookDelivery::query()->update(['next_attempt_triggered_by' => null]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole())
+        ->triggered_by->toBeNull()
+        ->trigger->toBe(WebhookAttemptTriggerEnum::Manual)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('keeps the asker of an attempt when a new redelivery is asked while it is sent', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $firstAskerId = (int) DB::table('users')->insertGetId(['name' => 'First', 'email' => 'first@example.com', 'password' => 'x']);
+    $secondAskerId = (int) DB::table('users')->insertGetId(['name' => 'Second', 'email' => 'second@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $firstAskerId])->save();
+    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use ($secondAskerId) {
+            WebhookDelivery::query()->update(['next_attempt_triggered_by' => $secondAskerId, 'redelivery_requests' => DB::raw('redelivery_requests + 1')]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBe($firstAskerId);
 });
 
 it('stores the subject public id the product names at dispatch, and only a UUID', function (): void {

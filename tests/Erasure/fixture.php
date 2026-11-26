@@ -17,10 +17,13 @@ use Qiick\Standards\Erasure\Support\ErasurePerson;
 
 /**
  * Seeds every outbound store with one person's data through the package's own
- * code: an endpoint they created (with its secret and subscription), a pending
- * delivery about them and a delivered one about one of their API keys, both
- * queued with `subject_public_id` and carrying their identifiers in the
- * encrypted payload, and a redelivery and an attempt they triggered.
+ * code: an endpoint they created (with its secret), and, on one organisation
+ * endpoint every person's deliveries share, a pending delivery about them and
+ * a delivered one about one of their API keys, both queued with
+ * `subject_public_id` and carrying their identifiers in the encrypted
+ * payload. The delivered one has a scheduled attempt whose receiver echoed
+ * the person in its response (`X-Request-Id`, an excerpt), and a redelivery
+ * and an attempt the person triggered.
  *
  * Outbound writes no cache, disk or further connection with personal data:
  * the seen-webhook-id cache of the verifier holds receivers' webhook ids.
@@ -74,9 +77,12 @@ return new class implements ErasureFixture
             'webhook_delivery_attempts' => [
                 ...self::other(['id', 'public_id', 'delivery_id', 'attempt', 'trigger', 'status', 'webhook_timestamp', 'signature_schemes',
                     'secret_public_ids', 'pinned_address', 'http_status', 'error_code', 'error_message', 'retry_after_seconds',
-                    'response_headers', 'response_excerpt', 'response_bytes', 'duration_ms', 'request_id', 'attempted_at',
-                    'next_attempt_at', 'metadata', 'created_at']),
+                    'response_bytes', 'duration_ms', 'attempted_at', 'next_attempt_at', 'metadata', 'created_at']),
                 'triggered_by' => 'personal',
+                // What the receiver answered can name the person the delivery is about.
+                'response_headers' => 'personal',
+                'request_id' => 'personal',
+                'response_excerpt' => 'personal',
             ],
         ];
     }
@@ -109,15 +115,20 @@ return new class implements ErasureFixture
     {
         [$email, $username, $name] = $person->identifiers;
         $userId = (int) $person->userId;
-        // One event type per person, so a dispatch reaches only their endpoint;
-        // random ids, so the user key never sits in an `other` column.
-        $eventType = 'person.updated.'.Str::lower(Str::random(12));
+        // Random ids, so the user key never sits in an `other` column.
         [$pendingMessageId, $deliveredMessageId] = ['msg_'.Str::random(24), 'msg_'.Str::random(24)];
+        $eventType = 'person.updated';
 
-        $endpoint = (new WebhookEndpoint)->forceFill(['url' => 'https://hooks.example.com/receive', 'created_by' => $userId]);
-        $endpoint->save();
-        $endpoint->subscriptions()->create(['event_type' => $eventType]);
-        app(SecretRotator::class)->issue($endpoint);
+        $ownEndpoint = (new WebhookEndpoint)->forceFill(['url' => 'https://hooks.example.com/own', 'created_by' => $userId]);
+        $ownEndpoint->save();
+        app(SecretRotator::class)->issue($ownEndpoint);
+
+        if (! WebhookEndpoint::query()->where('name', 'Organisation hooks')->exists()) {
+            $sharedEndpoint = (new WebhookEndpoint)->forceFill(['url' => 'https://hooks.example.com/shared', 'name' => 'Organisation hooks']);
+            $sharedEndpoint->save();
+            $sharedEndpoint->subscriptions()->create(['event_type' => $eventType]);
+            app(SecretRotator::class)->issue($sharedEndpoint);
+        }
 
         $coordinator = app(WebhookDeliveryCoordinator::class);
         $data = ['email' => $email, 'username' => $username, 'name' => $name, 'seen_from' => $person->otherPersonalValues];
@@ -128,6 +139,17 @@ return new class implements ErasureFixture
         $delivered->forceFill(['status' => DeliveryStatus::Delivered, 'next_attempt_at' => null, 'delivered_at' => CarbonImmutable::now(), 'next_attempt_triggered_by' => $userId])->save();
         $delivered->attempts()->make()->forceFill([
             'attempt' => 1,
+            'status' => 'failed',
+            'webhook_timestamp' => CarbonImmutable::now()->getTimestamp(),
+            'signature_schemes' => 'v1',
+            'http_status' => 422,
+            'response_headers' => ['x-request-id' => $email],
+            'request_id' => $username,
+            'response_excerpt' => 'Unknown customer '.$name,
+            'attempted_at' => CarbonImmutable::now(),
+        ])->save();
+        $delivered->attempts()->make()->forceFill([
+            'attempt' => 2,
             'trigger' => 'manual',
             'triggered_by' => $userId,
             'status' => 'delivered',

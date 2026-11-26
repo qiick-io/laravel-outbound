@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Database\DeadlockException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Str;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Erasure\ErasureReport;
 use Qiick\Outbound\Erasure\OrganisationScopeUnsupportedException;
@@ -168,8 +170,9 @@ it('matches the user columns only for a decimal user key, so a textual key never
     $userPublicId = (string) Str::uuid();
     $endpoint = erasureEndpoint($userId);
     $delivery = erasureDelivery('msg_1', $userPublicId);
+    $unattributed = erasureDelivery('msg_2', null);
     erasureEndpoint();
-    $delivery->attempts()->make()->forceFill([
+    $unattributed->attempts()->make()->forceFill([
         'attempt' => 1, 'status' => 'failed', 'webhook_timestamp' => 1, 'signature_schemes' => 'v1', 'attempted_at' => CarbonImmutable::now(),
     ])->save();
 
@@ -263,6 +266,8 @@ it('refuses invalid input without echoing it', function (string $mode, string $u
 
 it('rethrows a database failure without its bindings', function (): void {
     $userPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    erasureDelivery('msg_1', $userPublicId);
     DB::connection()->beforeExecuting(function (string $query, array $bindings): void {
         throw new QueryException('testing', $query, $bindings, new PDOException('Connection lost.'));
     });
@@ -273,4 +278,76 @@ it('rethrows a database failure without its bindings', function (): void {
                 ->and($exception->getMessage())->toBe('Outbound erasure database operation failed.')
                 ->not->toContain($userPublicId);
         });
+});
+
+it('scrubs the receiver diagnostics of every attempt of a delivery about the person, whoever triggered it', function (): void {
+    $userPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    $aboutThePerson = erasureDelivery('msg_1', $userPublicId);
+    $someoneElses = erasureDelivery('msg_2', (string) Str::uuid());
+    $diagnostics = ['response_headers' => ['x-request-id' => 'customer-4711'], 'request_id' => 'customer-4711', 'response_excerpt' => 'Hello Ada'];
+
+    foreach ([$aboutThePerson, $someoneElses] as $delivery) {
+        $delivery->attempts()->make()->forceFill([
+            'attempt' => 1, 'status' => 'failed', 'webhook_timestamp' => 1, 'signature_schemes' => 'v1',
+            'attempted_at' => CarbonImmutable::now(), ...$diagnostics,
+        ])->save();
+    }
+
+    $report = eraseSubject('100001', $userPublicId);
+
+    expect($aboutThePerson->attempts()->sole()->only(['response_headers', 'request_id', 'response_excerpt']))
+        ->toBe(['response_headers' => null, 'request_id' => null, 'response_excerpt' => null])
+        ->and($someoneElses->attempts()->sole()->only(['response_headers', 'request_id', 'response_excerpt']))->toBe($diagnostics)
+        ->and($report->stores['webhook_delivery_attempts']['anonymised'])->toBe(1);
+});
+
+it('finds a delivery about the person whatever the case of its UUID', function (): void {
+    $userPublicId = (string) Str::uuid();
+    $apiKeyPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    $byUserPublicId = erasureDelivery('msg_1', Str::upper($userPublicId));
+    $byApiKey = erasureDelivery('msg_2', $apiKeyPublicId);
+
+    eraseSubject('100001', $userPublicId, [Str::upper($apiKeyPublicId)]);
+
+    expect($byUserPublicId->refresh()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and($byApiKey->refresh()->status)->toBe(DeliveryStatus::Cancelled);
+});
+
+it('rethrows a deadlock inside the caller transaction as a concurrency error without bindings', function (): void {
+    $userPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    erasureDelivery('msg_1', $userPublicId);
+    DB::connection()->beforeExecuting(function (string $query, array $bindings): void {
+        throw new QueryException('testing', $query, $bindings, new PDOException('Deadlock found when trying to get lock', 40001));
+    });
+
+    expect(fn () => DB::transaction(fn () => eraseSubject('100001', $userPublicId)))
+        ->toThrow(function (DeadlockException $exception) use ($userPublicId): void {
+            // The caller's transaction wraps the eraser's sanitised deadlock again.
+            expect($exception->getMessage())->not->toContain($userPublicId)->not->toContain('100001')
+                ->and($exception->getPrevious())->toBeInstanceOf(WebhookDeliveryConcurrencyException::class)
+                ->and($exception->getPrevious()?->getPrevious())->toBeNull();
+        });
+});
+
+it('announces a committed run even when a transaction on another connection rolls back', function (): void {
+    Event::fake([SubjectErasedEvent::class]);
+    config()->set('database.connections.secondary', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+    $userPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    erasureDelivery('msg_1', $userPublicId);
+
+    try {
+        DB::connection('secondary')->transaction(function () use ($userPublicId): void {
+            eraseSubject('100001', $userPublicId);
+
+            throw new RuntimeException('The product step failed.');
+        });
+    } catch (RuntimeException) {
+    }
+
+    expect(WebhookDelivery::query()->sole()->status)->toBe(DeliveryStatus::Cancelled);
+    Event::assertDispatchedTimes(SubjectErasedEvent::class, 1);
 });
