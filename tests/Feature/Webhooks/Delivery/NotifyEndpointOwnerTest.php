@@ -11,6 +11,7 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Notification;
+use Qiick\Outbound\Contracts\WebhookEndpointNoticeRecipientsContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
@@ -239,4 +240,45 @@ it('sends no link when the endpoint page setting is empty', function (): void {
     announceDisabled(endpointOwnedBy($ownerId), WebhookEndpointDisabledReasonEnum::GoneHttp410);
 
     Notification::assertSentTo(NotifiableUser::query()->findOrFail($ownerId), WebhookEndpointDisabledNotification::class, fn (WebhookEndpointDisabledNotification $notification): bool => $notification->endpointPageUrl === null);
+});
+
+/*
+ * Signaculum adoption: the product chooses the recipients instead of turning
+ * notify_owner off.
+ */
+
+it('emails the recipients a product binds instead of the creator', function (): void {
+    $ownerId = ownerUserId();
+    $teammateId = ownerUserId();
+    $endpoint = endpointOwnedBy($ownerId);
+    app()->instance(WebhookEndpointNoticeRecipientsContract::class, new class($teammateId) implements WebhookEndpointNoticeRecipientsContract
+    {
+        public function __construct(private int $teammateId) {}
+
+        public function recipientsFor(WebhookEndpoint $endpoint): iterable
+        {
+            return [NotifiableUser::query()->findOrFail($this->teammateId), Notification::route('mail', 'ops@example.com')];
+        }
+    });
+
+    announceDisabled($endpoint, WebhookEndpointDisabledReasonEnum::GoneHttp410);
+
+    Notification::assertSentTo(NotifiableUser::query()->findOrFail($teammateId), WebhookEndpointDisabledNotification::class);
+    Notification::assertSentOnDemand(WebhookEndpointDisabledNotification::class, fn (WebhookEndpointDisabledNotification $notification, array $channels, object $notifiable): bool => $notifiable->routes['mail'] === 'ops@example.com');
+    Notification::assertNotSentTo(NotifiableUser::query()->findOrFail($ownerId), WebhookEndpointDisabledNotification::class);
+});
+
+it('emails nobody when the bound recipients are none', function (): void {
+    $ownerId = ownerUserId();
+    app()->instance(WebhookEndpointNoticeRecipientsContract::class, new class implements WebhookEndpointNoticeRecipientsContract
+    {
+        public function recipientsFor(WebhookEndpoint $endpoint): iterable
+        {
+            return [];
+        }
+    });
+
+    announceDisabled(endpointOwnedBy($ownerId), WebhookEndpointDisabledReasonEnum::AutoFailure);
+
+    Notification::assertNothingSent();
 });

@@ -17,6 +17,7 @@ use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
+use Qiick\Outbound\Contracts\WebhookEndpointNoticeRecipientsContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\EndpointDisablePolicy;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
@@ -32,6 +33,7 @@ use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver;
+use Qiick\Outbound\Webhooks\EndpointCreatorRecipients;
 use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\StandardWebhookSigner;
@@ -89,6 +91,9 @@ final class OutboundServiceProvider extends ServiceProvider
                 events: $app->make(EventDispatcher::class),
             );
         });
+
+        // A product binds its own to choose who hears of a disabled endpoint.
+        $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
 
         $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
             // ArrayStore is atomic but process-local — allow only in the testing env.

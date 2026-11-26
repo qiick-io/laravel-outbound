@@ -66,7 +66,8 @@ return new class extends Migration
             $table->dateTime('claimed_until')->nullable();
             $table->string('exhausted_reason', 32)->nullable();
             $table->string('next_attempt_trigger', 16)->nullable();
-            $nextAttemptTriggeredBy = $table->foreignId('next_attempt_triggered_by')->nullable();
+            // Indexed: PostgreSQL and SQLite do not index a foreign key, and a user deletion would scan the table.
+            $nextAttemptTriggeredBy = $table->foreignId('next_attempt_triggered_by')->nullable()->index();
 
             if (is_string($usersTable) && $usersTable !== '') {
                 $nextAttemptTriggeredBy->constrained($usersTable)->nullOnDelete();
