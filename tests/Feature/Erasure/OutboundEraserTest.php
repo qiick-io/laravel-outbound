@@ -353,3 +353,28 @@ it('announces a committed run even when a transaction on another connection roll
     expect(WebhookDelivery::query()->sole()->status)->toBe(DeliveryStatus::Cancelled);
     Event::assertDispatchedTimes(SubjectErasedEvent::class, 1);
 });
+
+it('locks the deliveries about the person before it scrubs their attempts', function (): void {
+    // A worker records an attempt under the delivery's lock: once the eraser
+    // holds it, no attempt can slip in between the scrub and the cancel.
+    $userPublicId = (string) Str::uuid();
+    erasureEndpoint();
+    $delivery = erasureDelivery('msg_1', $userPublicId);
+    $delivery->attempts()->make()->forceFill([
+        'attempt' => 1, 'status' => 'failed', 'webhook_timestamp' => 1, 'signature_schemes' => 'v1',
+        'attempted_at' => CarbonImmutable::now(), 'request_id' => 'customer-4711',
+    ])->save();
+    $statements = [];
+    DB::listen(function ($query) use (&$statements): void {
+        $statements[] = $query->sql;
+    });
+
+    eraseSubject('100001', $userPublicId);
+
+    $deliveriesLocked = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'select "id" from "webhook_deliveries"')));
+    $attemptsScrubbed = array_key_first(array_filter($statements, fn (string $sql): bool => str_starts_with($sql, 'update "webhook_delivery_attempts"')));
+
+    expect($deliveriesLocked)->not->toBeNull()
+        ->and($attemptsScrubbed)->not->toBeNull()
+        ->and($deliveriesLocked)->toBeLessThan($attemptsScrubbed);
+});

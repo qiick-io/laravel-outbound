@@ -39,5 +39,6 @@ it('indexes every column the eraser looks a person up by', function (string $tab
     ['webhook_endpoints', 'created_by'],
     ['webhook_deliveries', 'subject_public_id'],
     ['webhook_deliveries', 'next_attempt_triggered_by'],
+    ['webhook_deliveries', 'claimed_triggered_by'],
     ['webhook_delivery_attempts', 'triggered_by'],
 ]);

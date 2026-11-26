@@ -10,6 +10,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Http;
 use Psr\Http\Message\RequestInterface;
+use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Events\OutboundRequestBlockedEvent;
 use Qiick\Outbound\Http\EgressProxy;
 use Qiick\Outbound\Http\HttpRequestOptions;
@@ -1167,4 +1168,34 @@ it('refuses a redirect whose Location is not a valid URI', function (): void {
     expect($exception?->getMessage())->toBe('Redirect Location is not a valid URI.')
         ->and($exception?->getCode())->toBe(0)
         ->and($exception?->getPrevious()?->getMessage())->toBe('Invalid redirect URI.');
+});
+
+it('runs the before-transport check after the guard resolved the host, and sends nothing when it throws', function (): void {
+    Http::fake(['https://example.test/hook' => Http::response('ok', 200)]);
+    $steps = new ArrayObject;
+    $resolver = new class($steps) implements HostResolver
+    {
+        public function __construct(private ArrayObject $steps) {}
+
+        public function resolve(string $host): array
+        {
+            $this->steps->append('resolve');
+
+            return ['93.184.216.34'];
+        }
+    };
+    $client = new PinnedHttpClient(app(HttpFactory::class), new RemoteUrlGuard($resolver));
+
+    expect(fn () => $client->send('POST', 'https://example.test/hook', noopConfigure(), beforeTransport: function () use ($steps): void {
+        $steps->append('check');
+
+        throw new RuntimeException('Cancelled meanwhile.');
+    }))->toThrow(RuntimeException::class, 'Cancelled meanwhile.')
+        ->and($steps->getArrayCopy())->toBe(['resolve', 'check']);
+    Http::assertNothingSent();
+
+    $client->send('POST', 'https://example.test/hook', noopConfigure(), beforeTransport: fn () => $steps->append('check'));
+
+    expect($steps->getArrayCopy())->toBe(['resolve', 'check', 'resolve', 'check']);
+    Http::assertSentCount(1);
 });

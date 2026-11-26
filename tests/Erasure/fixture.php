@@ -69,6 +69,7 @@ return new class implements ErasureFixture
                     'redelivery_requests', 'last_attempt_at', 'delivered_at', 'last_http_status', 'last_error',
                     'payload_bytes', 'payload_expires_at', 'trigger', 'metadata', 'created_at', 'updated_at']),
                 'next_attempt_triggered_by' => 'personal',
+                'claimed_triggered_by' => 'personal',
                 'payload' => 'personal',
                 // Derived from the body: a known event schema makes it guessable.
                 'payload_hash' => 'personal',
@@ -136,7 +137,7 @@ return new class implements ErasureFixture
         $coordinator->dispatch(new WebhookMessage($deliveredMessageId, $eventType, new DateTimeImmutable, $data), subjectPublicId: $person->publicIds[0]);
 
         $delivered = WebhookDelivery::query()->where('event_id', $deliveredMessageId)->sole();
-        $delivered->forceFill(['status' => DeliveryStatus::Delivered, 'next_attempt_at' => null, 'delivered_at' => CarbonImmutable::now(), 'next_attempt_triggered_by' => $userId])->save();
+        $delivered->forceFill(['status' => DeliveryStatus::Delivered, 'next_attempt_at' => null, 'delivered_at' => CarbonImmutable::now(), 'next_attempt_triggered_by' => $userId, 'claimed_triggered_by' => $userId])->save();
         $delivered->attempts()->make()->forceFill([
             'attempt' => 1,
             'status' => 'failed',
