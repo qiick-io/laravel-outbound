@@ -7,10 +7,12 @@ namespace Qiick\Outbound\Erasure;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\ConnectionInterface;
-use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use PDOException;
 use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryConcurrencyException;
+use Qiick\Outbound\Delivery\WebhookDeliveryStorageException;
 use Qiick\Outbound\Events\SubjectErasedEvent;
 use Qiick\Outbound\Models\WebhookDelivery;
 use RuntimeException;
@@ -80,23 +82,38 @@ final readonly class OutboundEraser
         // The user columns are bigint foreign keys: a textual key matches no
         // row, and comparing it would let MySQL coerce it to another user's id.
         $userKey = ctype_digit($userId) && (string) (int) $userId === $userId ? (int) $userId : null;
-        $subjectPublicIds = [$userPublicId, ...$publicIds];
+        // Dispatch stores the subject in lower case: compare the same spelling.
+        $subjectPublicIds = array_map(strtolower(...), [$userPublicId, ...$publicIds]);
         $connection = (new WebhookDelivery)->getConnection();
 
         try {
             /** @var ErasureReport $report Laravel 12 types transaction() as mixed. */
-            $report = $connection->transaction(fn (): ErasureReport => new ErasureReport('qiick/laravel-outbound', $mode, $dryRun, [
-                'webhook_endpoints' => $this->anonymised($this->unlinkEndpoints($connection, $userKey, $dryRun)),
-                'webhook_deliveries' => $this->anonymised($this->eraseDeliveries($connection, $userKey, $subjectPublicIds, $dryRun)),
-                'webhook_delivery_attempts' => $this->anonymised($this->unlinkAttempts($connection, $userKey, $dryRun)),
-            ]));
-        } catch (QueryException) {
-            // A QueryException message interpolates its bindings: the person's ids.
-            throw new RuntimeException('Outbound erasure database operation failed.');
-        }
+            $report = $connection->transaction(function () use ($connection, $mode, $dryRun, $userKey, $subjectPublicIds): ErasureReport {
+                // Read before the deliveries lose their subject reference.
+                $attemptCount = $this->eraseAttempts($connection, $userKey, $subjectPublicIds, $dryRun);
+                $report = new ErasureReport('qiick/laravel-outbound', $mode, $dryRun, [
+                    'webhook_endpoints' => $this->anonymised($this->unlinkEndpoints($connection, $userKey, $dryRun)),
+                    'webhook_deliveries' => $this->anonymised($this->eraseDeliveries($connection, $userKey, $subjectPublicIds, $dryRun)),
+                    'webhook_delivery_attempts' => $this->anonymised($attemptCount),
+                ]);
 
-        if (! $dryRun) {
-            $connection->afterCommit(fn () => $this->events->dispatch(new SubjectErasedEvent($report)));
+                // Registered inside this transaction, so it waits for this
+                // connection's commit and no other connection's.
+                if (! $dryRun) {
+                    $connection->afterCommit(fn () => $this->events->dispatch(new SubjectErasedEvent($report)));
+                }
+
+                return $report;
+            });
+        } catch (PDOException $databaseException) {
+            // A QueryException or DeadlockException message interpolates its
+            // bindings: the person's ids. A deadlock stays one, so the
+            // product's transaction can retry.
+            $sanitisedException = WebhookDeliveryStorageException::withoutBindings($databaseException);
+
+            throw $sanitisedException instanceof WebhookDeliveryConcurrencyException
+                ? $sanitisedException
+                : new RuntimeException('Outbound erasure database operation failed.');
         }
 
         return $report;
@@ -155,18 +172,33 @@ final readonly class OutboundEraser
     }
 
     /**
-     * @return int the attempts the person triggered, now unlinked
+     * The attempts the person triggered lose the link; every attempt of a
+     * delivery about them, whoever triggered it, loses what the receiver
+     * answered (`response_headers`, `request_id`, `response_excerpt`): a
+     * receiver may echo a customer reference in `X-Request-Id`.
+     *
+     * @param  non-empty-list<string>  $subjectPublicIds
+     * @return int the attempts changed, each counted once
      */
-    private function unlinkAttempts(ConnectionInterface $connection, ?int $userKey, bool $isDryRun): int
+    private function eraseAttempts(ConnectionInterface $connection, ?int $userKey, array $subjectPublicIds, bool $isDryRun): int
     {
-        if ($userKey === null) {
-            return 0;
+        $aboutThePerson = $connection->table('webhook_deliveries')->whereIn('subject_public_id', $subjectPublicIds)->select('id');
+        $attemptIds = $connection->table('webhook_delivery_attempts')
+            ->whereIn('delivery_id', $aboutThePerson)
+            ->when($userKey !== null, fn ($attemptsQuery) => $attemptsQuery->orWhere('triggered_by', $userKey))
+            ->lockForUpdate()
+            ->pluck('id')
+            ->all();
+
+        if ($isDryRun || $attemptIds === []) {
+            return count($attemptIds);
         }
 
-        $attemptIds = $connection->table('webhook_delivery_attempts')->where('triggered_by', $userKey)->lockForUpdate()->pluck('id')->all();
+        $connection->table('webhook_delivery_attempts')->whereIn('id', $attemptIds)->whereIn('delivery_id', $aboutThePerson)
+            ->update(['response_headers' => null, 'request_id' => null, 'response_excerpt' => null]);
 
-        if (! $isDryRun && $attemptIds !== []) {
-            $connection->table('webhook_delivery_attempts')->whereIn('id', $attemptIds)->update(['triggered_by' => null]);
+        if ($userKey !== null) {
+            $connection->table('webhook_delivery_attempts')->whereIn('id', $attemptIds)->where('triggered_by', $userKey)->update(['triggered_by' => null]);
         }
 
         return count($attemptIds);

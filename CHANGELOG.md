@@ -24,7 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A delivery cancelled while a worker was sending it stays cancelled: the
-  attempt is not recorded.
+  attempt is not recorded. A worker reads the status again right before the
+  transport, so a delivery cancelled after its claim is never sent.
+- An attempt records its asker from the locked delivery row, so an asker the
+  eraser unlinked during the send is not written back.
+- `subjectPublicId` is stored in lower case.
+- The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
 
 ## [0.2.0-beta.3] - 2026-11-26
 

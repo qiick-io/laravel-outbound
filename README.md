@@ -559,11 +559,21 @@ person's delivered deliveries). Endpoints and the delivery log are the
 organisation's, so nothing is deleted. In one transaction it:
 
 - cancels every pending delivery whose `subject_public_id` is the person's
-  public id or one of `$publicIds`, and drops the payload and the reference
-  of every delivery about them, delivered ones included; a worker that
-  claimed one before the cancel records no attempt over it;
+  public id or one of `$publicIds` (compared in lower case, as `dispatch()`
+  stores it), and drops the payload and the reference of every delivery
+  about them, delivered ones included;
+- clears what receivers answered (`response_headers`, `request_id`,
+  `response_excerpt`) on every attempt of those deliveries, whoever
+  triggered it;
 - nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
   they point at the person (a non-numeric `$userId` matches none of them).
+
+A worker that claimed a delivery before the cancel reads its status again
+right before the transport and sends nothing; a request already on the wire
+cannot be recalled, and its attempt is not recorded. An attempt finishing
+after its asker was unlinked is recorded without them. A deadlock is
+rethrown as `WebhookDeliveryConcurrencyException`, other database errors as
+a `RuntimeException`, both without the query's bindings.
 
 It returns an `ErasureReport` with counts only and, after the commit,
 dispatches `Events\SubjectErasedEvent`; a dry run writes and dispatches

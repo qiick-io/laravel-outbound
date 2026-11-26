@@ -198,9 +198,10 @@ jobs:
             options: >-
               -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -e MYSQL_DATABASE=laravel_outbound
               --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval=5s --health-retries=20
-          - name: MariaDB 10.11
+          # The fleet package matrix (app-ui standards/package-matrix.json).
+          - name: MariaDB 11.4
             connection: mariadb
-            image: mariadb:10.11
+            image: mariadb:11.4
             port: 3306
             options: >-
               -e MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=yes -e MARIADB_DATABASE=laravel_outbound

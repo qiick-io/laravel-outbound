@@ -72,9 +72,10 @@ echo_and_mutate() {
   fi
 }
 
-# The provider's bindings are exercised by the whole suite.
+# The provider's bindings are exercised by the whole suite. Listed by folder:
+# the synced tests/Conformance is for products and has no package test case.
 if in_this_shard; then
-  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests "$@"
+  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests/Arch tests/Unit tests/Feature tests/Erasure "$@"
 fi
 
 # PinnedHttpClient's transport mutants are killed only on the real wire.

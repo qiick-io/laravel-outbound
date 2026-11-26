@@ -231,6 +231,15 @@ final class DatabaseDeliveryStore
     }
 
     /**
+     * Whether the delivery is still pending, read from the database rather
+     * than from a model claimed earlier.
+     */
+    public function isPending(int $deliveryId): bool
+    {
+        return WebhookDelivery::query()->whereKey($deliveryId)->where('status', DeliveryStatus::Pending->value)->exists();
+    }
+
+    /**
      * Record one attempt and its outcome, and move the endpoint's failure
      * streak, in one transaction. Nothing is written when another worker has
      * already recorded this attempt (its lease had expired and the delivery
@@ -268,6 +277,13 @@ final class DatabaseDeliveryStore
             $redeliveryAskedMeanwhile = $storedDelivery->redelivery_requests !== $delivery->redelivery_requests;
             $askedTrigger = $storedDelivery->next_attempt_trigger;
             $askedBy = $storedDelivery->next_attempt_triggered_by;
+
+            // An asker the eraser unlinked while this attempt was on the wire
+            // stays unlinked. After a new request the row names the new
+            // asker, so the claimed one is kept.
+            if (! $redeliveryAskedMeanwhile) {
+                $attemptAttributes['triggered_by'] = $askedBy;
+            }
 
             $storedDelivery->attempts()->make()->forceFill($attemptAttributes)->save();
             $storedDelivery->forceFill([

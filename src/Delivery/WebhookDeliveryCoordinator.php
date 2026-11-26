@@ -121,7 +121,7 @@ final class WebhookDeliveryCoordinator
             $maxAttempts = $endpoint->max_attempts ?? count($retryDelays) + 1;
             // An unknown profile keeps the plain body; every attempt is refused.
             $body = $this->legacyProfileOf($endpoint)?->body($message, $rawBody) ?? $rawBody;
-            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts), $subjectPublicId);
+            $delivery = $this->store->createDelivery($endpoint, $message, $body, $maxAttempts, $this->retryPolicy->longestPlanSeconds($retryDelays, $maxAttempts), $subjectPublicId === null ? null : strtolower($subjectPublicId));
 
             if ($delivery !== null) {
                 $createdDeliveries->push($delivery);
@@ -482,6 +482,13 @@ final class WebhookDeliveryCoordinator
             $legacyHeaders = $this->legacyHeadersFor($endpoint, $signedWebhook, $signingSet);
         } catch (WebhookException $exception) {
             return $this->outcome(WebhookAttemptStatusEnum::Refused, 'legacy_profile', $exception->getMessage(), null, $secretPublicIds);
+        }
+
+        // The eraser may have cancelled the delivery since this worker claimed
+        // it: read the status again at the last moment before the transport.
+        // A request already on the wire cannot be recalled.
+        if (! $this->store->isPending($delivery->id)) {
+            return $this->outcome(WebhookAttemptStatusEnum::Refused, 'cancelled', 'The delivery was cancelled before it was sent.');
         }
 
         try {
