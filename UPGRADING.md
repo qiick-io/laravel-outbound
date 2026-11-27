@@ -23,6 +23,9 @@ from `develop`.
   the package can validate them. An explicit null or blank is invalid for
   boolean and integer settings. Use an unpadded integer such as `30` in
   place of `030`. Rebuild Laravel's config cache after the change.
+- Guzzle must be at least 7.15.2 on the 7 line or 8.0.1 on the 8 line
+  (`composer update guzzlehttp/guzzle`): the older releases have published
+  advisories, one of them a host check bypass.
 - `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) and
   `claimed_triggered_by` (nullable, indexed, foreign key to the users table
   like `next_attempt_triggered_by`) are new in the `create_` migration, and

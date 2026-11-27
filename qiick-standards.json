@@ -17,8 +17,8 @@
         "PHP 8.5 Laravel 13 lowest",
         "PHP 8.5 Laravel 13 stable",
         "Mutation (per-class ≥95%)",
-        "Real transport Guzzle 7.12",
-        "Real transport Guzzle 8.5",
+        "Real transport Guzzle 7.15.2",
+        "Real transport Guzzle 8.0.1",
         "standards / standards"
     ]
 }
