@@ -2,6 +2,16 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Arr;
+use Qiick\Outbound\Delivery\DeliveryStatus;
+use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Ssrf\AuthorizedDestination;
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
+use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
+use Qiick\Outbound\Webhooks\StandardWebhookVerifier;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
+
 /*
  * docs/public-api.md is the frozen 1.0 surface: every class, interface, enum
  * and trait in src/ says whether it belongs to it (@api) or not (@internal),
@@ -66,3 +76,51 @@ it('lists every @api class in docs/public-api.md, and nothing else', function ()
 
     expect($listedClasses)->toBe($apiClasses);
 });
+
+it('lists all shipped config keys and environment variables', function (): void {
+    $root = dirname(__DIR__, 2);
+    $path = $root.'/config/outbound.php';
+    $defaults = require $path;
+    $page = (string) file_get_contents($root.'/docs/public-api.md');
+    preg_match_all('/^\| `(outbound\.[^`]+)` \| (?:`(OUTBOUND_\w+)`|—) \|$/m', $page, $documented);
+    preg_match_all("/\benv\('(OUTBOUND_\w+)'/", (string) file_get_contents($path), $environment);
+
+    $keys = array_keys(Arr::dot(['outbound' => $defaults]));
+    expect($documented[1])->toEqualCanonicalizing($keys)
+        ->and(array_values(array_filter($documented[2])))->toEqualCanonicalizing($environment[1]);
+});
+
+it('keeps the delivery status cases and persisted backing values stable', function (): void {
+    $backedCases = [];
+
+    foreach (DeliveryStatus::cases() as $case) {
+        $backedCases[$case->name] = $case->value;
+    }
+
+    expect($backedCases)->toBe([
+        'Pending' => 'pending',
+        'Delivered' => 'delivered',
+        'Failed' => 'failed',
+        'Refused' => 'refused',
+        'Exhausted' => 'exhausted',
+        'Cancelled' => 'cancelled',
+    ]);
+});
+
+it('keeps the named parameters and return types used by downstream packages', function (
+    string $class, string $method, array $names, int $required, string $returnType,
+): void {
+    $signature = new ReflectionMethod($class, $method);
+
+    expect(array_map(static fn (ReflectionParameter $parameter): string => $parameter->getName(), $signature->getParameters()))->toBe($names)
+        ->and($signature->getNumberOfRequiredParameters())->toBe($required)
+        ->and((string) $signature->getReturnType())->toBe($returnType);
+})->with([
+    'authorize' => [RemoteUrlGuard::class, 'authorize', ['url', 'options'], 1, AuthorizedDestination::class],
+    'try authorize' => [RemoteUrlGuard::class, 'tryAuthorize', ['url', 'options'], 1, 'array'],
+    'browser URL' => [RemoteUrlGuard::class, 'assertBrowserUrlIsSafe', ['url', 'options'], 1, 'void'],
+    'claim' => [SeenWebhookIdStore::class, 'claim', ['claim', 'ttlSeconds'], 2, 'bool'],
+    'release' => [SeenWebhookIdStore::class, 'release', ['claim'], 1, 'void'],
+    'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, '?'.WebhookIdClaim::class],
+    'dispatch' => [WebhookDeliveryCoordinator::class, 'dispatch', ['message', 'scope', 'subjectPublicId'], 1, Collection::class],
+]);
