@@ -1,6 +1,8 @@
 # 2026-11-27: the public API boundary for 1.0
 
-Applies decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`). The `AuthorizedDestination` exception below was approved by Team Leader for Luca, 2026-11-27.
+Applies decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`). The
+`AuthorizedDestination` exception below was approved by Team Leader on behalf
+of the maintainer (Luca), 2026-11-27. [PR #98](https://github.com/qiick-io/laravel-outbound/pull/98)
 
 ## What
 
@@ -12,7 +14,9 @@ Applies decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`). The `Auth
 Team Leader also approved resolving the transport, signer, verifier, rotator,
 retry policy and guard through the container. Their constructors are internal,
 the verifier always claims IDs, and the transport's test fixtures live behind
-an internal factory. The beta attempt schema drops the unused response excerpt
+an internal factory. OIDC and other consumers with an independent destination
+policy build a guard and pinned client through `OutboundHttpStackData::make()`.
+The beta attempt schema drops the unused response excerpt
 column so the signed webhook API carries only the documented diagnostics.
 
 ## Why

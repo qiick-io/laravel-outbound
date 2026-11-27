@@ -14,6 +14,7 @@ use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
+use Qiick\Outbound\Http\OutboundHttpStackData;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
@@ -172,6 +173,7 @@ it('keeps the named parameters and return types used by downstream packages', fu
     'authorize' => [RemoteUrlGuard::class, 'authorize', ['url', 'options'], 1, AuthorizedDestination::class],
     'try authorize' => [RemoteUrlGuard::class, 'tryAuthorize', ['url', 'options'], 1, 'array'],
     'browser URL' => [RemoteUrlGuard::class, 'assertBrowserUrlIsSafe', ['url', 'options'], 1, 'void'],
+    'isolated outbound stack' => [OutboundHttpStackData::class, 'make', ['hostResolver', 'allowPrivateHosts', 'httpsOnly', 'limits', 'httpFactory'], 1, 'self'],
     'claim' => [SeenWebhookIdStore::class, 'claim', ['claim', 'ttlSeconds'], 2, 'bool'],
     'release' => [SeenWebhookIdStore::class, 'release', ['claim'], 1, 'void'],
     'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, WebhookIdClaim::class],
@@ -182,7 +184,16 @@ it('keeps test-only seams out of the pinned transport constructor', function ():
     $parameters = (new ReflectionMethod(PinnedHttpClient::class, '__construct'))->getParameters();
 
     expect(array_map(static fn (ReflectionParameter $parameter): string => $parameter->getName(), $parameters))
-        ->not->toContain('clock', 'transferHandler');
+        ->not->toContain('clock')
+        ->not->toContain('transferHandler');
+});
+
+it('keeps calls to the internal HTTP fixture factory out of package source', function (): void {
+    $sourceFiles = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__, 2).'/src', FilesystemIterator::SKIP_DOTS));
+
+    foreach ($sourceFiles as $sourceFile) {
+        expect((string) file_get_contents((string) $sourceFile))->not->toMatch('/::\s*forTesting\s*\(/');
+    }
 });
 
 it('requires a dedupe store when constructing the verifier', function (): void {
