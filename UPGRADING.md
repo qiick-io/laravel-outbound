@@ -18,6 +18,11 @@ from `develop`.
 
 ## Unreleased (erasure)
 
+- Refresh a published `config/outbound.php` from the updated vendor template
+  and reapply your overrides. Older copies cast environment values before
+  the package can validate them. An explicit null or blank is invalid for
+  boolean and integer settings. Use an unpadded integer such as `30` in
+  place of `030`. Rebuild Laravel's config cache after the change.
 - `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) and
   `claimed_triggered_by` (nullable, indexed, foreign key to the users table
   like `next_attempt_triggered_by`) are new in the `create_` migration, and
@@ -34,15 +39,20 @@ from `develop`.
   `outbound:webhooks:work` is `outbound:work-deliveries` and
   `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
   product's schedule (`routes/console.php`) and any deploy script. The old
-  names remain hidden for one beta and log a deprecation on every use.
+  names remain hidden through the betas and are removed before
+  `1.0.0-rc.1`. The old worker command logs at most once an hour through
+  the configured cache.
   `outbound:check` fails if a schedule still uses either old name.
 - **The package schedules `outbound:prune-deliveries` itself** (daily,
   `onOneServer()`, `withoutOverlapping()`): remove the product's own
   `Schedule::command(...prune...)` line, or set `OUTBOUND_WEBHOOK_SCHEDULE=false`
   to keep it. A published config gets the new `outbound.webhooks.schedule`
   key from the package default.
-- **The owner email listener is registered only while
-  `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+- **The owner email listener and the package's default
+  `WebhookEndpointNoticeRecipientsContract` binding are registered only
+  while `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+  A product that resolves the contract independently must supply its own
+  binding when the switch is off.
 - Add `php artisan outbound:check` to the deploy (F2).
 
 ### Product adoption checks

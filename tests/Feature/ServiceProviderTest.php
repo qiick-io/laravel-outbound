@@ -330,4 +330,6 @@ it('refuses a malformed boolean or integer variable instead of casting it', func
     'an integer in words' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'ten', 'outbound.webhooks.timeout_seconds must be an integer.'],
     'a boolean as an integer' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'true', 'outbound.webhooks.timeout_seconds must be an integer.'],
     'null as a boolean' => ['OUTBOUND_HTTPS_ONLY', 'null', 'outbound.ssrf.https_only must be true or false.'],
+    'an empty boolean' => ['OUTBOUND_HTTPS_ONLY', '', 'outbound.ssrf.https_only must be true or false.'],
+    'a zero-padded integer' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', '030', 'outbound.webhooks.timeout_seconds must be an integer.'],
 ]);

@@ -7,8 +7,8 @@ namespace Qiick\Outbound\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -18,6 +18,7 @@ use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
 use Qiick\Outbound\Webhooks\WebhookIdClaim;
 use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
+use Throwable;
 
 /**
  * The deploy check (fleet convention F2): what the boot does not verify.
@@ -29,20 +30,13 @@ use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
  */
 final class CheckOutboundCommand extends Command
 {
+    public const PACKAGE_PRUNE_SCHEDULE = 'outbound:package-prune';
+
     /** @var string */
     protected $signature = 'outbound:check';
 
     /** @var string */
     protected $description = 'Check the outbound configuration and environment for a deploy';
-
-    /** @var list<class-string<Model>> */
-    private const MODEL_CLASSES = [
-        WebhookEndpoint::class,
-        WebhookEndpointSecret::class,
-        WebhookSubscription::class,
-        WebhookDelivery::class,
-        WebhookDeliveryAttempt::class,
-    ];
 
     public function handle(Schedule $schedule): int
     {
@@ -70,12 +64,22 @@ final class CheckOutboundCommand extends Command
             WorkWebhookDeliveriesCommand::LEGACY_NAME => 'outbound:work-deliveries',
             PruneWebhookPayloadsCommand::LEGACY_NAME => 'outbound:prune-deliveries',
         ];
+        $doesPackageSchedulePrune = config('outbound.webhooks.schedule') === true;
         $problems = [];
 
         foreach ($schedule->events() as $event) {
-            if (preg_match('/(?:^|\s)[\'"]?artisan[\'"]?\s+[\'"]?(outbound:webhooks:\w+)[\'"]?(?:\s|$)/', $event->command ?? '', $matches) === 1
-                && isset($replacements[$matches[1]])) {
-                $problems[] = "schedule: replace {$matches[1]} with {$replacements[$matches[1]]}.";
+            if ($event->description === self::PACKAGE_PRUNE_SCHEDULE
+                || $event->command === null
+                || preg_match('/(?:^|\s)[\'"]?artisan[\'"]?\s+[\'"]?(outbound:webhooks:\w+|outbound:prune-deliveries)[\'"]?(?:\s|$)/', $event->command, $matches) !== 1) {
+                continue;
+            }
+
+            $command = $matches[1];
+
+            if ($doesPackageSchedulePrune && in_array($command, [PruneWebhookPayloadsCommand::LEGACY_NAME, 'outbound:prune-deliveries'], true)) {
+                $problems[] = "schedule: remove {$command}; the package schedules outbound:prune-deliveries.";
+            } elseif (isset($replacements[$command])) {
+                $problems[] = "schedule: replace {$command} with {$replacements[$command]}.";
             }
         }
 
@@ -96,15 +100,20 @@ final class CheckOutboundCommand extends Command
             $store = new CacheSeenWebhookIdStore($this->laravel->make(CacheRepository::class), allowArrayStore: $this->laravel->environment('testing'));
         } catch (UnsupportedWebhookIdCacheStoreException $exception) {
             return ["cache.default: {$exception->getMessage()}"];
+        } catch (Throwable $exception) {
+            return ['cache.default: could not resolve the webhook id dedupe store ('.$exception::class.').'];
         }
 
         // A probe claim, given back at once: a store that cannot be reached
         // (a database store without its table, Redis down) fails here, not
         // on the first webhook.
-        $probeClaim = WebhookIdClaim::generate('outbound:check', bin2hex(random_bytes(8)));
+        $probeClaim = WebhookIdClaim::generate('outbound:check', Str::uuid()->toString());
 
         try {
-            $store->claim($probeClaim, 60);
+            if (! $store->claim($probeClaim, 60)) {
+                return ['cache.default: the webhook id dedupe store did not record the probe claim.'];
+            }
+
             $store->release($probeClaim);
         } catch (WebhookIdStoreFailedException $exception) {
             // The previous exception may carry a connection string: only its class is shown.
@@ -123,9 +132,16 @@ final class CheckOutboundCommand extends Command
     {
         $problems = [];
 
-        foreach (self::MODEL_CLASSES as $modelClass) {
-            $model = new $modelClass;
+        $endpoint = new WebhookEndpoint;
+        $models = [
+            $endpoint,
+            new WebhookEndpointSecret,
+            new WebhookSubscription,
+            new WebhookDelivery,
+            new WebhookDeliveryAttempt,
+        ];
 
+        foreach ($models as $model) {
             if (! Schema::connection($model->getConnectionName())->hasTable($model->getTable())) {
                 $problems[] = "database: table {$model->getTable()} is missing (run the migrations).";
             }
@@ -134,7 +150,7 @@ final class CheckOutboundCommand extends Command
         $usersTable = $this->laravel->make('config')->get('outbound.webhooks.users_table');
 
         // Null or empty: the migrations create no users foreign keys.
-        if (is_string($usersTable) && $usersTable !== '' && ! Schema::hasTable($usersTable)) {
+        if (is_string($usersTable) && $usersTable !== '' && ! Schema::connection($endpoint->getConnectionName())->hasTable($usersTable)) {
             $problems[] = "outbound.webhooks.users_table: table {$usersTable} is missing.";
         }
 

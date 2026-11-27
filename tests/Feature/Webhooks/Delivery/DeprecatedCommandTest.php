@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 it('accepts the deprecated worker command with its original options and logs the replacement', function (): void {
@@ -11,6 +12,7 @@ it('accepts the deprecated worker command with its original options and logs the
     $this->artisan('outbound:webhooks:work', ['--limit' => 1, '--max-seconds' => 1])
         ->expectsOutput('Sent 0 webhook delivery attempt(s).')
         ->assertSuccessful();
+    $this->artisan('outbound:webhooks:work')->assertSuccessful();
 
     expect(Artisan::all()['outbound:webhooks:work']->isHidden())->toBeTrue();
     Log::shouldHaveReceived('warning')->with('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.')->once();
@@ -25,4 +27,12 @@ it('accepts the deprecated prune command and its dry-run option and logs the rep
 
     expect(Artisan::all()['outbound:webhooks:prune']->isHidden())->toBeTrue();
     Log::shouldHaveReceived('warning')->with('outbound:webhooks:prune is deprecated. Use outbound:prune-deliveries.')->once();
+});
+
+it('still runs the deprecated worker while the warning cache is unavailable', function (): void {
+    Cache::shouldReceive('add')->once()->andThrow(new RuntimeException('fixture cache error'));
+
+    $this->artisan('outbound:webhooks:work')
+        ->expectsOutput('Sent 0 webhook delivery attempt(s).')
+        ->assertSuccessful();
 });
