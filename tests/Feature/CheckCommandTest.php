@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use Illuminate\Cache\ArrayLock;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
@@ -35,11 +37,11 @@ it('gives the probe a short TTL and releases the claim on success', function ():
     {
         public array $seenTtls = [];
 
-        public function add($key, $value, $seconds): bool
+        public function lock($name, $seconds = 0, $owner = null): Lock
         {
             $this->seenTtls[] = $seconds;
 
-            return $this->put($key, $value, $seconds);
+            return parent::lock($name, $seconds, $owner);
         }
     };
     $this->app->instance(CacheRepository::class, new Repository($cache));
@@ -47,8 +49,8 @@ it('gives the probe a short TTL and releases the claim on success', function ():
 
     $this->artisan('outbound:check')->assertSuccessful();
 
-    expect($cache->seenTtls)->toBe([60])
-        ->and($cache->all())->toBe([]);
+    expect($cache->seenTtls[0])->toBe(60)
+        ->and($cache->locks)->toBe([]);
 });
 
 it('fails on a dedupe store that is not shared between processes', function (): void {
@@ -99,15 +101,14 @@ it('fails on a users table that does not exist, naming the key', function (): vo
         ->assertFailed();
 });
 
-it('fails on a cache that cannot hold a claim, naming the store', function (): void {
-    // A database store without its table: the first claim would fail.
+it('fails on a database cache missing a required table', function (string $configKey): void {
     config()->set('cache.default', 'database');
-    config()->set('cache.stores.database.table', 'missing_cache');
+    config()->set($configKey, 'missing_cache');
 
     $this->artisan('outbound:check')
         ->expectsOutput('cache.default: the webhook id dedupe store cannot claim an id ('.QueryException::class.').')
         ->assertFailed();
-});
+})->with(['cache.stores.database.table', 'cache.stores.database.lock_table']);
 
 it('skips the users table when the product leaves it empty, as the migrations do', function (?string $usersTable): void {
     config()->set('outbound.webhooks.users_table', $usersTable);
@@ -138,9 +139,15 @@ it('fails on a product prune schedule while the package owns the schedule', func
 it('fails when the cache reports that it did not record the probe', function (): void {
     $this->app->instance(CacheRepository::class, new Repository(new class extends ArrayStore
     {
-        public function add($key, $value, $seconds): bool
+        public function lock($name, $seconds = 0, $owner = null): Lock
         {
-            return false;
+            return new class($this, $name, $seconds, $owner) extends ArrayLock
+            {
+                public function acquire(): bool
+                {
+                    return false;
+                }
+            };
         }
     }));
 

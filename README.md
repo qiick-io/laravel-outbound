@@ -79,8 +79,8 @@ The service provider is auto-discovered.
 
 Run `php artisan outbound:check` in the deploy pipeline (fleet convention F2):
 it exits `1`, one line per problem, when the webhook tables or the
-configured users table are missing, or when the cache cannot hold webhook id
-claims across processes (ArrayStore outside tests). It also flags schedules
+configured users table are missing, or when the cache cannot atomically
+release a webhook id claim by its owner. It also flags schedules
 that still use the deprecated `outbound:webhooks:work` or
 `outbound:webhooks:prune` name. A config value of the wrong type already
 stops the boot, naming the key.
@@ -231,25 +231,21 @@ directions), oversize payloads, too many signatures/secrets, and uses
 `hash_equals` against every candidate (no early return). Timestamp tolerance
 alone is **not** replay protection: after a signature match the verifier
 atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance + 1`
-(covers sender skew; holds through the last accepted second). The seen-id
-cache allowlist is **database, redis, memcached, dynamodb, and file**
-(file is single-host only). `storage` and `failover` are refused even when
-they expose `add()`. The array store is tests-only. Resolving
-`StandardWebhookVerifier` (or `SeenWebhookIdStore`) with a refused driver
-throws `UnsupportedWebhookIdCacheStoreException` immediately — not a later
-generic 500. Catch `DuplicateWebhookIdException`,
-`WebhookIdStoreFailedException`, and `InvalidWebhookSignatureException`
-instead of string-matching; messages stay stable for BC. The service
-provider binds a cache-backed `SeenWebhookIdStore` by default.
+(covers sender skew and holds through the last accepted second). The
+seen-id store supports Laravel **database and Redis** owner-checked locks.
+With the database driver, apply Laravel's cache and cache-lock migrations.
+Array locks are available in tests. `outbound:check` reports an unsupported
+driver. Resolving the default `SeenWebhookIdStore` with that driver throws
+`UnsupportedWebhookIdCacheStoreException`. Catch the typed duplicate,
+storage and invalid-signature exceptions in the receiver.
 
 `verify()` requires a dedupe store and returns the `WebhookIdClaim` it won. A
 consumer whose processing fails after that gives it back with
 `SeenWebhookIdStore::release($claim)`, so the sender's retry or redelivery
 (same `webhook-id`) is processed instead of being dropped as a duplicate.
-Only the winning claim releases: a duplicate gets no claim, and a claim
-another request holds carries a different random token, so it is left in
-place. A store that cannot release fails closed
-(`WebhookIdStoreFailedException`).
+Release compares the owner token and deletes in one storage operation.
+A replacement owner keeps its lock if the previous owner releases after
+expiry. A store failure throws `WebhookIdStoreFailedException`.
 
 The signer and the verifier refuse a `webhook-id` that is empty, holds a `.`
 (it separates the signed fields) or a control character. `WebhookMessage`

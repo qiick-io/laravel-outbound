@@ -87,6 +87,24 @@ from `develop`.
   binding when the switch is off.
 - Add `php artisan outbound:check` to the deploy (F2).
 
+### Inbound claim stores
+
+- Inbound dedupe uses Laravel locks on Redis or the database. Apply
+  Laravel's cache and cache-lock migrations before deploying a database
+  store. File, Memcached and DynamoDB lock release cannot atomically
+  verify ownership, so move a verifier using them to a supported store.
+  Excubia and Signaculum both default to the database store in their
+  versioned config. Check the actual deploy setting before upgrading.
+  Stop old verifier processes before starting the updated ones. Keep
+  PHP and Redis host clocks synchronized. Old beta replay records stay
+  active until expiry and cannot be released by the new lock API. A
+  redelivery for one of those records is dropped until its original TTL
+  expires. For Redis, the old records use the cache connection and the
+  new locks use the configured lock connection. If changing the cache
+  backend, connection or namespace, wait out the previous replay TTL
+  before resuming verification. Also wait before rolling back to a beta
+  that reads only the old cache records. Confirm with `outbound:check`.
+
 ## To 0.2.0-beta.3 (endpoint private hosts)
 
 - `webhook_endpoints.allow_private_hosts` is `NOT NULL DEFAULT false` (the
