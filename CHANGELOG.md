@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Atomic webhook id claim release** uses Laravel database or Redis locks.
   Apply Laravel's cache-lock migration for the database driver. See
   `UPGRADING.md` for the cutover from a beta store.
+- Resolve the Outbound transport and webhook services from Laravel's
+  container. Verification always claims the webhook ID. The attempt schema
+  drops the unused response excerpt column before 1.0.
 - **Guzzle floor raised to `^7.15.2 || ^8.0.1`**: the older releases the
   package allowed carry published advisories, one of them a host
   canonicalisation bypass (CVE-2026-69246) and two on proxy handling.

@@ -6,6 +6,15 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Qiick\Outbound\Delivery\DeliveryStatus;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Enums\OutboundTransportErrorKindEnum;
+use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
+use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
+use Qiick\Outbound\Enums\WebhookDeliveryTriggerEnum;
+use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
+use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
+use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
+use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
@@ -90,22 +99,66 @@ it('lists all shipped config keys and environment variables', function (): void 
         ->and(array_values(array_filter($documented[2])))->toEqualCanonicalizing($environment[1]);
 });
 
-it('keeps the delivery status cases and persisted backing values stable', function (): void {
+it('keeps the case names and stored backing values of delivery enums stable', function (string $enum, array $expected): void {
     $backedCases = [];
 
-    foreach (DeliveryStatus::cases() as $case) {
+    foreach ($enum::cases() as $case) {
         $backedCases[$case->name] = $case->value;
     }
 
-    expect($backedCases)->toBe([
+    expect($backedCases)->toBe($expected);
+})->with([
+    [DeliveryStatus::class, [
         'Pending' => 'pending',
         'Delivered' => 'delivered',
         'Failed' => 'failed',
         'Refused' => 'refused',
         'Exhausted' => 'exhausted',
         'Cancelled' => 'cancelled',
-    ]);
-});
+    ]],
+    [OutboundTransportErrorKindEnum::class, [
+        'Timeout' => 'timeout',
+        'Tls' => 'tls',
+        'Dns' => 'dns',
+        'Connection' => 'connection',
+    ]],
+    [WebhookAttemptStatusEnum::class, [
+        'Delivered' => 'delivered',
+        'Failed' => 'failed',
+        'Refused' => 'refused',
+    ]],
+    [WebhookAttemptTriggerEnum::class, [
+        'Schedule' => 'schedule',
+        'Manual' => 'manual',
+        'Bulk' => 'bulk',
+        'Test' => 'test',
+    ]],
+    [WebhookDeliveryTriggerEnum::class, [
+        'Event' => 'event',
+        'Manual' => 'manual',
+        'Bulk' => 'bulk',
+        'Test' => 'test',
+    ]],
+    [WebhookEndpointDisabledReasonEnum::class, [
+        'Manual' => 'manual',
+        'AutoFailure' => 'auto_failure',
+        'GoneHttp410' => 'gone_410',
+    ]],
+    [WebhookExhaustedReasonEnum::class, [
+        'MaxAttempts' => 'max_attempts',
+        'RetryAfterExceedsCap' => 'retry_after_exceeds_cap',
+        'Gone' => 'gone',
+        'PayloadExpired' => 'payload_expired',
+    ]],
+    [WebhookRetryPresetEnum::class, [
+        'Standard' => 'standard',
+        'Short' => 'short',
+    ]],
+    [WebhookSignatureSchemeEnum::class, [
+        'V1' => 'v1',
+        'V2a' => 'v2a',
+    ]],
+]);
 
 it('keeps the named parameters and return types used by downstream packages', function (
     string $class, string $method, array $names, int $required, string $returnType,
@@ -121,6 +174,22 @@ it('keeps the named parameters and return types used by downstream packages', fu
     'browser URL' => [RemoteUrlGuard::class, 'assertBrowserUrlIsSafe', ['url', 'options'], 1, 'void'],
     'claim' => [SeenWebhookIdStore::class, 'claim', ['claim', 'ttlSeconds'], 2, 'bool'],
     'release' => [SeenWebhookIdStore::class, 'release', ['claim'], 1, 'void'],
-    'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, '?'.WebhookIdClaim::class],
+    'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, WebhookIdClaim::class],
     'dispatch' => [WebhookDeliveryCoordinator::class, 'dispatch', ['message', 'scope', 'subjectPublicId'], 1, Collection::class],
 ]);
+
+it('keeps test-only seams out of the pinned transport constructor', function (): void {
+    $parameters = (new ReflectionMethod(PinnedHttpClient::class, '__construct'))->getParameters();
+
+    expect(array_map(static fn (ReflectionParameter $parameter): string => $parameter->getName(), $parameters))
+        ->not->toContain('clock', 'transferHandler');
+});
+
+it('requires a dedupe store when constructing the verifier', function (): void {
+    $parameters = (new ReflectionMethod(StandardWebhookVerifier::class, '__construct'))->getParameters();
+    $store = collect($parameters)->first(static fn (ReflectionParameter $parameter): bool => $parameter->getName() === 'seenIds');
+
+    expect($store)->toBeInstanceOf(ReflectionParameter::class)
+        ->and($store->isOptional())->toBeFalse()
+        ->and($store->allowsNull())->toBeFalse();
+});

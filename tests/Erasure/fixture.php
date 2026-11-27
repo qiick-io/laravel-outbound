@@ -83,7 +83,6 @@ return new class implements ErasureFixture
                 // What the receiver answered can name the person the delivery is about.
                 'response_headers' => 'personal',
                 'request_id' => 'personal',
-                'response_excerpt' => 'personal',
             ],
         ];
     }
@@ -146,7 +145,6 @@ return new class implements ErasureFixture
             'http_status' => 422,
             'response_headers' => ['x-request-id' => $email],
             'request_id' => $username,
-            'response_excerpt' => 'Unknown customer '.$name,
             'attempted_at' => CarbonImmutable::now(),
         ])->save();
         $delivered->attempts()->make()->forceFill([

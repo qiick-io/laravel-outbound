@@ -1,6 +1,6 @@
 # 2026-11-27: the public API boundary for 1.0
 
-Decided by the agent preparing the 1.0 release candidate, applying decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`), for review by the maintainer in the RC review.
+Applies decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`). The `AuthorizedDestination` exception below was approved by Team Leader for Luca, 2026-11-27.
 
 ## What
 
@@ -8,6 +8,12 @@ Decided by the agent preparing the 1.0 release candidate, applying decision D6 o
 - `AuthorizedDestination` stays `@api`, against the letter of D6: `RemoteUrlGuard::authorize()` and `tryAuthorize()` return it to every caller (`laravel-oidc` reads its `pinnedAddress` in its guard tests). A public method cannot return an internal type.
 - `DnsHostResolver` is `@api`: it is the default `HostResolver` a product decorates.
 - `docs/public-api.md` lists every `@api` class and the frozen contracts other packages build on; `tests/Arch/PublicApiTest.php` keeps both in step.
+
+Team Leader also approved resolving the transport, signer, verifier, rotator,
+retry policy and guard through the container. Their constructors are internal,
+the verifier always claims IDs, and the transport's test fixtures live behind
+an internal factory. The beta attempt schema drops the unused response excerpt
+column so the signed webhook API carries only the documented diagnostics.
 
 ## Why
 

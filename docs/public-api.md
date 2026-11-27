@@ -12,11 +12,17 @@ The deprecation policy below governs the public API. Everything else in `src/` i
 - **Delivery status:** `DeliveryStatus::Pending = 'pending'`, `Delivered = 'delivered'`, `Failed = 'failed'`, `Refused = 'refused'`, `Exhausted = 'exhausted'`, `Cancelled = 'cancelled'`; the backing values are stored in `webhook_deliveries.status`.
 - **Subject reference:** `WebhookDeliveryCoordinator::dispatch(WebhookMessage $message, ?string $scope = null, ?string $subjectPublicId = null)`; `subjectPublicId` is stored lower-case in `webhook_deliveries.subject_public_id` and is what `OutboundEraser` matches.
 
-The coordinator is resolved from the container: its public methods are the API, its constructor is `@internal`.
+Resolve `PinnedHttpClient`, `RemoteUrlGuard`, `StandardWebhookSigner`,
+`StandardWebhookVerifier`, `SecretRotator`, `RetryPolicy` and
+`WebhookDeliveryCoordinator` from the Laravel container. Their constructors
+are `@internal`. The verifier requires a `SeenWebhookIdStore` and returns
+the winning `WebhookIdClaim` after successful verification.
 
 ## Classes, interfaces and enums
 
-Public means the class name, its public methods and constructor, and for enums the case names and backing values (backing values are wire values). The Eloquent models are public for their table, casts, relations and scopes; their attributes are the columns below.
+The public API covers class names, public members without an `@internal`
+annotation and enum case names and backing values. The Eloquent models
+expose their tables, columns, casts, relations and scopes.
 
 ### `Qiick\Outbound\Contracts`
 
@@ -175,7 +181,7 @@ Every key of `config/outbound.php` (types and defaults in the README, "Configura
 
 - `outbound:work-deliveries {--limit=50} {--max-seconds=}`: sends the due attempts.
 - `outbound:prune-deliveries {--dry-run}`: clears expired bodies and deletes settled rows past their retention; scheduled by the package daily on one server unless `outbound.webhooks.schedule` is off.
-- `outbound:check`: the deploy check (exit `1` on any problem, including an old command name still scheduled). The hidden beta aliases are temporary. Use the commands listed here.
+- `outbound:check`: the deploy check (exit `1` on any problem, including an old command name still scheduled). The hidden beta aliases are removed in `1.0.0-rc.1`. [Alias removal #100](https://github.com/qiick-io/laravel-outbound/issues/100)
 
 ## Events
 

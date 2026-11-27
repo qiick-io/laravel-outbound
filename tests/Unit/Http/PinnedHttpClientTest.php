@@ -34,7 +34,7 @@ function pinnedClient(
     OutboundHttpLimits $limits = new OutboundHttpLimits,
     mixed $transferHandler = null,
 ): PinnedHttpClient {
-    return new PinnedHttpClient(
+    return PinnedHttpClient::forTesting(
         app(HttpFactory::class),
         new RemoteUrlGuard($resolver, allowPrivateHosts: $allowPrivate),
         $limits,
@@ -1027,7 +1027,7 @@ it('fails closed when PendingRequest options property is not an array', function
  */
 function proxiedClient(?EgressProxy $egressProxy, callable $transferHandler, array $answers = ['example.test' => ['93.184.216.34']]): PinnedHttpClient
 {
-    return new PinnedHttpClient(
+    return PinnedHttpClient::forTesting(
         app(HttpFactory::class),
         new RemoteUrlGuard(new FakeHostResolver(answers: $answers)),
         new OutboundHttpLimits,

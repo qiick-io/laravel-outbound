@@ -61,7 +61,7 @@ beforeEach(function (): void {
     ]);
     // A fixed clock keeps the chain deadline (30 s) whole for the timeout assertions.
     $this->clock = static fn (): float => 1_000.0;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -276,7 +276,6 @@ it('records a delivered attempt and resets the endpoint failure streak', functio
         ])
         ->and($attempt->request_id)->toBe('req-'.str_repeat('r', 60))
         ->and($attempt->response_bytes)->toBe(6)
-        ->and($attempt->response_excerpt)->toBeNull()
         ->and($attempt->duration_ms)->toBeGreaterThanOrEqual(0)
         ->and($attempt->attempted_at->toDateTimeString())->toBe('2026-11-23 10:00:00')
         ->and($attempt->next_attempt_at)->toBeNull()
@@ -295,7 +294,7 @@ it('never stores the body of a failed answer, which may reflect the request or t
     $attempt = WebhookDeliveryAttempt::query()->sole();
 
     expect($attempt->http_status)->toBe(500)
-        ->and($attempt->response_excerpt)->toBeNull()
+        ->and(json_encode($attempt->getAttributes(), JSON_THROW_ON_ERROR))->not->toContain('Ada Lovelace')
         ->and((string) $attempt->error_message)->not->toContain('Ada')
         ->and((string) onlyDelivery()->last_error)->not->toContain('Ada');
 });
@@ -513,7 +512,7 @@ it('holds a lease of the chain deadline plus a minute while it sends', function 
     $recordLease = function () use (&$leaseSeenBySender): void {
         $leaseSeenBySender = WebhookDelivery::query()->sole()->claimed_until?->toDateTimeString();
     };
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -628,7 +627,7 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
 it('drops its result when another worker recorded this attempt after the lease ran out', function (): void {
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -691,7 +690,7 @@ it('claims nothing for an endpoint already over its concurrency', function (): v
 it('records nothing for a delivery deleted while it was being sent', function (): void {
     $endpoint = deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -713,7 +712,7 @@ it('keeps a delivery cancelled while it was being sent cancelled, with no attemp
     Event::fake([WebhookDeliveredEvent::class]);
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -763,7 +762,7 @@ it('never sends a delivery cancelled while its host was being resolved', functio
             return ['93.184.216.34'];
         }
     };
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($resolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -818,7 +817,7 @@ it('does not attribute an attempt to an asker erased while it was being sent', f
     coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11');
     $askerId = (int) DB::table('users')->insertGetId(['name' => 'Asker', 'email' => 'asker@example.com', 'password' => 'x']);
     onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $askerId])->save();
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -846,7 +845,7 @@ it('never writes back an asker the eraser unlinked, even when a new redelivery i
     $firstAskerId = (int) DB::table('users')->insertGetId(['name' => 'First', 'email' => 'first@example.com', 'password' => 'x']);
     $secondAskerId = (int) DB::table('users')->insertGetId(['name' => 'Second', 'email' => 'second@example.com', 'password' => 'x']);
     onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $firstAskerId])->save();
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -970,7 +969,7 @@ it('never sends a delivery twice when a second worker starts while the first is 
     }
     $sentHosts = [];
     $secondWorkerHasRun = false;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: $resolverAnswers)),
         $this->app->make(OutboundHttpLimits::class),
@@ -1019,7 +1018,7 @@ it('does not send to an endpoint disabled after the batch was selected', functio
     $first = deliveryEndpoint();
     $second = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -1038,7 +1037,7 @@ it('does not send to an endpoint disabled after the batch was selected', functio
 });
 
 it('reaches private hosts only for an endpoint set to, under a global setting that allows them', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver, allowPrivateHosts: $isAllowedGlobally),
         $this->app->make(OutboundHttpLimits::class),
@@ -1141,7 +1140,7 @@ it('reports nothing for a delivery deleted while it was being sent', function ()
     $this->app->instance(ExceptionHandler::class, $spy);
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),

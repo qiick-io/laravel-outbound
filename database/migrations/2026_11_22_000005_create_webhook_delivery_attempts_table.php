@@ -12,9 +12,8 @@ use Illuminate\Support\Facades\Schema;
  * Every attempt carries its own `webhook-timestamp` and the public ids of the
  * secrets that signed it, never the secrets or the body. `response_headers`
  * holds an allowlist only (`content-type`, `retry-after`, `x-request-id`,
- * `date`) and `response_excerpt` stays null unless the product turns it on,
- * because relaying a destination's response widens blind SSRF into read SSRF
- * (standards review R5, OWASP SSRF cheat sheet).
+ * `date`). Responses may contain receiver data and are never stored as bodies
+ * or excerpts (standards review R5 and S6).
  *
  * `attempted_at` keeps milliseconds so attempts stay ordered within a second
  * (review R9); every other past-event stamp follows Laravel's default.
@@ -50,7 +49,6 @@ return new class extends Migration
             $table->string('error_message', 500)->nullable();
             $table->unsignedInteger('retry_after_seconds')->nullable();
             $table->json('response_headers')->nullable();
-            $table->string('response_excerpt', 1024)->nullable();
             $table->unsignedInteger('response_bytes')->nullable();
             $table->unsignedInteger('duration_ms')->nullable();
             $table->string('request_id', 64)->nullable();

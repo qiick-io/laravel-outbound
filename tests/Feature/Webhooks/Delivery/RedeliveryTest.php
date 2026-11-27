@@ -35,7 +35,7 @@ beforeEach(function (): void {
     config()->set('outbound.webhooks.retry_jitter_seconds', 0);
     Event::fake([WebhookRedeliveryRequestedEvent::class]);
     $this->transfer = new RecordingTransferHandler;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34'], 'other.example.com' => ['93.184.216.35']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -313,7 +313,7 @@ it('honours a redelivery asked for while the delivery is being sent', function (
     $endpoint = redeliveryEndpoint();
     $delivery = sentDelivery($endpoint);
     $operatorId = redeliveryUserId();
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -383,7 +383,7 @@ it('honours a second user\'s request made while the first user\'s redelivery is 
     $firstOperatorId = redeliveryUserId();
     $secondOperatorId = redeliveryUserId();
     app(WebhookDeliveryCoordinator::class)->redeliver($delivery, $firstOperatorId);
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -422,7 +422,7 @@ it('honours a repeated request by the same asker made while the delivery is bein
     };
     $ask();
     $this->transfer->respond(500);
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),

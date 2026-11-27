@@ -37,6 +37,8 @@ final class SecretRotator
     /**
      * @throws WebhookException when `$maxSecrets` is outside 1–4: four is the
      *                          fleet's hard limit (standards review M3)
+     *
+     * @internal Resolve the production service from the container.
      */
     public function __construct(
         private readonly int $maxSecrets = 4,

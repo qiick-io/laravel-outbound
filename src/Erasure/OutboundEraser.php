@@ -188,7 +188,7 @@ final readonly class OutboundEraser
     /**
      * The attempts the person triggered lose the link; every attempt of a
      * delivery about them, whoever triggered it, loses what the receiver
-     * answered (`response_headers`, `request_id`, `response_excerpt`): a
+     * answered (`response_headers`, `request_id`): a
      * receiver may echo a customer reference in `X-Request-Id`.
      *
      * @param  array<mixed>  $aboutThePerson  the deliveries about the person, locked by the caller
@@ -208,7 +208,7 @@ final readonly class OutboundEraser
         }
 
         $connection->table('webhook_delivery_attempts')->whereIn('id', $attemptIds)->whereIn('delivery_id', $aboutThePerson)
-            ->update(['response_headers' => null, 'request_id' => null, 'response_excerpt' => null]);
+            ->update(['response_headers' => null, 'request_id' => null]);
 
         if ($userKey !== null) {
             $connection->table('webhook_delivery_attempts')->whereIn('id', $attemptIds)->where('triggered_by', $userKey)->update(['triggered_by' => null]);

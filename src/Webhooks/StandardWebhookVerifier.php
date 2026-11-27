@@ -24,12 +24,13 @@ use Throwable;
  */
 final class StandardWebhookVerifier
 {
+    /** @internal Resolve the verifier from the container. */
     public function __construct(
+        private readonly SeenWebhookIdStore $seenIds,
         private readonly int $replayToleranceSeconds = 300,
         private readonly int $maxPayloadBytes = 1_048_576,
         private readonly int $maxSignatures = 8,
         private readonly int $maxSecrets = 4,
-        private readonly ?SeenWebhookIdStore $seenIds = null,
     ) {}
 
     /**
@@ -38,8 +39,7 @@ final class StandardWebhookVerifier
      *                                         endpoint: required, because one scope
      *                                         shared by tenants turns the same
      *                                         webhook-id into a false duplicate
-     * @return WebhookIdClaim|null the claim on the webhook id, which only this
-     *                             request can release; null without a store
+     * @return WebhookIdClaim the winning claim, which only this request can release
      *
      * @throws WebhookException when verification fails
      */
@@ -52,7 +52,7 @@ final class StandardWebhookVerifier
         array $secrets,
         DateTimeImmutable $now,
         string $dedupeScope,
-    ): ?WebhookIdClaim {
+    ): WebhookIdClaim {
         StandardWebhookSigner::assertValidWebhookId($webhookId);
 
         if ($dedupeScope === '') {
@@ -107,10 +107,6 @@ final class StandardWebhookVerifier
 
         if (! $matched) {
             throw new InvalidWebhookSignatureException('No matching webhook signature found.');
-        }
-
-        if ($this->seenIds === null) {
-            return null;
         }
 
         // Hold through the last second the timestamp check still accepts (off-by-one safe).
