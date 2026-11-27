@@ -17,4 +17,4 @@ permissions:
 jobs:
   pr-title:
     # qiick-io/app-ui@v0.11.0
-    uses: qiick-io/app-ui/.github/workflows/pr-title.yml@cbb1843eb1f50ef5a38e7e7bdf9b8dbec7b48bed # v0.11.0
+    uses: qiick-io/app-ui/.github/workflows/pr-title.yml@b72c14a807f0bdee81f70173213918a36292a1f1 # v0.13.0
