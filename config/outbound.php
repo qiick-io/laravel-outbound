@@ -162,6 +162,13 @@ return [
         'delivery_retention_days' => $integer(env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90)),
 
         /*
+         * Schedule `outbound:prune-deliveries` daily, on one server and
+         * without overlapping (fleet convention F9). Turn it off to schedule
+         * the command yourself.
+         */
+        'schedule' => $boolean(env('OUTBOUND_WEBHOOK_SCHEDULE', true)),
+
+        /*
          * Disable an endpoint at once on 410 Gone, and after
          * `no_success_days` without a success with at least
          * `min_consecutive_failures` failed attempts in a row. On by default

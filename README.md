@@ -77,6 +77,14 @@ php artisan vendor:publish --tag=outbound-config
 
 The service provider is auto-discovered.
 
+Run `php artisan outbound:check` in the deploy pipeline (fleet convention F2):
+it exits `1`, one line per problem, when the webhook tables or the
+configured users table are missing, or when the cache cannot hold webhook id
+claims across processes (ArrayStore outside tests). It also flags schedules
+that still use the deprecated `outbound:webhooks:work` or
+`outbound:webhooks:prune` name. A config value of the wrong type already
+stops the boot, naming the key.
+
 ## Public API
 
 ### SSRF
@@ -511,10 +519,13 @@ pull request (review M14). The attempt records `trigger = manual|bulk` and `trig
 
 ### Body retention
 
-```php
-// routes/console.php
-Schedule::command('outbound:prune-deliveries')->daily();
-```
+The package schedules `outbound:prune-deliveries` daily, on one server and
+without overlapping (fleet convention F9). Set `outbound.webhooks.schedule`
+(`OUTBOUND_WEBHOOK_SCHEDULE`) to `false` to schedule it yourself.
+`onOneServer()` needs a cache all scheduler hosts share (database, Redis,
+Memcached or DynamoDB): with a node-local file cache, two hosts both run it,
+which is harmless (each block is its own transaction) but doubles the work.
+`--dry-run` reports what it would clear and delete and changes nothing.
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
 (`encrypted` cast). It is kept until `payload_expires_at`: 30 days after

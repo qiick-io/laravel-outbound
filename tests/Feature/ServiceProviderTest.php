@@ -6,8 +6,11 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
+use Qiick\Outbound\Contracts\WebhookEndpointNoticeRecipientsContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
@@ -55,6 +58,7 @@ it('merges the package defaults into the outbound config', function (): void {
             'default_max_concurrency' => 2,
             'payload_retention_days' => 30,
             'delivery_retention_days' => 90,
+            'schedule' => true,
             'auto_disable' => [
                 'enabled' => true,
                 'no_success_days' => 5,
@@ -276,6 +280,39 @@ it('gives the guard the metadata policy a product binds', function (): void {
     $result = $this->app->make(RemoteUrlGuard::class)->tryAuthorize('https://meta.example/latest');
 
     expect($result['ok'] ? null : $result['reason'])->toBe('Host is not allowed.');
+});
+
+it('registers the owner listener only while the owner email is on', function (array $autoDisable, bool $isListening): void {
+    $this->configBeforeBoot = ['outbound.webhooks.auto_disable' => [...config('outbound.webhooks.auto_disable'), ...$autoDisable]];
+    $this->refreshApplication();
+
+    $listeners = array_map(
+        static fn (mixed $listener): string => is_string($listener) ? $listener : '',
+        app('events')->getRawListeners()[WebhookEndpointDisabledEvent::class] ?? [],
+    );
+
+    expect(in_array(NotifyWebhookEndpointOwnerListener::class, $listeners, true))->toBe($isListening)
+        ->and($this->app->bound(WebhookEndpointNoticeRecipientsContract::class))->toBe($isListening);
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+})->with([
+    'both on' => [['enabled' => true, 'notify_owner' => true], true],
+    // An endpoint's own `auto_disable` can still turn it on.
+    'auto-disable off in the config' => [['enabled' => false, 'notify_owner' => true], true],
+    'owner email off' => [['enabled' => true, 'notify_owner' => false], false],
+]);
+
+it('writes the shipped default of every key an older published config lacks into the config, so config:cache keeps it', function (): void {
+    $publishedBeforeTheKey = Arr::except(require __DIR__.'/../../config/outbound.php', 'webhooks.schedule');
+    $this->configBeforeBoot = ['outbound' => Arr::except($publishedBeforeTheKey, ['webhooks.schedule'])];
+    $this->refreshApplication();
+
+    expect(config()->has('outbound.webhooks.schedule'))->toBeTrue()
+        ->and(config('outbound.webhooks.schedule'))->toBeTrue();
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
 });
 
 it('refuses a malformed boolean or integer variable instead of casting it', function (string $variable, string $value, string $message): void {

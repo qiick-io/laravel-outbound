@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Laravel;
 
+use Illuminate\Console\Application as Artisan;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -12,6 +14,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
+use Qiick\Outbound\Console\Commands\CheckOutboundCommand;
 use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
@@ -94,9 +97,6 @@ final class OutboundServiceProvider extends ServiceProvider
                 events: $app->make(EventDispatcher::class),
             );
         });
-
-        // A product binds its own to choose who hears of a disabled endpoint.
-        $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
 
         $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
             // ArrayStore is atomic but process-local — allow only in the testing env.
@@ -219,6 +219,13 @@ final class OutboundServiceProvider extends ServiceProvider
     {
         $config = $this->app->make(ConfigRepository::class);
 
+        // mergeConfigFrom() merges the top level only: a key an older
+        // published config lacks gets its shipped default here, so
+        // `config:cache` (which boots the providers) stores the merged result.
+        if (! $this->app->configurationIsCached()) {
+            $config->set('outbound', array_replace_recursive($this->packageDefaults(), (array) $config->get('outbound', [])));
+        }
+
         $this->app->make(SecretRotator::class);
         // Refuses auto-disable thresholds below 1 and a payload retention
         // shorter than the retry schedule at boot too.
@@ -231,7 +238,21 @@ final class OutboundServiceProvider extends ServiceProvider
         // checked here against their shipped types.
         $this->assertConfigTypes($config);
         $this->defaultRetryPreset($config);
-        $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        // Off means off (F3): no listener and no recipients binding when the
+        // product sends its own notice. A product binds its own recipients
+        // to choose who hears of a disabled endpoint.
+        if ($this->configBool($config, 'outbound.webhooks.auto_disable.notify_owner')) {
+            $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
+            $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        }
+
+        if ($this->configBool($config, 'outbound.webhooks.schedule')) {
+            $this->callAfterResolving(Schedule::class, static function (Schedule $schedule): void {
+                $schedule->command('outbound:prune-deliveries')
+                    ->name(CheckOutboundCommand::PACKAGE_PRUNE_SCHEDULE)
+                    ->daily()->onOneServer()->withoutOverlapping();
+            });
+        }
 
         $migrationsPath = __DIR__.'/../../database/migrations';
 
@@ -246,7 +267,13 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
 
-            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class]);
+            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class, CheckOutboundCommand::class]);
+
+            // shortcut: remove before 1.0.0-rc.1. Keep beta schedules running in the meantime.
+            Artisan::starting(static function (Artisan $artisan): void {
+                $artisan->add((new WorkWebhookDeliveriesCommand)->setName(WorkWebhookDeliveriesCommand::LEGACY_NAME)->setHidden());
+                $artisan->add((new PruneWebhookPayloadsCommand)->setName(PruneWebhookPayloadsCommand::LEGACY_NAME)->setHidden());
+            });
         }
     }
 
@@ -307,6 +334,7 @@ final class OutboundServiceProvider extends ServiceProvider
         yield 'outbound.webhooks.default_max_concurrency' => 'int';
         yield 'outbound.webhooks.payload_retention_days' => 'int';
         yield 'outbound.webhooks.delivery_retention_days' => 'int';
+        yield 'outbound.webhooks.schedule' => 'bool';
         yield 'outbound.webhooks.auto_disable.enabled' => 'bool';
         yield 'outbound.webhooks.auto_disable.no_success_days' => 'int';
         yield 'outbound.webhooks.auto_disable.min_consecutive_failures' => 'int';
