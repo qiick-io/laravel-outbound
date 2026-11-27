@@ -13,14 +13,14 @@ use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
  * rows past `delivery_retention_days` with their attempts.
  *
  * Run it from the scheduler, for example
- * `Schedule::command('outbound:webhooks:prune')->daily()`.
+ * `Schedule::command('outbound:prune-deliveries')->daily()`.
  *
  * @api
  */
 final class PruneWebhookPayloadsCommand extends Command
 {
     /** @var string */
-    protected $signature = 'outbound:webhooks:prune';
+    protected $signature = 'outbound:prune-deliveries';
 
     /** @var string */
     protected $description = 'Clear webhook delivery bodies past their retention period';

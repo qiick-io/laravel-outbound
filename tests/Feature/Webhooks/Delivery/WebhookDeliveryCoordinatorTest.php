@@ -545,21 +545,21 @@ it('skips deliveries of endpoints that are disabled or deleted, and settled deli
         ->and($this->transfer->requests)->toBe([]);
 });
 
-it('works through due deliveries from the outbound:webhooks:work command', function (): void {
+it('works through due deliveries from the outbound:work-deliveries command', function (): void {
     deliveryEndpoint(['max_concurrency' => 5]);
     coordinator()->dispatch(invoicePaidMessage('msg_1'));
     coordinator()->dispatch(invoicePaidMessage('msg_2'));
 
-    $this->artisan('outbound:webhooks:work', ['--limit' => 1])
+    $this->artisan('outbound:work-deliveries', ['--limit' => 1])
         ->expectsOutput('Sent 1 webhook delivery attempt(s).')
         ->assertSuccessful();
-    $this->artisan('outbound:webhooks:work')
+    $this->artisan('outbound:work-deliveries')
         ->expectsOutput('Sent 1 webhook delivery attempt(s).')
         ->assertSuccessful();
 });
 
 it('refuses a limit below one', function (): void {
-    $this->artisan('outbound:webhooks:work', ['--limit' => 0])
+    $this->artisan('outbound:work-deliveries', ['--limit' => 0])
         ->expectsOutput('The --limit option must be a positive integer.')
         ->assertFailed();
 });
@@ -1450,10 +1450,10 @@ it('refuses a time budget below one second', function (): void {
 
 it('takes the time budget from the command', function (): void {
     foreach (['soon', '0'] as $refused) {
-        $this->artisan('outbound:webhooks:work', ['--max-seconds' => $refused])
+        $this->artisan('outbound:work-deliveries', ['--max-seconds' => $refused])
             ->expectsOutput('The --max-seconds option must be a positive integer.')
             ->assertFailed();
     }
 
-    $this->artisan('outbound:webhooks:work', ['--max-seconds' => '1'])->assertSuccessful();
+    $this->artisan('outbound:work-deliveries', ['--max-seconds' => '1'])->assertSuccessful();
 });
