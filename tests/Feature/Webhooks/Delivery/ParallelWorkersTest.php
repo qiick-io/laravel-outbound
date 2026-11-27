@@ -19,7 +19,7 @@ use Qiick\Outbound\Webhooks\SecretRotator;
 use Qiick\Outbound\Webhooks\WebhookMessage;
 
 /*
- * Two `outbound:webhooks:work` runs at the same moment, in two processes with
+ * Two `outbound:work-deliveries` runs at the same moment, in two processes with
  * two database connections, on a server database (the CI `databases` job):
  * every delivery is sent exactly once and no endpoint goes over its
  * concurrency (review of #25, B2). SQLite in memory cannot be shared between

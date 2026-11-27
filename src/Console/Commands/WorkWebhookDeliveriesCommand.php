@@ -11,7 +11,7 @@ use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
  * Sends one attempt for each due webhook delivery, up to `--limit`.
  *
  * Run it from the scheduler, for example
- * `Schedule::command('outbound:webhooks:work')->everyFiveSeconds()`:
+ * `Schedule::command('outbound:work-deliveries')->everyFiveSeconds()`:
  * retries are driven by `next_attempt_at`, so the first retry (5 s) is only
  * as punctual as this schedule. Overlapping runs are safe: each delivery is
  * leased on its own, right before its send.
@@ -21,7 +21,7 @@ use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 final class WorkWebhookDeliveriesCommand extends Command
 {
     /** @var string */
-    protected $signature = 'outbound:webhooks:work
+    protected $signature = 'outbound:work-deliveries
         {--limit=50 : Most deliveries to attempt in this run}
         {--max-seconds= : Start no attempt after this many seconds (none by default)}';
 

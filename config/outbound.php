@@ -134,14 +134,14 @@ return [
          * 2026-11-22: 30). At most 30: the boot fails above (fleet erasure
          * decision). A delivery about a person the product named at dispatch
          * keeps it until its longest possible retry plan ends, if later; one
-         * about nobody named never longer. `outbound:webhooks:prune` then
+         * about nobody named never longer. `outbound:prune-deliveries` then
          * clears it and keeps its hash and length.
          */
         'payload_retention_days' => (int) env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30),
 
         /*
          * Days a settled delivery row and its attempts are kept before
-         * `outbound:webhooks:prune` deletes them. At least the payload
+         * `outbound:prune-deliveries` deletes them. At least the payload
          * retention. Pending deliveries, and rows whose body has not
          * expired yet, are never deleted.
          */

@@ -37,7 +37,7 @@ use Illuminate\Support\Facades\Schema;
  * same user while the delivery is being sent is still told apart.
  *
  * Deleting an endpoint with deliveries is refused: the log outlives a
- * soft-deleted endpoint until `outbound:webhooks:prune` deletes it, once
+ * soft-deleted endpoint until `outbound:prune-deliveries` deletes it, once
  * `outbound.webhooks.delivery_retention_days` have passed.
  */
 return new class extends Migration

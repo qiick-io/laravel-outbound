@@ -46,7 +46,7 @@ use Throwable;
  * Fans an event out to the subscribed endpoints and sends the due attempts.
  *
  * {@see dispatch()} stores one delivery per endpoint with the exact body every
- * attempt signs. {@see work()} (the `outbound:webhooks:work` command, run by
+ * attempt signs. {@see work()} (the `outbound:work-deliveries` command, run by
  * the scheduler) leases due deliveries, signs each attempt with the
  * endpoint's signing set and a fresh `webhook-timestamp`, and POSTs it through
  * the package's {@see PinnedHttpClient} only: SSRF guard, pinned address, no

@@ -30,6 +30,11 @@ from `develop`.
   call `OutboundEraser` from the product's erasure orchestrator only (README,
   "Erasure"). A delivery queued without it keeps its encrypted payload until
   it expires.
+- **Commands renamed** to the fleet form `outbound:<verb>-<object>` (F6):
+  `outbound:webhooks:work` is `outbound:work-deliveries` and
+  `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
+  product's schedule (`routes/console.php`) and any deploy script; the old
+  names no longer exist.
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 
@@ -91,7 +96,7 @@ reached.
   and hidden from arrays and JSON: recreate the database. Like `secret` and
   `payload`, it is unreadable after an `APP_KEY` rotation unless the old key
   is in `APP_PREVIOUS_KEYS`.
-- Schedule `outbound:webhooks:work` (for example `everyFiveSeconds()`) and
+- Schedule `outbound:webhooks:work` (`outbound:work-deliveries` since the F6 rename above; for example `everyFiveSeconds()`) and
   dispatch events with `WebhookDeliveryCoordinator::dispatch()` instead of a
   product job. Webhook POSTs now time out after 15 s
   (`OUTBOUND_WEBHOOK_TIMEOUT_SECONDS`): a scheduler or queue timeout around
@@ -111,7 +116,7 @@ reached.
   `next_attempt_triggered_by` (redelivery): recreate the database. A
   redelivery keeps its `webhook-id`, so a consumer that claimed the id and
   then failed drops it as a duplicate until the claim expires.
-- Schedule `outbound:webhooks:prune` (for example `daily()`): bodies are
+- Schedule `outbound:webhooks:prune` (`outbound:prune-deliveries` since the F6 rename above; for example `daily()`): bodies are
   kept 30 days after dispatch (`OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS`), or
   until their retry plan ends if later, then cleared; settled delivery rows
   are deleted after 90 days (`OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS`). `WebhookExhaustedReasonEnum` gains
