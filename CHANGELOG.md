@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-beta.4] - 2026-11-27
+
 ### Upgrade notes
 
 - Resolve the Outbound transport and webhook services from Laravel's
@@ -19,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Commands renamed** (fleet convention F6): `outbound:webhooks:work` is
   `outbound:work-deliveries`, `outbound:webhooks:prune` is
   `outbound:prune-deliveries`. Update the product's schedule. The old names
-  remain available as hidden, logged aliases through the betas.
+  remain available as hidden, logged aliases in this last beta.
 - **New columns `webhook_deliveries.subject_public_id` and
   `claimed_triggered_by`**, and
   `payload_hash` is nullable, in the `create_` migration: recreate the
@@ -27,9 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`outbound.webhooks.payload_retention_days` is at most 30**: the boot
   fails above. A delivery dispatched without `subjectPublicId` keeps its body
   for the retention only, even when its retry plan is longer.
+- **Atomic webhook id claim release** uses Laravel database or Redis locks.
+  Apply Laravel's cache-lock migration for the database driver. See
+  `UPGRADING.md` for the cutover from a beta store.
 
 ### Added
 
+- `OutboundHttpStackData::make()` creates the guard and pinned client for an
+  integration's own destination policy and HTTP limits.
 - `outbound:check` (fleet convention F2): fails, one line per problem, on a
   missing webhook or users table, a dedupe cache that is not shared between
   processes, or a schedule that uses one of the deprecated command names.
@@ -43,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   person an event is about, so the eraser can cancel their pending deliveries.
 - `docs/public-api.md` with the frozen contracts (URL guard, claim store,
   dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
-  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S17 to tests (#48).
 
 ### Changed
 
@@ -60,7 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asker unlinked during the send is never written back.
 - `subjectPublicId` is stored in lower case.
 - The eraser clears `payload_hash` on deliveries about the person.
-- The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
+- CI uses the shared package matrix and checks mutation coverage for every
+  PHP source file. Its server DB checks include PostgreSQL with Laravel 12
+  and exercise owner-checked claim release on Redis separately.
 - The owner email listener is not registered when
   `outbound.webhooks.auto_disable.notify_owner` is off (F3).
 - **The boot checks every `outbound.*` value** against the type of its
@@ -73,6 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A host allowlist entry is normalised as the URL host is: `Bücher.example`
   matches `xn--bcher-kva.example`, `example.test.` matches `example.test`, and
   an IPv6 entry matches in any spelling (#49).
+
+### Fixed
+
+- A duplicate database-backed webhook claim rolls back its insert to a
+  savepoint so the receiver's transaction can continue on PostgreSQL with
+  Laravel 12.
 
 ## [0.2.0-beta.3] - 2026-11-26
 
@@ -439,7 +454,8 @@ Standard Webhooks `v1` signing/verification for Laravel 12 and 13 (PHP `^8.3`).
   `composer validate --strict`, `composer audit`, standards drift against
   app-ui `v0.11.0`).
 
-[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.3...HEAD
+[Unreleased]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.4...HEAD
+[0.2.0-beta.4]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.3...v0.2.0-beta.4
 [0.2.0-beta.3]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.2...v0.2.0-beta.3
 [0.2.0-beta.2]: https://github.com/qiick-io/laravel-outbound/compare/v0.2.0-beta.1...v0.2.0-beta.2
 [0.2.0-beta.1]: https://github.com/qiick-io/laravel-outbound/compare/v0.1.1...v0.2.0-beta.1

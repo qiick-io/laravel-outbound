@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Events\Dispatcher;
 use Qiick\Outbound\Events\WebhookSignedEvent;
 use Qiick\Outbound\Testing\FakeSeenWebhookIdStore;
@@ -143,7 +144,7 @@ it('releases an id never claimed without complaint', function (): void {
 it('fails closed when the store cannot release', function (): void {
     $failingStore = new class extends ArrayStore
     {
-        public function get($key): mixed
+        public function restoreLock($name, $owner): Lock
         {
             throw new RuntimeException('cache down');
         }

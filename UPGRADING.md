@@ -37,7 +37,7 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
-## Unreleased (erasure)
+## To 0.2.0-beta.4
 
 - Resolve the signer, verifier, guard, pinned HTTP client, secret rotator
   and retry policy from the Laravel container. For an independent URL
@@ -70,10 +70,10 @@ from `develop`.
 - **Commands renamed** to the fleet form `outbound:<verb>-<object>` (F6):
   `outbound:webhooks:work` is `outbound:work-deliveries` and
   `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
-  product's schedule (`routes/console.php`) and any deploy script. The old
-  names remain hidden through the betas and are removed before
-  `1.0.0-rc.1`. The old worker command logs at most once an hour through
-  the configured cache.
+  product's schedule (`routes/console.php`) and any deploy script.
+  Version `0.2.0-beta.4` is the last beta with these hidden aliases.
+  They are removed in `1.0.0-rc.1`. The old worker command logs at most once
+  an hour through the configured cache.
   `outbound:check` fails if a schedule still uses either old name.
 - **The package schedules `outbound:prune-deliveries` itself** (daily,
   `onOneServer()`, `withoutOverlapping()`): remove the product's own
@@ -86,6 +86,24 @@ from `develop`.
   A product that resolves the contract independently must supply its own
   binding when the switch is off.
 - Add `php artisan outbound:check` to the deploy (F2).
+
+### Inbound claim stores
+
+- Inbound dedupe uses Laravel locks on Redis or the database. Apply
+  Laravel's cache and cache-lock migrations before deploying a database
+  store. File, Memcached and DynamoDB lock release cannot atomically
+  verify ownership, so move a verifier using them to a supported store.
+  Excubia and Signaculum both default to the database store in their
+  versioned config. Check the actual deploy setting before upgrading.
+  Stop old verifier processes before starting the updated ones. Keep
+  PHP and Redis host clocks synchronized. Old beta replay records stay
+  active until expiry and cannot be released by the new lock API. A
+  redelivery for one of those records is dropped until its original TTL
+  expires. For Redis, the old records use the cache connection and the
+  new locks use the configured lock connection. If changing the cache
+  backend, connection or namespace, wait out the previous replay TTL
+  before resuming verification. Also wait before rolling back to a beta
+  that reads only the old cache records. Confirm with `outbound:check`.
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 

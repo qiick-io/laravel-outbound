@@ -53,9 +53,13 @@ while IFS= read -r path; do
       test_paths=(tests/Unit tests/Feature/RealTransport) ;;
     src/Console/Commands/CheckOutboundCommand.php)
       test_paths=(tests/Feature/CheckCommandTest.php) ;;
+    src/Webhooks/CacheSeenWebhookIdStore.php)
+      test_paths=(tests/Unit tests/Feature/Webhooks/DatabaseClaimTest.php) ;;
+    src/Webhooks/DatabaseWebhookIdLock.php)
+      test_paths=(tests/Feature/Webhooks/DatabaseClaimTest.php) ;;
     src/Erasure/*|src/Events/SubjectErasedEvent.php)
       test_paths=(tests/Feature/Erasure tests/Erasure) ;;
-    src/Delivery/DeliveryAttempt.php|src/Http/*|src/Retry/RetrySchedule.php|src/Retry/SystemRandomizer.php|src/Ssrf/*|src/Testing/*|src/Webhooks/CacheSeenWebhookIdStore.php|src/Webhooks/StandardWebhook*.php|src/Webhooks/WebhookIdClaim.php|src/Webhooks/WebhookMessage.php|src/Webhooks/WebhookSecret.php)
+    src/Delivery/DeliveryAttempt.php|src/Http/*|src/Retry/RetrySchedule.php|src/Retry/SystemRandomizer.php|src/Ssrf/*|src/Testing/*|src/Webhooks/StandardWebhook*.php|src/Webhooks/WebhookIdClaim.php|src/Webhooks/WebhookMessage.php|src/Webhooks/WebhookSecret.php)
       test_paths=(tests/Unit) ;;
     src/Console/*|src/Delivery/*|src/Events/*|src/Listeners/*|src/Models/*|src/Notifications/*|src/Retry/*|src/Webhooks/*)
       test_paths=(tests/Unit/Retry tests/Feature/Webhooks) ;;
