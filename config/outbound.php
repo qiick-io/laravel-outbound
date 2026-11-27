@@ -18,7 +18,7 @@ declare(strict_types=1);
 $integer = static fn (mixed $value): ?int => is_string($value) || is_int($value)
     ? filter_var($value, FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE)
     : null;
-$boolean = static fn (mixed $value): ?bool => is_string($value) || is_bool($value)
+$boolean = static fn (mixed $value): ?bool => (is_string($value) && trim($value) !== '') || is_bool($value)
     ? filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE)
     : null;
 
