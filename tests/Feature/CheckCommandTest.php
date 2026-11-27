@@ -10,6 +10,13 @@ use Illuminate\Support\Facades\Schema;
  * config value of the wrong type already stops the boot (F1).
  */
 
+beforeEach(function (): void {
+    // The test database migrates on first use: before a test changes the
+    // environment (production asks to confirm) or the users table the
+    // migrations reference.
+    expect(Schema::hasTable('webhook_endpoints'))->toBeTrue();
+});
+
 it('passes on a migrated database with a usable dedupe store', function (): void {
     $this->artisan('outbound:check')
         ->expectsOutput('outbound: configuration and environment are ready.')
@@ -17,8 +24,6 @@ it('passes on a migrated database with a usable dedupe store', function (): void
 });
 
 it('fails on a dedupe store that is not shared between processes', function (): void {
-    // The test database migrates lazily, on first use: before production, which would ask to confirm.
-    expect(Schema::hasTable('webhook_endpoints'))->toBeTrue();
     $this->app->detectEnvironment(fn (): string => 'production');
     config()->set('cache.default', 'array');
 
