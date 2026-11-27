@@ -185,13 +185,19 @@ an http(s) proxy URL, null or an empty string stops the boot.
   messages above.
 
 
-### Testing `PinnedHttpClient`
+### Isolated policies and testing
+
+Use `OutboundHttpStackData::make($hostResolver, limits: $limits)` for an
+isolated guard and client. The default requires HTTPS and refuses private
+addresses. Set `allowPrivateHosts` and `httpsOnly` explicitly when the
+integration has a different trusted deployment policy.
 
 `Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
 reach `PinnedHttpClient` when the service provider binds a private factory. Each
 transfer also strips a request-level `handler` from factory global options so a
-poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factory
-from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`).
+poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, pass
+`Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` as the
+`httpFactory` argument to `OutboundHttpStackData::make()`.
 
 
 ### Standard Webhooks

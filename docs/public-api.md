@@ -18,6 +18,10 @@ Resolve `PinnedHttpClient`, `RemoteUrlGuard`, `StandardWebhookSigner`,
 are `@internal`. The verifier requires a `SeenWebhookIdStore` and returns
 the winning `WebhookIdClaim` after successful verification.
 
+Use `OutboundHttpStackData::make()` for a caller-owned URL policy. It returns
+an immutable pair of `guard` and `client` sharing that policy and the supplied
+transport limits. Its defaults refuse private hosts and require HTTPS.
+
 ## Classes, interfaces and enums
 
 The public API covers class names, public members without an `@internal`
@@ -73,6 +77,7 @@ expose their tables, columns, casts, relations and scopes.
 - `HttpRequestOptions` (class)
 - `OutboundHttpException` (class)
 - `OutboundHttpLimits` (class)
+- `OutboundHttpStackData` (class)
 - `OutboundRequest` (class)
 - `PinnedHttpClient` (class)
 
