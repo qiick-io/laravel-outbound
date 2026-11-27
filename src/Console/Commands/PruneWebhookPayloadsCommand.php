@@ -22,6 +22,7 @@ use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
  */
 final class PruneWebhookPayloadsCommand extends Command
 {
+    /** @internal Temporary beta alias. */
     public const LEGACY_NAME = 'outbound:webhooks:prune';
 
     /** @var string */

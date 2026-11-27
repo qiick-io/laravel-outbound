@@ -34,15 +34,20 @@ from `develop`.
   `outbound:webhooks:work` is `outbound:work-deliveries` and
   `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
   product's schedule (`routes/console.php`) and any deploy script. The old
-  names remain hidden for one beta and log a deprecation on every use.
+  names remain hidden through the betas and are removed before
+  `1.0.0-rc.1`. The old worker command logs at most once an hour through
+  the configured cache.
   `outbound:check` fails if a schedule still uses either old name.
 - **The package schedules `outbound:prune-deliveries` itself** (daily,
   `onOneServer()`, `withoutOverlapping()`): remove the product's own
   `Schedule::command(...prune...)` line, or set `OUTBOUND_WEBHOOK_SCHEDULE=false`
   to keep it. A published config gets the new `outbound.webhooks.schedule`
   key from the package default.
-- **The owner email listener is registered only while
-  `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+- **The owner email listener and the package's default
+  `WebhookEndpointNoticeRecipientsContract` binding are registered only
+  while `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+  A product that resolves the contract independently must supply its own
+  binding when the switch is off.
 - Add `php artisan outbound:check` to the deploy (F2).
 
 ## To 0.2.0-beta.3 (endpoint private hosts)

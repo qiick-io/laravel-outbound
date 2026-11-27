@@ -2,7 +2,10 @@
 
 declare(strict_types=1);
 
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Support\Facades\Schema;
 
 /*
@@ -66,6 +69,7 @@ it('skips the users table when the product leaves it empty, as the migrations do
 })->with(['empty' => [''], 'null' => [null]]);
 
 it('fails deploy checks on a scheduled deprecated outbound command', function (string $legacy, string $replacement): void {
+    config()->set('outbound.webhooks.schedule', false);
     app(Schedule::class)->command($legacy);
 
     $this->artisan('outbound:check')
@@ -75,3 +79,34 @@ it('fails deploy checks on a scheduled deprecated outbound command', function (s
     'work' => ['outbound:webhooks:work', 'outbound:work-deliveries'],
     'prune' => ['outbound:webhooks:prune', 'outbound:prune-deliveries'],
 ]);
+
+it('fails on a product prune schedule while the package owns the schedule', function (string $command): void {
+    app(Schedule::class)->command($command);
+
+    $this->artisan('outbound:check')
+        ->expectsOutput("schedule: remove {$command}; the package schedules outbound:prune-deliveries.")
+        ->assertFailed();
+})->with(['outbound:webhooks:prune', 'outbound:prune-deliveries']);
+
+it('fails when the cache reports that it did not record the probe', function (): void {
+    $this->app->instance(CacheRepository::class, new Repository(new class extends ArrayStore
+    {
+        public function add($key, $value, $seconds): bool
+        {
+            return false;
+        }
+    }));
+
+    $this->artisan('outbound:check')
+        ->expectsOutput('cache.default: the webhook id dedupe store did not record the probe claim.')
+        ->assertFailed();
+});
+
+it('reports a cache resolution exception without printing its message', function (): void {
+    $this->app->bind(CacheRepository::class, static fn () => throw new RuntimeException('fixture cache error'));
+
+    $this->artisan('outbound:check')
+        ->expectsOutput('cache.default: could not resolve the webhook id dedupe store (RuntimeException).')
+        ->doesntExpectOutputToContain('fixture cache error')
+        ->assertFailed();
+});

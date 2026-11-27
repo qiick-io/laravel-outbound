@@ -246,7 +246,9 @@ final class OutboundServiceProvider extends ServiceProvider
 
         if (self::configBool($config, 'outbound.webhooks.schedule')) {
             $this->callAfterResolving(Schedule::class, static function (Schedule $schedule): void {
-                $schedule->command('outbound:prune-deliveries')->daily()->onOneServer()->withoutOverlapping();
+                $schedule->command('outbound:prune-deliveries')
+                    ->name(CheckOutboundCommand::PACKAGE_PRUNE_SCHEDULE)
+                    ->daily()->onOneServer()->withoutOverlapping();
             });
         }
 
@@ -265,7 +267,7 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class, CheckOutboundCommand::class]);
 
-            // Keep beta schedules working until the product can deploy the new names.
+            // shortcut: remove before 1.0.0-rc.1. Keep beta schedules running in the meantime.
             Artisan::starting(static function (Artisan $artisan): void {
                 $artisan->add((new WorkWebhookDeliveriesCommand)->setName(WorkWebhookDeliveriesCommand::LEGACY_NAME)->setHidden());
                 $artisan->add((new PruneWebhookPayloadsCommand)->setName(PruneWebhookPayloadsCommand::LEGACY_NAME)->setHidden());
