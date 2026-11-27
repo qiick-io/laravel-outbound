@@ -18,6 +18,11 @@ from `develop`.
 
 ## Unreleased (erasure)
 
+- Refresh a published `config/outbound.php` from the updated vendor template
+  and reapply your overrides. Older copies cast environment values before
+  the package can validate them. An explicit null or blank is invalid for
+  boolean and integer settings. Use an unpadded integer such as `30` in
+  place of `030`. Rebuild Laravel's config cache after the change.
 - `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) and
   `claimed_triggered_by` (nullable, indexed, foreign key to the users table
   like `next_attempt_triggered_by`) are new in the `create_` migration, and
