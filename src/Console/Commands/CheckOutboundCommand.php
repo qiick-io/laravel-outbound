@@ -7,8 +7,8 @@ namespace Qiick\Outbound\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Qiick\Outbound\Models\WebhookDelivery;
 use Qiick\Outbound\Models\WebhookDeliveryAttempt;
 use Qiick\Outbound\Models\WebhookEndpoint;
@@ -37,15 +37,6 @@ final class CheckOutboundCommand extends Command
 
     /** @var string */
     protected $description = 'Check the outbound configuration and environment for a deploy';
-
-    /** @var list<class-string<Model>> */
-    private const MODEL_CLASSES = [
-        WebhookEndpoint::class,
-        WebhookEndpointSecret::class,
-        WebhookSubscription::class,
-        WebhookDelivery::class,
-        WebhookDeliveryAttempt::class,
-    ];
 
     public function handle(Schedule $schedule): int
     {
@@ -78,7 +69,8 @@ final class CheckOutboundCommand extends Command
 
         foreach ($schedule->events() as $event) {
             if ($event->description === self::PACKAGE_PRUNE_SCHEDULE
-                || preg_match('/(?:^|\s)[\'"]?artisan[\'"]?\s+[\'"]?(outbound:webhooks:\w+|outbound:prune-deliveries)[\'"]?(?:\s|$)/', $event->command ?? '', $matches) !== 1) {
+                || $event->command === null
+                || preg_match('/(?:^|\s)[\'"]?artisan[\'"]?\s+[\'"]?(outbound:webhooks:\w+|outbound:prune-deliveries)[\'"]?(?:\s|$)/', $event->command, $matches) !== 1) {
                 continue;
             }
 
@@ -115,7 +107,7 @@ final class CheckOutboundCommand extends Command
         // A probe claim, given back at once: a store that cannot be reached
         // (a database store without its table, Redis down) fails here, not
         // on the first webhook.
-        $probeClaim = WebhookIdClaim::generate('outbound:check', bin2hex(random_bytes(8)));
+        $probeClaim = WebhookIdClaim::generate('outbound:check', Str::uuid()->toString());
 
         try {
             if (! $store->claim($probeClaim, 60)) {
@@ -140,9 +132,16 @@ final class CheckOutboundCommand extends Command
     {
         $problems = [];
 
-        foreach (self::MODEL_CLASSES as $modelClass) {
-            $model = new $modelClass;
+        $endpoint = new WebhookEndpoint;
+        $models = [
+            $endpoint,
+            new WebhookEndpointSecret,
+            new WebhookSubscription,
+            new WebhookDelivery,
+            new WebhookDeliveryAttempt,
+        ];
 
+        foreach ($models as $model) {
             if (! Schema::connection($model->getConnectionName())->hasTable($model->getTable())) {
                 $problems[] = "database: table {$model->getTable()} is missing (run the migrations).";
             }
@@ -151,7 +150,7 @@ final class CheckOutboundCommand extends Command
         $usersTable = $this->laravel->make('config')->get('outbound.webhooks.users_table');
 
         // Null or empty: the migrations create no users foreign keys.
-        if (is_string($usersTable) && $usersTable !== '' && ! Schema::connection((new WebhookEndpoint)->getConnectionName())->hasTable($usersTable)) {
+        if (is_string($usersTable) && $usersTable !== '' && ! Schema::connection($endpoint->getConnectionName())->hasTable($usersTable)) {
             $problems[] = "outbound.webhooks.users_table: table {$usersTable} is missing.";
         }
 

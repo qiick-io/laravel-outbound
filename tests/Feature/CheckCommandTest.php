@@ -6,6 +6,9 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /*
@@ -27,6 +30,27 @@ it('passes on a migrated database with a usable dedupe store', function (): void
         ->assertSuccessful();
 });
 
+it('gives the probe a short TTL and releases the claim on success', function (): void {
+    $cache = new class extends ArrayStore
+    {
+        public array $seenTtls = [];
+
+        public function add($key, $value, $seconds): bool
+        {
+            $this->seenTtls[] = $seconds;
+
+            return $this->put($key, $value, $seconds);
+        }
+    };
+    $this->app->instance(CacheRepository::class, new Repository($cache));
+    app(Schedule::class)->call(static fn () => null);
+
+    $this->artisan('outbound:check')->assertSuccessful();
+
+    expect($cache->seenTtls)->toBe([60])
+        ->and($cache->all())->toBe([]);
+});
+
 it('fails on a dedupe store that is not shared between processes', function (): void {
     $this->app->detectEnvironment(fn (): string => 'production');
     config()->set('cache.default', 'array');
@@ -44,6 +68,29 @@ it('fails on a missing webhook table, naming it', function (): void {
         ->assertFailed();
 });
 
+it('inspects every package model table on its connection', function (string $table): void {
+    $originalConnection = DB::getDefaultConnection();
+    config()->set('database.connections.outbound_probe', ['driver' => 'sqlite', 'database' => ':memory:']);
+    $schema = Schema::connection('outbound_probe');
+
+    try {
+        foreach (['users', 'webhook_endpoints', 'webhook_endpoint_secrets', 'webhook_subscriptions', 'webhook_deliveries', 'webhook_delivery_attempts'] as $expectedTable) {
+            if ($expectedTable !== $table) {
+                $schema->create($expectedTable, static fn (Blueprint $blueprint) => $blueprint->id());
+            }
+        }
+
+        DB::setDefaultConnection('outbound_probe');
+
+        $this->artisan('outbound:check')
+            ->expectsOutput("database: table {$table} is missing (run the migrations).")
+            ->assertFailed();
+    } finally {
+        DB::setDefaultConnection($originalConnection);
+        DB::purge('outbound_probe');
+    }
+})->with(['webhook_endpoints', 'webhook_endpoint_secrets', 'webhook_subscriptions', 'webhook_deliveries']);
+
 it('fails on a users table that does not exist, naming the key', function (): void {
     config()->set('outbound.webhooks.users_table', 'accounts');
 
@@ -58,7 +105,7 @@ it('fails on a cache that cannot hold a claim, naming the store', function (): v
     config()->set('cache.stores.database.table', 'missing_cache');
 
     $this->artisan('outbound:check')
-        ->expectsOutputToContain('cache.default: the webhook id dedupe store cannot claim an id')
+        ->expectsOutput('cache.default: the webhook id dedupe store cannot claim an id ('.QueryException::class.').')
         ->assertFailed();
 });
 
