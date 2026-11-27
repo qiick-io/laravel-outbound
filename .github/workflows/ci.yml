@@ -94,16 +94,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Lowest supported Guzzle 7 (composer.json ^7.15.2 || ^8.0.1): the
-          # first 7.x without a published advisory, and like every 7.x since
-          # 7.12 it pins CURLOPT_NOPROXY, so NO_PROXY cannot send around the
-          # egress proxy.
-          - guzzle: '7.15.2'
-            prefer: lowest
-          # Current stable Guzzle 8.
-          - guzzle: '8.5'
-            prefer: stable
+        # Exact supported floors from composer.json. A newer patch must not
+        # mask an advisory or a transport regression at either floor.
+        guzzle: ['7.15.2', '8.0.1']
     steps:
       - name: Checkout
         # actions/checkout@v4.2.2
@@ -122,16 +115,11 @@ jobs:
         run: |
           composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
           composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0" "illuminate/database:^13.0"
-          composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
-          if [ "${{ matrix.prefer }}" = "lowest" ]; then
-            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
-          else
-            composer update --no-interaction --prefer-dist --with-all-dependencies
-          fi
-          composer show guzzlehttp/guzzle | head -5
+          composer require --no-interaction --no-update "guzzlehttp/guzzle:${{ matrix.guzzle }}"
+          composer update --no-interaction --prefer-dist --with-all-dependencies
+          composer show guzzlehttp/guzzle
 
-      # Evidence for the supported floor: the lowest Guzzle a product can
-      # resolve has no published advisory.
+      # Fail on an advisory affecting either supported floor or its dependencies.
       - name: Composer audit
         run: composer audit
 
