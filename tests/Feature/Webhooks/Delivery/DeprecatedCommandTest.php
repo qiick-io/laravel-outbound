@@ -7,15 +7,24 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 it('accepts the deprecated worker command with its original options and logs the replacement', function (): void {
+    $this->freezeSecond();
     Log::spy();
 
     $this->artisan('outbound:webhooks:work', ['--limit' => 1, '--max-seconds' => 1])
         ->expectsOutput('Sent 0 webhook delivery attempt(s).')
         ->assertSuccessful();
+    expect(Cache::get('outbound:deprecated-work-command'))->toBeTrue();
+    Log::shouldHaveReceived('warning')->with('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.')->once();
+
+    $this->travel(3599)->seconds();
+    $this->artisan('outbound:webhooks:work')->assertSuccessful();
+    Log::shouldHaveReceived('warning')->with('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.')->once();
+
+    $this->travel(1)->seconds();
     $this->artisan('outbound:webhooks:work')->assertSuccessful();
 
     expect(Artisan::all()['outbound:webhooks:work']->isHidden())->toBeTrue();
-    Log::shouldHaveReceived('warning')->with('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.')->once();
+    Log::shouldHaveReceived('warning')->with('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.')->twice();
 });
 
 it('accepts the deprecated prune command and its dry-run option and logs the replacement', function (): void {
