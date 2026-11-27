@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Webhooks;
 
 use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\DatabaseLock;
 use Illuminate\Cache\DatabaseStore;
 use Illuminate\Cache\RedisStore;
 use Illuminate\Contracts\Cache\LockProvider;
@@ -40,7 +41,9 @@ final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
                 return false;
             }
 
-            return $this->locks->lock($this->keyFor($claim, 'lock:'), max(1, $ttlSeconds), $claim->token)->get() === true;
+            $lock = $this->locks->lock($this->keyFor($claim, 'lock:'), max(1, $ttlSeconds), $claim->token);
+
+            return $lock instanceof DatabaseLock ? DatabaseWebhookIdLock::acquireClaim($lock) : $lock->get() === true;
         } catch (WebhookException $exception) {
             throw $exception;
         } catch (Throwable $exception) {

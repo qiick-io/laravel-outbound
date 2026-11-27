@@ -225,7 +225,7 @@ jobs:
   # each server engine, not only on in-memory SQLite. Webhook ids and event
   # types are case-sensitive, and the MySQL family's default collations are not.
   databases:
-    name: Pest on ${{ matrix.database.name }}
+    name: Pest on ${{ matrix.database.name }}${{ matrix.suffix }}
     needs: package-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -233,6 +233,12 @@ jobs:
       fail-fast: false
       matrix:
         database: ${{ fromJSON(needs.package-matrix.outputs.databases) }}
+        dependency-version: [stable]
+        include:
+          # app-ui v0.15.0 exports PostgreSQL as the first server database.
+          - database: ${{ fromJSON(needs.package-matrix.outputs.databases)[0] }}
+            dependency-version: lowest
+            suffix: ' Laravel 12 lowest'
     services:
       database:
         # v0.15.0's path classifier misses some database users. Until the
@@ -262,7 +268,14 @@ jobs:
 
       - name: Install dependencies
         if: needs.package-matrix.outputs.docs-only != 'true'
-        run: composer update --no-interaction --prefer-dist --with-all-dependencies
+        run: |
+          if [ "${{ matrix.dependency-version }}" = "lowest" ]; then
+            composer require --no-interaction --dev --no-update "orchestra/testbench:^10.0"
+            composer require --no-interaction --no-update "illuminate/support:^12.0"
+            composer update --no-interaction --prefer-dist --prefer-lowest --with-all-dependencies
+          else
+            composer update --no-interaction --prefer-dist --with-all-dependencies
+          fi
 
       - name: Pest
         if: needs.package-matrix.outputs.docs-only != 'true'
