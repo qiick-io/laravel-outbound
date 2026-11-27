@@ -79,10 +79,7 @@ final class RemoteUrlGuard
         }
 
         if ($options->enforceHostAllowlist) {
-            $allowed = array_map(
-                static fn (string $name): string => strtolower($name),
-                $options->hostAllowlist,
-            );
+            $allowed = array_map($this->allowlistForm(...), $options->hostAllowlist);
 
             if ($allowed === [] || ! in_array($host, $allowed, true)) {
                 throw new UnsafeUrl('Host is not on the allowlist.');
@@ -169,6 +166,25 @@ final class RemoteUrlGuard
     }
 
     /**
+     * An allowlist entry in the form normalizeHost() gives the URL host, so
+     * `Bücher.example` and `example.test.` match the hosts they name. An
+     * entry that is not a valid host (a typo, an empty string) keeps its
+     * lowercased spelling, which no normalized host ever equals.
+     */
+    private function allowlistForm(string $entry): string
+    {
+        if (filter_var($entry, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            return self::canonicalIp($entry);
+        }
+
+        try {
+            return $this->normalizeHost(strtolower($entry));
+        } catch (UnsafeUrl) {
+            return strtolower($entry);
+        }
+    }
+
+    /**
      * @throws UnsafeUrl
      */
     private function normalizeHost(string $host): string
@@ -208,8 +224,10 @@ final class RemoteUrlGuard
 
         // Nontransitional UTS46: full-width digits/punctuation must not mint an
         // IP-like hostname (closed below). Underscores stay allowed (curl/S3).
+        // The whole host, root dot included: stripping a dot before and
+        // another after would read `example.test..` as `example.test`.
         $ascii = idn_to_ascii(
-            $name,
+            $host,
             IDNA_NONTRANSITIONAL_TO_ASCII,
             INTL_IDNA_VARIANT_UTS46,
         );
@@ -218,7 +236,7 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('URL is invalid.');
         }
 
-        // Ideographic full stop and similar can map to '.' — strip after IDN.
+        // One root dot, written or mapped from an ideographic full stop.
         if (str_ends_with($ascii, '.')) {
             $ascii = substr($ascii, 0, -1);
         }

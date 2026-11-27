@@ -18,6 +18,11 @@ from `develop`.
 
 ## Unreleased (erasure)
 
+- Refresh a published `config/outbound.php` from the updated vendor template
+  and reapply your overrides. Older copies cast environment values before
+  the package can validate them. An explicit null or blank is invalid for
+  boolean and integer settings. Use an unpadded integer such as `30` in
+  place of `030`. Rebuild Laravel's config cache after the change.
 - Guzzle must be at least 7.15.2 on the 7 line or 8.0.1 on the 8 line
   (`composer update guzzlehttp/guzzle`): the older releases have published
   advisories, one of them a host check bypass.

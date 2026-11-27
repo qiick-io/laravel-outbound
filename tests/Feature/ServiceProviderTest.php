@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Arr;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
@@ -186,7 +187,61 @@ it('refuses to boot with a config value of the wrong type, naming the key', func
 })->with([
     'an integer as a string' => ['outbound.webhooks.payload_retention_days', '30', 'outbound.webhooks.payload_retention_days must be an integer.'],
     'a boolean as a string' => ['outbound.migrations.load', 'yes', 'outbound.migrations.load must be true or false.'],
+    // Keys read only when a verifier, retry policy or coordinator is first built.
+    'the replay tolerance' => ['outbound.webhooks.replay_tolerance_seconds', '300', 'outbound.webhooks.replay_tolerance_seconds must be an integer.'],
+    'the signature cap' => ['outbound.webhooks.max_signatures', 5.0, 'outbound.webhooks.max_signatures must be an integer.'],
+    'the retry jitter' => ['outbound.webhooks.retry_jitter_seconds', '5', 'outbound.webhooks.retry_jitter_seconds must be an integer.'],
+    'the Retry-After switch' => ['outbound.webhooks.respect_retry_after', 1, 'outbound.webhooks.respect_retry_after must be true or false.'],
+    'the webhook timeout' => ['outbound.webhooks.timeout_seconds', '10', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'the default concurrency' => ['outbound.webhooks.default_max_concurrency', '4', 'outbound.webhooks.default_max_concurrency must be an integer.'],
+    'the response cap' => ['outbound.http.max_response_bytes', '65536', 'outbound.http.max_response_bytes must be an integer.'],
+    'the legacy secret switch' => ['outbound.webhooks.allow_raw_legacy_secret', 'false', 'outbound.webhooks.allow_raw_legacy_secret must be true or false.'],
+    'a nested switch' => ['outbound.webhooks.auto_disable.notify_owner', 'no', 'outbound.webhooks.auto_disable.notify_owner must be true or false.'],
+    'a whole section' => ['outbound.ssrf', 'strict', 'outbound.ssrf must be an array.'],
+    'the retry preset' => ['outbound.webhooks.retry_preset', 'fast', 'outbound.webhooks.retry_preset must be standard or short.'],
+    'the scope column' => ['outbound.webhooks.scope_column', 7, 'outbound.webhooks.scope_column must be a string.'],
+    'an explicit null where an integer belongs' => ['outbound.http.max_response_bytes', null, 'outbound.http.max_response_bytes must be an integer.'],
+    'the legacy profiles as a string' => ['outbound.webhooks.legacy_profiles', 'legacy-1', 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'a legacy profile without a name' => ['outbound.webhooks.legacy_profiles', ['test.legacy-profile'], 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'a legacy profile without a binding name' => ['outbound.webhooks.legacy_profiles', ['legacy' => false], 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'the endpoint page URL as an array' => ['outbound.webhooks.auto_disable.endpoint_url', ['https://app.example/hooks'], 'outbound.webhooks.auto_disable.endpoint_url must be a string.'],
+    'the users table as a boolean' => ['outbound.webhooks.users_table', false, 'outbound.webhooks.users_table must be a string.'],
 ]);
+
+it('validates every shipped config key at boot', function (string $key, mixed $invalidValue): void {
+    $this->configBeforeBoot = [$key => $invalidValue];
+
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $key);
+})->with(function (): iterable {
+    $defaults = require __DIR__.'/../../config/outbound.php';
+
+    foreach (Arr::dot(['outbound' => $defaults]) as $key => $value) {
+        yield $key => [$key, is_array($value) ? false : []];
+    }
+});
+
+it('reads the types from the shipped schema, not from the environment', function (): void {
+    // env() turns "false" into a boolean: the default must not change type with it.
+    putenv('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL=false');
+    $this->configBeforeBoot = ['outbound.webhooks.auto_disable.endpoint_url' => 'https://app.example/hooks/{endpoint}'];
+
+    try {
+        $this->refreshApplication();
+
+        expect(config('outbound.webhooks.auto_disable.endpoint_url'))->toBe('https://app.example/hooks/{endpoint}');
+    } finally {
+        putenv('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL');
+        $this->configBeforeBoot = [];
+        $this->refreshApplication();
+    }
+});
+
+it('lets products opt out of the users foreign keys with a null table', function (): void {
+    $this->configBeforeBoot = ['outbound.webhooks.users_table' => null];
+    $this->refreshApplication();
+
+    expect(config('outbound.webhooks.users_table'))->toBeNull();
+});
 
 it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {
     config()->set('outbound.webhooks.retry_preset', $preset);
@@ -199,7 +254,7 @@ it('refuses a retry preset that is not a known name', function (mixed $preset, s
 ]);
 
 it('uses the package default for a key a published config lacks', function (): void {
-    config()->set('outbound.webhooks.max_secrets', null);
+    config()->set('outbound.webhooks', Arr::except(config('outbound.webhooks'), 'max_secrets'));
     $this->app->forgetInstance(StandardWebhookSigner::class);
     $secrets = array_map(fn (): WebhookSecret => WebhookSecret::generate(), range(1, 5));
 
@@ -222,3 +277,22 @@ it('gives the guard the metadata policy a product binds', function (): void {
 
     expect($result['ok'] ? null : $result['reason'])->toBe('Host is not allowed.');
 });
+
+it('refuses a malformed boolean or integer variable instead of casting it', function (string $variable, string $value, string $message): void {
+    putenv("{$variable}={$value}");
+
+    try {
+        expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $message);
+    } finally {
+        putenv($variable);
+        $this->refreshApplication();
+    }
+})->with([
+    // A cast would read this typo as true and open private hosts.
+    'a boolean typo' => ['OUTBOUND_ALLOW_PRIVATE_HOSTS', 'flase', 'outbound.ssrf.allow_private_hosts must be true or false.'],
+    'an integer in words' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'ten', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'a boolean as an integer' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'true', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'null as a boolean' => ['OUTBOUND_HTTPS_ONLY', 'null', 'outbound.ssrf.https_only must be true or false.'],
+    'an empty boolean' => ['OUTBOUND_HTTPS_ONLY', '', 'outbound.ssrf.https_only must be true or false.'],
+    'a zero-padded integer' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', '030', 'outbound.webhooks.timeout_seconds must be an integer.'],
+]);
