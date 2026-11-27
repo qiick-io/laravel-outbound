@@ -186,6 +186,19 @@ it('refuses to boot with a config value of the wrong type, naming the key', func
 })->with([
     'an integer as a string' => ['outbound.webhooks.payload_retention_days', '30', 'outbound.webhooks.payload_retention_days must be an integer.'],
     'a boolean as a string' => ['outbound.migrations.load', 'yes', 'outbound.migrations.load must be true or false.'],
+    // Keys read only when a verifier, retry policy or coordinator is first built.
+    'the replay tolerance' => ['outbound.webhooks.replay_tolerance_seconds', '300', 'outbound.webhooks.replay_tolerance_seconds must be an integer.'],
+    'the signature cap' => ['outbound.webhooks.max_signatures', 5.0, 'outbound.webhooks.max_signatures must be an integer.'],
+    'the retry jitter' => ['outbound.webhooks.retry_jitter_seconds', '5', 'outbound.webhooks.retry_jitter_seconds must be an integer.'],
+    'the Retry-After switch' => ['outbound.webhooks.respect_retry_after', 1, 'outbound.webhooks.respect_retry_after must be true or false.'],
+    'the webhook timeout' => ['outbound.webhooks.timeout_seconds', '10', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'the default concurrency' => ['outbound.webhooks.default_max_concurrency', '4', 'outbound.webhooks.default_max_concurrency must be an integer.'],
+    'the response cap' => ['outbound.http.max_response_bytes', '65536', 'outbound.http.max_response_bytes must be an integer.'],
+    'the legacy secret switch' => ['outbound.webhooks.allow_raw_legacy_secret', 'false', 'outbound.webhooks.allow_raw_legacy_secret must be true or false.'],
+    'a nested switch' => ['outbound.webhooks.auto_disable.notify_owner', 'no', 'outbound.webhooks.auto_disable.notify_owner must be true or false.'],
+    'a whole section' => ['outbound.ssrf', 'strict', 'outbound.ssrf must be an array.'],
+    'the retry preset' => ['outbound.webhooks.retry_preset', 'fast', 'outbound.webhooks.retry_preset must be standard or short.'],
+    'the scope column' => ['outbound.webhooks.scope_column', 7, 'outbound.webhooks.scope_column must be a string.'],
 ]);
 
 it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {

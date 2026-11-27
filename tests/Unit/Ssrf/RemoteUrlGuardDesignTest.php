@@ -145,6 +145,25 @@ it('lowercases allowlist entries so mixed-case config still matches', function (
         ->and(ssrfGuardResolving()->tryAuthorize('https://other.test/', $options)['ok'])->toBeFalse();
 });
 
+it('matches an allowlist entry written in Unicode or with a trailing dot, as the URL host is', function (string $allowlistEntry, string $url): void {
+    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: [$allowlistEntry]);
+
+    expect(ssrfGuardResolving()->tryAuthorize($url, $options)['ok'])->toBeTrue()
+        ->and(ssrfGuardResolving()->tryAuthorize('https://other.test/', $options)['ok'])->toBeFalse();
+})->with([
+    'a Unicode name' => ['Bücher.example', 'https://xn--bcher-kva.example/'],
+    'a Unicode name against a Unicode URL' => ['Bücher.example', 'https://bücher.example/'],
+    'a trailing dot' => ['example.test.', 'https://example.test/'],
+    'a trailing dot against a trailing-dot URL' => ['example.test.', 'https://example.test./'],
+    'an IPv6 address written out in full' => ['2606:4700:0:0:0:0:0:1111', 'https://[2606:4700::1111]/'],
+]);
+
+it('never lets an allowlist entry that is not a host match anything', function (): void {
+    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: ['exa mple.test', '']);
+
+    expect(ssrfGuardResolving()->tryAuthorize('https://example.test/', $options)['ok'])->toBeFalse();
+});
+
 it('exposes tryAuthorize ok/reason keys and destination', function (): void {
     $ok = ssrfGuardResolving()->tryAuthorize('https://example.test/');
     $bad = ssrfGuardResolving()->tryAuthorize('https://127.0.0.1/');

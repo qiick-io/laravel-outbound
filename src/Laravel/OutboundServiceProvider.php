@@ -134,8 +134,12 @@ final class OutboundServiceProvider extends ServiceProvider
         $this->app->singleton(DatabaseDeliveryStore::class, function (Application $app): DatabaseDeliveryStore {
             $scopeColumn = $app->make(ConfigRepository::class)->get('outbound.webhooks.scope_column');
 
+            if ($scopeColumn !== null && ! is_string($scopeColumn)) {
+                throw new InvalidArgumentException('outbound.webhooks.scope_column must be a string.');
+            }
+
             return new DatabaseDeliveryStore(
-                scopeColumn: is_string($scopeColumn) && $scopeColumn !== '' ? $scopeColumn : null,
+                scopeColumn: $scopeColumn !== null && $scopeColumn !== '' ? $scopeColumn : null,
                 payloadRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.payload_retention_days'),
                 deliveryRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.delivery_retention_days'),
             );
@@ -174,8 +178,7 @@ final class OutboundServiceProvider extends ServiceProvider
                 $app->make(OutboundHttpLimits::class),
                 timeoutSeconds: self::configInt($config, 'outbound.webhooks.timeout_seconds'),
                 connectTimeoutSeconds: self::configInt($config, 'outbound.http.connect_timeout_seconds'),
-                defaultRetryPreset: WebhookRetryPresetEnum::tryFrom(self::configString($config, 'outbound.webhooks.retry_preset'))
-                    ?? throw new InvalidArgumentException('outbound.webhooks.retry_preset must be standard or short.'),
+                defaultRetryPreset: self::defaultRetryPreset($config),
                 defaultMaxConcurrency: self::configInt($config, 'outbound.webhooks.default_max_concurrency'),
                 maxResponseBytes: self::configInt($config, 'outbound.http.max_response_bytes'),
                 exceptionHandler: $app->make(ExceptionHandler::class),
@@ -200,12 +203,19 @@ final class OutboundServiceProvider extends ServiceProvider
      * migrations unless `outbound.migrations.load` is off; a product that
      * turns it off publishes them instead (standards review R1).
      *
+     * Every `outbound.*` value is read once here, so a value of the wrong
+     * type stops the boot naming its key (fleet convention F1) instead of
+     * failing at the first delivery or verification.
+     *
      * @throws WebhookException when `outbound.webhooks.max_secrets` is outside
      *                          1–4: the fixed limit is refused at boot, not at
      *                          the first rotation
+     * @throws InvalidArgumentException when a value has the wrong type or range
      */
     public function boot(): void
     {
+        $config = $this->app->make(ConfigRepository::class);
+
         $this->app->make(SecretRotator::class);
         // Refuses auto-disable thresholds below 1 and a payload retention
         // shorter than the retry schedule at boot too.
@@ -213,11 +223,16 @@ final class OutboundServiceProvider extends ServiceProvider
         $this->app->make(DatabaseDeliveryStore::class);
         // Refuses an egress proxy that is not an http(s) proxy URL at boot.
         $this->app->make(PinnedHttpClient::class);
+        // The other services are built on first use, after a test or a
+        // product has changed the config or a binding; their values are
+        // checked here against the type of the package default.
+        self::assertConfigTypes($config, self::packageDefaults(), 'outbound');
+        self::defaultRetryPreset($config);
         $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
         $migrationsPath = __DIR__.'/../../database/migrations';
 
-        if (self::configBool($this->app->make(ConfigRepository::class), 'outbound.migrations.load')) {
+        if (self::configBool($config, 'outbound.migrations.load')) {
             $this->loadMigrationsFrom($migrationsPath);
         }
 
@@ -255,6 +270,46 @@ final class OutboundServiceProvider extends ServiceProvider
         }
 
         return $profiles;
+    }
+
+    /**
+     * Checks every configured value whose package default is an integer, a
+     * boolean or a string against that type, and every section against an
+     * array. Defaults that are null or an empty list (an optional proxy, the
+     * legacy profiles) are checked where they are read.
+     *
+     * @param  array<mixed>  $defaults
+     *
+     * @throws InvalidArgumentException naming the first key of the wrong type
+     */
+    private static function assertConfigTypes(ConfigRepository $config, array $defaults, string $prefix): void
+    {
+        foreach ($defaults as $name => $default) {
+            $key = "{$prefix}.{$name}";
+
+            if (is_array($default) && $default !== []) {
+                if (! is_array(self::configValue($config, $key))) {
+                    throw new InvalidArgumentException("{$key} must be an array.");
+                }
+
+                self::assertConfigTypes($config, $default, $key);
+            } elseif (is_int($default)) {
+                self::configInt($config, $key);
+            } elseif (is_bool($default)) {
+                self::configBool($config, $key);
+            } elseif (is_string($default)) {
+                self::configString($config, $key);
+            }
+        }
+    }
+
+    /**
+     * @throws InvalidArgumentException when the value is not a preset name
+     */
+    private static function defaultRetryPreset(ConfigRepository $config): WebhookRetryPresetEnum
+    {
+        return WebhookRetryPresetEnum::tryFrom(self::configString($config, 'outbound.webhooks.retry_preset'))
+            ?? throw new InvalidArgumentException('outbound.webhooks.retry_preset must be standard or short.');
     }
 
     /**
@@ -296,6 +351,18 @@ final class OutboundServiceProvider extends ServiceProvider
      */
     private static function configValue(ConfigRepository $config, string $key): mixed
     {
-        return $config->get($key) ?? data_get(['outbound' => require __DIR__.'/../../config/outbound.php'], $key);
+        return $config->get($key) ?? data_get(['outbound' => self::packageDefaults()], $key);
+    }
+
+    /**
+     * config/outbound.php as shipped, the reference for missing keys and types.
+     *
+     * @return array<mixed>
+     */
+    private static function packageDefaults(): array
+    {
+        $defaults = require __DIR__.'/../../config/outbound.php';
+
+        return is_array($defaults) ? $defaults : [];
     }
 }

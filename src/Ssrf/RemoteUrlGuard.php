@@ -79,10 +79,7 @@ final class RemoteUrlGuard
         }
 
         if ($options->enforceHostAllowlist) {
-            $allowed = array_map(
-                static fn (string $name): string => strtolower($name),
-                $options->hostAllowlist,
-            );
+            $allowed = array_map($this->allowlistForm(...), $options->hostAllowlist);
 
             if ($allowed === [] || ! in_array($host, $allowed, true)) {
                 throw new UnsafeUrl('Host is not on the allowlist.');
@@ -165,6 +162,25 @@ final class RemoteUrlGuard
             }
         } elseif (! in_array($scheme, ['https', 'http'], true)) {
             throw new UnsafeUrl('Only http and https URLs are allowed.');
+        }
+    }
+
+    /**
+     * An allowlist entry in the form normalizeHost() gives the URL host, so
+     * `Bücher.example` and `example.test.` match the hosts they name. An
+     * entry that is not a valid host (a typo, an empty string) keeps its
+     * lowercased spelling, which no normalized host ever equals.
+     */
+    private function allowlistForm(string $entry): string
+    {
+        if (filter_var($entry, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+            return self::canonicalIp($entry);
+        }
+
+        try {
+            return $this->normalizeHost(strtolower($entry));
+        } catch (UnsafeUrl) {
+            return strtolower($entry);
         }
     }
 
