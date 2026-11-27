@@ -534,6 +534,9 @@ M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
 The package schedules `outbound:prune-deliveries` daily, on one server and
 without overlapping (fleet convention F9). Set `outbound.webhooks.schedule`
 (`OUTBOUND_WEBHOOK_SCHEDULE`) to `false` to schedule it yourself.
+`onOneServer()` needs a cache all scheduler hosts share (database, Redis,
+Memcached or DynamoDB): with a node-local file cache, two hosts both run it,
+which is harmless (each block is its own transaction) but doubles the work.
 `--dry-run` reports what it would clear and delete and changes nothing.
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest

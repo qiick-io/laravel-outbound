@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
+use Qiick\Outbound\Contracts\WebhookEndpointNoticeRecipientsContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Events\WebhookEndpointDisabledEvent;
 use Qiick\Outbound\Http\PinnedHttpClient;
@@ -286,7 +287,8 @@ it('registers the owner listener only while the owner email is on', function (ar
         app('events')->getRawListeners()[WebhookEndpointDisabledEvent::class] ?? [],
     );
 
-    expect(in_array(NotifyWebhookEndpointOwnerListener::class, $listeners, true))->toBe($isListening);
+    expect(in_array(NotifyWebhookEndpointOwnerListener::class, $listeners, true))->toBe($isListening)
+        ->and($this->app->bound(WebhookEndpointNoticeRecipientsContract::class))->toBe($isListening);
 
     $this->configBeforeBoot = [];
     $this->refreshApplication();
@@ -296,3 +298,15 @@ it('registers the owner listener only while the owner email is on', function (ar
     'auto-disable off in the config' => [['enabled' => false, 'notify_owner' => true], true],
     'owner email off' => [['enabled' => true, 'notify_owner' => false], false],
 ]);
+
+it('writes the shipped default of every key an older published config lacks into the config, so config:cache keeps it', function (): void {
+    $publishedBeforeTheKey = Arr::except(require __DIR__.'/../../config/outbound.php', 'webhooks.schedule');
+    $this->configBeforeBoot = ['outbound' => Arr::except($publishedBeforeTheKey, ['webhooks.schedule'])];
+    $this->refreshApplication();
+
+    expect(config()->has('outbound.webhooks.schedule'))->toBeTrue()
+        ->and(config('outbound.webhooks.schedule'))->toBeTrue();
+
+    $this->configBeforeBoot = [];
+    $this->refreshApplication();
+});
