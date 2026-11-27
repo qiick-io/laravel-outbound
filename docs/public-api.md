@@ -6,11 +6,13 @@ Everything listed here is the public API: it changes only as the deprecation pol
 
 `qiick/laravel-oidc` and `qiick/laravel-mcp-oauth` require these at 1.0; they change only in a major release.
 
-- **URL guard:** `RemoteUrlGuard::authorize()`, `tryAuthorize()` (`['ok' => true, 'destination' => AuthorizedDestination]` or `['ok' => false, 'reason' => string]`) and `assertBrowserUrlIsSafe()`, with `UrlGuardOptions`, `PortPolicy`, `UnsafeUrl` and the `HostResolver` / `MetadataPolicyContract` seams. The checks run in the order of the design (scheme, userinfo, host normalisation, port, metadata and transition prefixes, allowlist, literal address, resolve every address, pin one). A policy can only add blocked hosts.
+- **URL guard:** `RemoteUrlGuard::authorize()`, `tryAuthorize()` (`['ok' => true, 'destination' => AuthorizedDestination]` or `['ok' => false, 'reason' => string]`) and `assertBrowserUrlIsSafe()`, with `UrlGuardOptions`, `PortPolicy`, `UnsafeUrl` and the `HostResolver` / `MetadataPolicyContract` seams. What it refuses is the contract (README, "Threat model", and `docs/security-checklist.md`); the order of its checks and the wording of a `reason` are not. A policy can only add blocked hosts.
 - **Claim store:** `SeenWebhookIdStore::claim(WebhookIdClaim $claim, int $ttlSeconds): bool` and `release(WebhookIdClaim $claim): void`; a claim is the pair of a dedupe scope and a webhook id (`WebhookIdClaim::generate($scope, $webhookId)`).
-- **Dedupe scope:** `StandardWebhookVerifier::verify(..., string $dedupeScope)` is mandatory: two tenants never share a webhook-id namespace.
-- **Delivery status:** `DeliveryStatus` cases and backing values `pending`, `delivered`, `failed`, `refused`, `exhausted`, `cancelled` (wire values: they are stored in `webhook_deliveries.status`).
+- **Dedupe scope:** `StandardWebhookVerifier::verify(..., string $dedupeScope)` is mandatory. The caller owns its isolation: two tenants that pass the same scope share one webhook-id namespace, so a product passes a value unique per tenant and sender (for example the endpoint's public id).
+- **Delivery status:** `DeliveryStatus::Pending = 'pending'`, `Delivered = 'delivered'`, `Failed = 'failed'`, `Refused = 'refused'`, `Exhausted = 'exhausted'`, `Cancelled = 'cancelled'`; the backing values are stored in `webhook_deliveries.status`.
 - **Subject reference:** `WebhookDeliveryCoordinator::dispatch(WebhookMessage $message, ?string $scope = null, ?string $subjectPublicId = null)`; `subjectPublicId` is stored lower-case in `webhook_deliveries.subject_public_id` and is what `OutboundEraser` matches.
+
+The coordinator is resolved from the container: its public methods are the API, its constructor is `@internal`.
 
 ## Classes, interfaces and enums
 
@@ -177,11 +179,11 @@ Every key of `config/outbound.php` (types and defaults in the README, "Configura
 
 ## Events
 
-All in `Qiick\Outbound\Events`, dispatched synchronously (listeners must not throw), carrying public ids only: `OutboundRequestBlockedEvent`, `WebhookSignedEvent`, `WebhookDeliveredEvent` (after commit), `WebhookDeliveryFailedEvent`, `WebhookEndpointDisabledEvent`, `WebhookRedeliveryRequestedEvent`, `SubjectErasedEvent`.
+All in `Qiick\Outbound\Events`, dispatched synchronously (listeners must not throw; README, "Webhook delivery"): `OutboundRequestBlockedEvent`, `WebhookSignedEvent`, `WebhookDeliveredEvent` (after commit), `WebhookDeliveryFailedEvent`, `WebhookEndpointDisabledEvent`, `WebhookRedeliveryRequestedEvent`, `SubjectErasedEvent`. Their public properties are the payload. They carry public ids, never a secret or a body; `WebhookRedeliveryRequestedEvent::$triggeredBy` is the asking user's local id (bigint), for the product's own audit.
 
 ## Tables
 
-`webhook_endpoints`, `webhook_endpoint_secrets`, `webhook_subscriptions`, `webhook_deliveries`, `webhook_delivery_attempts`, with the columns of their `create_` migrations in `database/migrations/`. `created_by`, `triggered_by`, `next_attempt_triggered_by` and `claimed_triggered_by` reference `outbound.webhooks.users_table` (bigint `id`). The publish tags `outbound-config` and `outbound-migrations` are public too.
+`webhook_endpoints`, `webhook_endpoint_secrets`, `webhook_subscriptions`, `webhook_deliveries`, `webhook_delivery_attempts`, with the columns of their `create_` migrations in `database/migrations/`. `created_by`, `triggered_by`, `next_attempt_triggered_by` and `claimed_triggered_by` reference `outbound.webhooks.users_table` (bigint `id`); with the key null or empty they are plain nullable columns without a foreign key, the option for a product whose user ids are not bigints. The publish tags `outbound-config` and `outbound-migrations` are public too.
 
 ## Routes and error codes
 

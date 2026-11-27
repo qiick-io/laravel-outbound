@@ -452,9 +452,10 @@ without an attempt and without the event.
 **Every event of the package is dispatched synchronously** (the
 `WebhookDeliveredEvent` after the commit), so no listener may throw: make it
 `ShouldQueue` or catch inside. A listener that throws on a delivery event
-turns the run's outcome into an exception after the attempt is stored; on
-`WebhookSignedEvent` and `OutboundRequestBlockedEvent` see above. Events
-carry public ids, never a secret, a body or a person's data.
+is reported through the exception handler after the attempt is stored, and
+the run carries on; on `WebhookSignedEvent` and `OutboundRequestBlockedEvent`
+see above. Events carry public ids, never a secret or a body;
+`WebhookRedeliveryRequestedEvent` also carries the asking user's local id.
 
 **Responses are never stored or echoed** (standards review S6):
 `webhook_delivery_attempts.response_excerpt` stays empty: an attempt records
@@ -700,8 +701,9 @@ query bindings, `DB::listen` loggers) still see the hash of every write: a
 short, guessable body can be found from it. `created_by` and `triggered_by` reference
 `outbound.webhooks.users_table` (`users`) with null-on-delete, as `foreignId`
 columns: the users table must have an unsigned **bigint** `id` (Laravel's
-default). A product with UUID or ULID user ids cannot use these columns as
-shipped.
+default). A product with UUID or ULID user ids sets
+`OUTBOUND_WEBHOOK_USERS_TABLE` empty: the columns stay, nullable and without
+a foreign key, and the product leaves them null.
 
 **Scope column.** The package defines no tenancy column and no morph. A product
 that scopes endpoints adds its own foreign key to `webhook_endpoints` with its
@@ -753,6 +755,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
+| `outbound.webhooks.schedule` | `OUTBOUND_WEBHOOK_SCHEDULE` | `true` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |

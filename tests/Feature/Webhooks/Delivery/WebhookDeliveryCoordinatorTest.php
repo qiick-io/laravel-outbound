@@ -296,7 +296,8 @@ it('never stores the body of a failed answer, which may reflect the request or t
 
     expect($attempt->http_status)->toBe(500)
         ->and($attempt->response_excerpt)->toBeNull()
-        ->and($attempt->error_message)->not->toContain('Ada');
+        ->and((string) $attempt->error_message)->not->toContain('Ada')
+        ->and((string) onlyDelivery()->last_error)->not->toContain('Ada');
 });
 
 it('schedules a failed attempt on the Standard Webhooks delays and counts the failure streak', function (): void {
