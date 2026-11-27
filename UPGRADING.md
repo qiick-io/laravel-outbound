@@ -37,7 +37,7 @@ from `develop`.
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
 
-## Unreleased (erasure)
+## To 0.2.0-beta.4
 
 - Resolve the signer, verifier, guard, pinned HTTP client, secret rotator
   and retry policy from the Laravel container. For an independent URL
@@ -70,10 +70,10 @@ from `develop`.
 - **Commands renamed** to the fleet form `outbound:<verb>-<object>` (F6):
   `outbound:webhooks:work` is `outbound:work-deliveries` and
   `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
-  product's schedule (`routes/console.php`) and any deploy script. The old
-  names remain hidden through the betas and are removed before
-  `1.0.0-rc.1`. The old worker command logs at most once an hour through
-  the configured cache.
+  product's schedule (`routes/console.php`) and any deploy script.
+  Version `0.2.0-beta.4` is the last beta with these hidden aliases.
+  They are removed in `1.0.0-rc.1`. The old worker command logs at most once
+  an hour through the configured cache.
   `outbound:check` fails if a schedule still uses either old name.
 - **The package schedules `outbound:prune-deliveries` itself** (daily,
   `onOneServer()`, `withoutOverlapping()`): remove the product's own
