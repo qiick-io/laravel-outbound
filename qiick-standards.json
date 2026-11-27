@@ -4,21 +4,18 @@
     "php": true,
     "erasure": true,
     "requiredChecks": [
-        "PHP 8.3 Laravel 12 lowest",
-        "PHP 8.3 Laravel 12 stable",
-        "PHP 8.3 Laravel 13 lowest",
-        "PHP 8.3 Laravel 13 stable",
-        "PHP 8.4 Laravel 12 lowest",
-        "PHP 8.4 Laravel 12 stable",
-        "PHP 8.4 Laravel 13 lowest",
-        "PHP 8.4 Laravel 13 stable",
-        "PHP 8.5 Laravel 12 lowest",
-        "PHP 8.5 Laravel 12 stable",
-        "PHP 8.5 Laravel 13 lowest",
+        "package-matrix / export",
         "PHP 8.5 Laravel 13 stable",
+        "Pest on PostgreSQL 17",
+        "Pest on MySQL 8.4",
+        "Pest on MariaDB 11.4",
+        "Real transport Guzzle 7.15.2",
+        "Real transport Guzzle 8.0.1",
+        "Redis webhook claims",
         "Mutation (per-class ≥95%)",
-        "Real transport Guzzle 7.12",
-        "Real transport Guzzle 8.5",
-        "standards / standards"
-    ]
+        "standards / standards",
+        "Workflow action pins",
+        "pr-title / commitlint"
+    ],
+    "package": true
 }

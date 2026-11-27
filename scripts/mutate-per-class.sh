@@ -1,142 +1,82 @@
 #!/usr/bin/env bash
-# Run pest mutation per class so each stays >= MUTATE_MIN (default 95).
-# Usage: scripts/mutate-per-class.sh [extra pest args...]
-# MUTATE_SHARD=i/n runs only every n-th class, starting with the i-th, so CI
-# can split the run over parallel jobs; unset runs every class.
+# Enforce at least 95% mutation coverage per source file. Everything in src/
+# participates in a full run, including the fakes shipped to products.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 min="${MUTATE_MIN:-95}"
-# RealTransport is only needed to kill PinnedHttpClient mutants; running it for
-# every class races php -S ports under parallel mutate workers.
-unit_paths="${MUTATE_UNIT_PATHS:-tests/Unit}"
-pin_paths="${MUTATE_PIN_PATHS:-tests/Unit tests/Feature/RealTransport}"
-webhook_paths="${MUTATE_WEBHOOK_PATHS:-tests/Unit/Retry tests/Feature/Webhooks}"
-erasure_paths="${MUTATE_ERASURE_PATHS:-tests/Feature/Erasure tests/Erasure}"
-
-# No class runs with --covered-only: every mutated line must be killed.
-webhook_classes=(
-  'Qiick\Outbound\Models\WebhookEndpoint'
-  'Qiick\Outbound\Models\WebhookEndpointSecret'
-  'Qiick\Outbound\Models\WebhookSubscription'
-  'Qiick\Outbound\Models\WebhookDelivery'
-  'Qiick\Outbound\Models\WebhookDeliveryAttempt'
-  'Qiick\Outbound\Models\Concerns\PackageModelTrait'
-  'Qiick\Outbound\Webhooks\WebhookSigningSet'
-  'Qiick\Outbound\Webhooks\DatabaseWebhookSecretResolver'
-  'Qiick\Outbound\Webhooks\SecretRotator'
-  'Qiick\Outbound\Delivery\WebhookDeliveryStorageException'
-  'Qiick\Outbound\Retry\RetryAfter'
-  'Qiick\Outbound\Retry\RetryPolicy'
-  'Qiick\Outbound\Retry\RetryDecision'
-  'Qiick\Outbound\Delivery\DatabaseDeliveryStore'
-  'Qiick\Outbound\Delivery\WebhookDeliveryCoordinator'
-  'Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand'
-  'Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand'
-  'Qiick\Outbound\Delivery\EndpointDisablePolicy'
-  'Qiick\Outbound\Listeners\NotifyWebhookEndpointOwnerListener'
-  'Qiick\Outbound\Webhooks\EndpointCreatorRecipients'
-  'Qiick\Outbound\Notifications\WebhookEndpointDisabledNotification'
-)
-
-status=0
-
+scope="${MUTATE_SCOPE:-all}"
 shard="${MUTATE_SHARD:-1/1}"
 shard_index="${shard%/*}"
 shard_count="${shard#*/}"
-class_position=0
-classes_run=0
 
-# A malformed shard would run no class and still exit 0.
-if ! [[ "${shard_index}" =~ ^[0-9]+$ && "${shard_count}" =~ ^[0-9]+$ ]] || ((shard_index < 1 || shard_index > shard_count)); then
+if ! [[ "$shard_index" =~ ^[1-9][0-9]*$ && "$shard_count" =~ ^[1-9][0-9]*$ ]] || ((shard_index > shard_count)); then
   echo "MUTATE_SHARD must be i/n with 1 <= i <= n, not '${shard}'." >&2
   exit 1
 fi
 
-# Whether the next class in the overall order belongs to this shard.
-in_this_shard() {
-  class_position=$((class_position + 1))
-  [[ $(((class_position - 1) % shard_count + 1)) -eq "${shard_index}" ]] || return 1
-  classes_run=$((classes_run + 1))
-}
+case "$scope" in
+  all) paths="$(find src -type f -name '*.php' -print | LC_ALL=C sort)" ;;
+  changed)
+    paths="$(node -e '
+      const paths = JSON.parse(process.env.MUTATE_CLASSES ?? "[]");
+      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !/^src\/(?:\w+\/)*\w+\.php$/.test(path))) {
+        throw new Error("MUTATE_CLASSES must list PHP source paths under src/");
+      }
+      for (const path of [...new Set(paths)].sort()) console.log(path);
+    ')"
+    ;;
+  *) echo "MUTATE_SCOPE must be all or changed, not '${scope}'." >&2; exit 1 ;;
+esac
 
-echo_and_mutate() {
-  local class="$1"
-  shift
-  echo "==> mutate ${class} (min=${min})"
-  # shellcheck disable=SC2086
-  if ! vendor/bin/pest --mutate --class="${class}" --min="${min}" "$@"; then
-    status=1
-  fi
-}
-
-# The provider's bindings are exercised by the whole suite. Listed by folder:
-# the synced tests/Conformance is for products and has no package test case.
-if in_this_shard; then
-  echo_and_mutate 'Qiick\Outbound\Laravel\OutboundServiceProvider' tests/Arch tests/Unit tests/Feature tests/Erasure "$@"
-fi
-
-# PinnedHttpClient's transport mutants are killed only on the real wire.
-if in_this_shard; then
-  # shellcheck disable=SC2086
-  echo_and_mutate 'Qiick\Outbound\Http\PinnedHttpClient' ${pin_paths} "$@"
-fi
-
-# Classes whose tests are unit tests.
-unit_classes=(
-  'Qiick\Outbound\Ssrf\RemoteUrlGuard'
-  'Qiick\Outbound\Ssrf\AuthorizedDestination'
-  'Qiick\Outbound\Webhooks\WebhookSecret'
-  'Qiick\Outbound\Webhooks\StandardWebhookSigner'
-  'Qiick\Outbound\Webhooks\StandardWebhookVerifier'
-  'Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore'
-  'Qiick\Outbound\Retry\RetrySchedule'
-  'Qiick\Outbound\Retry\SystemRandomizer'
-  'Qiick\Outbound\Ssrf\DnsHostResolver'
-  'Qiick\Outbound\Ssrf\UrlGuardOptions'
-  'Qiick\Outbound\Http\HttpRequestOptions'
-  'Qiick\Outbound\Http\OutboundHttpLimits'
-  'Qiick\Outbound\Http\OutboundRequest'
-  'Qiick\Outbound\Delivery\DeliveryAttempt'
-  'Qiick\Outbound\Testing\FakeHostResolver'
-  'Qiick\Outbound\Testing\FakeOutboundHttpFactory'
-  'Qiick\Outbound\Testing\FakeSeenWebhookIdStore'
-  'Qiick\Outbound\Http\OutboundHttpException'
-  'Qiick\Outbound\Http\EgressProxy'
-  'Qiick\Outbound\Webhooks\WebhookMessage'
-  'Qiick\Outbound\Webhooks\WebhookIdClaim'
-)
-
-for class in "${unit_classes[@]}"; do
-  in_this_shard || continue
-  # shellcheck disable=SC2086
-  echo_and_mutate "${class}" ${unit_paths} "$@"
-done
-
-for class in "${webhook_classes[@]}"; do
-  in_this_shard || continue
-  # shellcheck disable=SC2086
-  echo_and_mutate "${class}" ${webhook_paths} "$@"
-done
-
-erasure_classes=(
-  'Qiick\Outbound\Erasure\OutboundEraser'
-  'Qiick\Outbound\Erasure\ErasureReport'
-)
-
-for class in "${erasure_classes[@]}"; do
-  in_this_shard || continue
-  # shellcheck disable=SC2086
-  echo_and_mutate "${class}" ${erasure_paths} "$@"
-done
-
-echo "==> shard ${shard} ran ${classes_run} class(es)"
-
-if ((classes_run == 0)); then
-  echo "Shard ${shard} ran no class." >&2
+if [[ "$scope" == all && -z "$paths" ]]; then
+  echo 'No PHP source files found for full mutation.' >&2
   exit 1
 fi
 
-exit "${status}"
+status=0
+position=0
+files_run=0
+
+while IFS= read -r path; do
+  # A class removed by the PR has no code left to mutate.
+  [[ -f "$path" ]] || continue
+  position=$((position + 1))
+  (( (position - 1) % shard_count + 1 == shard_index )) || continue
+
+  # Keep expensive fixtures out of unrelated mutation subprocesses. New
+  # namespaces use the package suite until they have a narrower test scope.
+  case "$path" in
+    src/Http/PinnedHttpClient.php)
+      test_paths=(tests/Unit tests/Feature/RealTransport) ;;
+    src/Console/Commands/CheckOutboundCommand.php)
+      test_paths=(tests/Feature/CheckCommandTest.php) ;;
+    src/Erasure/*|src/Events/SubjectErasedEvent.php)
+      test_paths=(tests/Feature/Erasure tests/Erasure) ;;
+    src/Delivery/DeliveryAttempt.php|src/Http/*|src/Retry/RetrySchedule.php|src/Retry/SystemRandomizer.php|src/Ssrf/*|src/Testing/*|src/Webhooks/CacheSeenWebhookIdStore.php|src/Webhooks/StandardWebhook*.php|src/Webhooks/WebhookIdClaim.php|src/Webhooks/WebhookMessage.php|src/Webhooks/WebhookSecret.php)
+      test_paths=(tests/Unit) ;;
+    src/Console/*|src/Delivery/*|src/Events/*|src/Listeners/*|src/Models/*|src/Notifications/*|src/Retry/*|src/Webhooks/*)
+      test_paths=(tests/Unit/Retry tests/Feature/Webhooks) ;;
+    *)
+      test_paths=(tests/Arch tests/Unit tests/Feature tests/Erasure) ;;
+  esac
+
+  echo "==> mutate ${path} (min=${min})"
+  # Interfaces, enums and payload-only classes still go through Pest, which
+  # records "No mutations created" for files with no generated mutants.
+  if ! vendor/bin/pest --mutate --path="$path" --min="$min" --ignore-min-score-on-zero-mutations \
+      --fail-on-empty-test-suite "${test_paths[@]}" "$@"; then
+    status=1
+  fi
+  files_run=$((files_run + 1))
+done < <(printf '%s\n' "$paths")
+
+echo "==> shard ${shard} ran ${files_run} source file(s)"
+if [[ "$scope" == all ]] && ((files_run == 0)); then
+  echo "Full mutation shard ${shard} ran no source files." >&2
+  exit 1
+fi
+
+exit "$status"
