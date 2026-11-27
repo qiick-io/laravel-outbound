@@ -66,7 +66,7 @@ timeout, `Retry-After`, 410 and auto-disable after repeated failures.
 
 - PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
-- guzzlehttp/guzzle ^7.12 or ^8.0
+- guzzlehttp/guzzle ^7.15.2 or ^8.0.1
 
 ## Install
 
@@ -320,12 +320,12 @@ app(WebhookDeliveryCoordinator::class)->dispatch(
 );
 
 // routes/console.php
-Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
+Schedule::command('outbound:work-deliveries')->everyFiveSeconds();
 ```
 
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
-message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
+message again creates nothing. `outbound:work-deliveries` takes up to `--limit`
 (50) due deliveries, and with `--max-seconds` starts no attempt once that
 long has passed (an attempt on the wire finishes, so a run can overrun by one
 send); it leases each delivery on its own right before its send, signs
@@ -477,7 +477,7 @@ $coordinator->redeliver($delivery, triggeredBy: auth()->id());
 $coordinator->redeliverRange($endpoint, $from, $until, [DeliveryStatus::Exhausted], auth()->id()); // "Redeliver failed since…"
 ```
 
-A redelivery is sent by the next `outbound:webhooks:work` run with the **same
+A redelivery is sent by the next `outbound:work-deliveries` run with the **same
 `webhook-id`** (the delivery's event id), a fresh `webhook-timestamp` and fresh
 signatures (standards review R7; Standard Webhooks "Webhook metadata" keeps the
 id across retries). A consumer that already processed it deduplicates it. A
@@ -513,7 +513,7 @@ pull request (review M14). The attempt records `trigger = manual|bulk` and `trig
 
 ```php
 // routes/console.php
-Schedule::command('outbound:webhooks:prune')->daily();
+Schedule::command('outbound:prune-deliveries')->daily();
 ```
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
@@ -530,7 +530,7 @@ when Retry-After is honoured, so a receiver that keeps answering `503` with
 a long `Retry-After`, or an endpoint with a higher `max_attempts`, never loses
 its body mid-schedule.
 
-`outbound:webhooks:prune` then clears the body and keeps `payload_hash` and
+`outbound:prune-deliveries` then clears the body and keeps `payload_hash` and
 `payload_bytes`, so the delivery log still proves what was sent. It also
 deletes settled deliveries created `outbound.webhooks.delivery_retention_days`
 ago (90, at least the payload retention), with their attempts, once their
