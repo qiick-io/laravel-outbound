@@ -163,10 +163,10 @@ client makes itself (response size, redirect rules) have no kind.
 for example `http://user:secret@egress.internal:3128`) to send every request
 through a filtering forward proxy, as Standard Webhooks "Server side request
 forgery (SSRF)" recommends. It is deployment config, never set per endpoint
-or per call; null (the default) sends directly, and the `HTTP(S)_PROXY` and
-`NO_PROXY` environment variables are never read either way (Guzzle 7.12 is
-the first 7.x that guarantees this, hence the minimum). Any value other than
-an http(s) proxy URL, null or an empty string stops the boot.
+or per call. Null sends directly. The supported Guzzle floors (7.15.2 and
+8.0.1) keep the `HTTP(S)_PROXY` and `NO_PROXY` environment variables out of
+both paths. Any value other than an HTTP(S) proxy URL, null or an empty string
+stops the boot.
 
 - The guard still authorises and pins every destination, so the proxy adds a
   network-layer control without replacing the application one. curl is
