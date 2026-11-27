@@ -22,6 +22,7 @@ jobs:
     uses: qiick-io/app-ui/.github/workflows/package-matrix.yml@0d97ae1429a856411c76e6de1ec258cae0eabab6 # v0.15.0
     with:
       app-ui-ref: 0d97ae1429a856411c76e6de1ec258cae0eabab6
+      variant: full
 
   tests:
     name: PHP ${{ matrix.php }} Laravel ${{ matrix.laravel }} ${{ matrix.dependency-version }}
