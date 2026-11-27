@@ -19,6 +19,7 @@ use Symfony\Component\HttpFoundation\IpUtils;
  */
 final class RemoteUrlGuard
 {
+    /** @internal Resolve the production service from the container. */
     public function __construct(
         private HostResolver $hostResolver,
         private bool $allowPrivateHosts = false,

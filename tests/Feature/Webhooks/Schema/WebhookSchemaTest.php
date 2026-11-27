@@ -79,10 +79,14 @@ it('creates the five tables with the standard fixed names and every column of th
     'webhook_delivery_attempts' => ['webhook_delivery_attempts', [
         'id', 'public_id', 'delivery_id', 'attempt', 'trigger', 'triggered_by', 'status', 'webhook_timestamp',
         'signature_schemes', 'secret_public_ids', 'pinned_address', 'http_status', 'error_code', 'error_message',
-        'retry_after_seconds', 'response_headers', 'response_excerpt', 'response_bytes', 'duration_ms',
+        'retry_after_seconds', 'response_headers', 'response_bytes', 'duration_ms',
         'request_id', 'attempted_at', 'next_attempt_at', 'metadata', 'created_at',
     ]],
 ]);
+
+it('omits response bodies and excerpts from the attempt schema', function (): void {
+    expect(Schema::hasColumn('webhook_delivery_attempts', 'response_excerpt'))->toBeFalse();
+});
 
 it('applies the documented column defaults', function (): void {
     $endpointId = insertEndpointRow();

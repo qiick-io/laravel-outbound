@@ -14,6 +14,7 @@ use Qiick\Outbound\Enums\WebhookEndpointDisabledReasonEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
 use Qiick\Outbound\Enums\WebhookSignatureSchemeEnum;
+use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Ssrf\AuthorizedDestination;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Webhooks\SeenWebhookIdStore;
@@ -173,6 +174,22 @@ it('keeps the named parameters and return types used by downstream packages', fu
     'browser URL' => [RemoteUrlGuard::class, 'assertBrowserUrlIsSafe', ['url', 'options'], 1, 'void'],
     'claim' => [SeenWebhookIdStore::class, 'claim', ['claim', 'ttlSeconds'], 2, 'bool'],
     'release' => [SeenWebhookIdStore::class, 'release', ['claim'], 1, 'void'],
-    'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, '?'.WebhookIdClaim::class],
+    'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, WebhookIdClaim::class],
     'dispatch' => [WebhookDeliveryCoordinator::class, 'dispatch', ['message', 'scope', 'subjectPublicId'], 1, Collection::class],
 ]);
+
+it('keeps test-only seams out of the pinned transport constructor', function (): void {
+    $parameters = (new ReflectionMethod(PinnedHttpClient::class, '__construct'))->getParameters();
+
+    expect(array_map(static fn (ReflectionParameter $parameter): string => $parameter->getName(), $parameters))
+        ->not->toContain('clock', 'transferHandler');
+});
+
+it('requires a dedupe store when constructing the verifier', function (): void {
+    $parameters = (new ReflectionMethod(StandardWebhookVerifier::class, '__construct'))->getParameters();
+    $store = collect($parameters)->first(static fn (ReflectionParameter $parameter): bool => $parameter->getName() === 'seenIds');
+
+    expect($store)->toBeInstanceOf(ReflectionParameter::class)
+        ->and($store->isOptional())->toBeFalse()
+        ->and($store->allowsNull())->toBeFalse();
+});

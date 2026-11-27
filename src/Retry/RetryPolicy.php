@@ -25,6 +25,7 @@ use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
  */
 final class RetryPolicy
 {
+    /** @internal Resolve the production service from the container. */
     public function __construct(
         private readonly Randomizer $random,
         private readonly int $jitterSeconds = 30,
