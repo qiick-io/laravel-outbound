@@ -1,6 +1,6 @@
 # 2026-11-27: the public API boundary for 1.0
 
-Decided by the agent preparing the 1.0 release candidate, applying decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`), for review by the maintainer in the RC review.
+Applies decision D6 of 2026-11-24 (`2026-11-24-1-0-gap-decisions.md`). The `AuthorizedDestination` exception below was approved by Team Leader for Luca, 2026-11-27.
 
 ## What
 

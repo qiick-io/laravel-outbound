@@ -175,7 +175,7 @@ Every key of `config/outbound.php` (types and defaults in the README, "Configura
 
 - `outbound:work-deliveries {--limit=50} {--max-seconds=}`: sends the due attempts.
 - `outbound:prune-deliveries {--dry-run}`: clears expired bodies and deletes settled rows past their retention; scheduled by the package daily on one server unless `outbound.webhooks.schedule` is off.
-- `outbound:check`: the deploy check (exit `1` on any problem, including an old command name still scheduled). The hidden beta aliases are temporary. Use the commands listed here.
+- `outbound:check`: the deploy check (exit `1` on any problem, including an old command name still scheduled). The hidden beta aliases are removed in `1.0.0-rc.1`. [Alias removal #100](https://github.com/qiick-io/laravel-outbound/issues/100)
 
 ## Events
 
