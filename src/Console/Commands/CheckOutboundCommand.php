@@ -22,7 +22,7 @@ use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
  * command running at all proves the config; it adds the webhook id dedupe
  * store and the tables. One line per problem, exit 1 on any.
  *
- * @api
+ * @internal
  */
 final class CheckOutboundCommand extends Command
 {
