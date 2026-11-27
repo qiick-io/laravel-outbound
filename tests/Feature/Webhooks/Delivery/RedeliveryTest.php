@@ -486,3 +486,14 @@ it('says in the audit event what was redelivered', function (): void {
         && $event->from?->equalTo($from) === true && $event->until?->equalTo($until) === true
         && $event->statuses === [DeliveryStatus::Exhausted, DeliveryStatus::Pending]);
 });
+
+it('sends a redelivery through the guard: an endpoint moved to a private address gets nothing', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'exhausted_reason' => 'max_attempts', 'max_attempts' => 10]);
+    $endpoint->forceFill(['url' => 'https://10.0.0.5/receive'])->save();
+
+    expect(app(WebhookDeliveryCoordinator::class)->redeliver($delivery))->toBeTrue()
+        ->and(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(1)
+        ->and($this->transfer->requests)->toBe([])
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('ssrf_refused');
+});

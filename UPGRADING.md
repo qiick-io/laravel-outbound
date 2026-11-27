@@ -171,6 +171,22 @@ reached.
 - Until `1.0.0` the package edits its `create_` migrations instead of adding
   new ones, so recreate the database after each pre-1.0 upgrade.
 
+## To 0.1.1 (webhook id stores)
+
+- Catch the typed webhook exceptions (`DuplicateWebhookIdException`,
+  `WebhookIdStoreFailedException`, `InvalidWebhookSignatureException`)
+  instead of matching messages; the messages are unchanged.
+- The webhook id cache must be database, redis, memcached, dynamodb or file
+  (single host). `storage` and `failover` are refused and array is for tests
+  only: resolving `StandardWebhookVerifier` with a refused store throws
+  `UnsupportedWebhookIdCacheStoreException`.
+
+## To 0.1.0 (first release)
+
+- `composer require qiick/laravel-outbound`, publish `outbound-config` if the
+  defaults need changing, and replace the product's own URL guard with
+  `RemoteUrlGuard` (README, "SSRF").
+
 ## Deprecation windows (products)
 
 - Externa legacy `X-Externa-*` webhook headers: dual-send with Standard Webhooks

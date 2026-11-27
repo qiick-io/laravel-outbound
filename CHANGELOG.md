@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
+  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
 - `outbound:check` (fleet convention F2): fails, one line per problem, on a
   missing webhook or users table or a dedupe cache that is not shared
   between processes.
@@ -36,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `EndpointDisablePolicy`, `NotifyWebhookEndpointOwnerListener` and the
+  console command classes are `@internal` (decision D6); the command names
+  stay public. `DnsHostResolver` is `@api`.
 - A delivery cancelled while a worker was sending it stays cancelled: the
   attempt is not recorded. A worker reads the row again after DNS, right
   before the transport (`PinnedHttpClient::send(beforeTransport: …)`), so a
