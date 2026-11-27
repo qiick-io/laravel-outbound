@@ -16,7 +16,7 @@ use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
  * as punctual as this schedule. Overlapping runs are safe: each delivery is
  * leased on its own, right before its send.
  *
- * @api
+ * @internal
  */
 final class WorkWebhookDeliveriesCommand extends Command
 {

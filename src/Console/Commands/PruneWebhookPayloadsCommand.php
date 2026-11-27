@@ -16,7 +16,7 @@ use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
  * unless `outbound.webhooks.schedule` is off. Both steps delete in blocks
  * of 500 (DatabaseDeliveryStore).
  *
- * @api
+ * @internal
  */
 final class PruneWebhookPayloadsCommand extends Command
 {

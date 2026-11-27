@@ -22,7 +22,7 @@ use Qiick\Outbound\Notifications\WebhookEndpointDisabledNotification;
  * `outbound.webhooks.auto_disable.notify_owner`; a product can still listen
  * to {@see WebhookEndpointDisabledEvent} for its own channels.
  *
- * @api
+ * @internal
  */
 final class NotifyWebhookEndpointOwnerListener
 {
