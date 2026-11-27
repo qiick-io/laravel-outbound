@@ -192,7 +192,7 @@ it('keeps calls to the internal HTTP fixture factory out of package source', fun
     $sourceFiles = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__, 2).'/src', FilesystemIterator::SKIP_DOTS));
 
     foreach ($sourceFiles as $sourceFile) {
-        expect((string) file_get_contents((string) $sourceFile))->not->toMatch('/::\s*forTesting\s*\(/');
+        expect((string) file_get_contents((string) $sourceFile))->not->toMatch('/(?:::|->)\s*forTesting\s*\(/');
     }
 });
 
