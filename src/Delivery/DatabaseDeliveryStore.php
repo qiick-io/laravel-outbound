@@ -423,9 +423,9 @@ final class DatabaseDeliveryStore
      *
      * @return int the bodies cleared
      */
-    public function pruneExpiredPayloads(): int
+    public function pruneExpiredPayloads(?CarbonImmutable $now = null): int
     {
-        $now = CarbonImmutable::now('UTC');
+        $now ??= CarbonImmutable::now('UTC');
         $prunedCount = 0;
 
         do {
@@ -467,9 +467,9 @@ final class DatabaseDeliveryStore
      *
      * @return int the deliveries deleted
      */
-    public function deleteExpiredDeliveries(): int
+    public function deleteExpiredDeliveries(?CarbonImmutable $now = null): int
     {
-        $now = CarbonImmutable::now('UTC');
+        $now ??= CarbonImmutable::now('UTC');
         $deletedCount = 0;
 
         do {
@@ -487,16 +487,16 @@ final class DatabaseDeliveryStore
     }
 
     /**
-     * What pruneExpiredPayloads() then deleteExpiredDeliveries() would
-     * change now, changing nothing (`outbound:prune-deliveries --dry-run`).
+     * What pruneExpiredPayloads() then deleteExpiredDeliveries() at the same
+     * `$now` would change, changing nothing (`outbound:prune-deliveries --dry-run`).
      * A pending delivery whose body expired counts as deleted when it is old
      * enough: the prune exhausts it first.
      *
      * @return array{payloads: int, deliveries: int}
      */
-    public function countExpired(): array
+    public function countExpired(?CarbonImmutable $now = null): array
     {
-        $now = CarbonImmutable::now('UTC');
+        $now ??= CarbonImmutable::now('UTC');
 
         return [
             'payloads' => $this->expiredPayloads($now)->count(),

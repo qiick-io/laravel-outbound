@@ -40,3 +40,19 @@ it('fails on a users table that does not exist, naming the key', function (): vo
         ->expectsOutput('outbound.webhooks.users_table: table accounts is missing.')
         ->assertFailed();
 });
+
+it('fails on a cache that cannot hold a claim, naming the store', function (): void {
+    // A database store without its table: the first claim would fail.
+    config()->set('cache.default', 'database');
+    config()->set('cache.stores.database.table', 'missing_cache');
+
+    $this->artisan('outbound:check')
+        ->expectsOutputToContain('cache.default: the webhook id dedupe store cannot claim an id')
+        ->assertFailed();
+});
+
+it('skips the users table when the product leaves it empty, as the migrations do', function (?string $usersTable): void {
+    config()->set('outbound.webhooks.users_table', $usersTable);
+
+    $this->artisan('outbound:check')->assertSuccessful();
+})->with(['empty' => [''], 'null' => [null]]);

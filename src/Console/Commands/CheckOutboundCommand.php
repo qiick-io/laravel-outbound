@@ -15,12 +15,14 @@ use Qiick\Outbound\Models\WebhookEndpointSecret;
 use Qiick\Outbound\Models\WebhookSubscription;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
+use Qiick\Outbound\Webhooks\WebhookIdClaim;
+use Qiick\Outbound\Webhooks\WebhookIdStoreFailedException;
 
 /**
  * The deploy check (fleet convention F2): what the boot does not verify.
  * A config value of the wrong type already stops the boot (F1), so this
  * command running at all proves the config; it adds the webhook id dedupe
- * store and the tables. One line per problem, exit 1 on any.
+ * store (with a probe claim) and the tables. One line per problem, exit 1 on any.
  *
  * @internal
  */
@@ -69,9 +71,24 @@ final class CheckOutboundCommand extends Command
     private function dedupeStoreProblems(): array
     {
         try {
-            new CacheSeenWebhookIdStore($this->laravel->make(CacheRepository::class), allowArrayStore: $this->laravel->environment('testing'));
+            $store = new CacheSeenWebhookIdStore($this->laravel->make(CacheRepository::class), allowArrayStore: $this->laravel->environment('testing'));
         } catch (UnsupportedWebhookIdCacheStoreException $exception) {
             return ["cache.default: {$exception->getMessage()}"];
+        }
+
+        // A probe claim, given back at once: a store that cannot be reached
+        // (a database store without its table, Redis down) fails here, not
+        // on the first webhook.
+        $probeClaim = WebhookIdClaim::generate('outbound:check', bin2hex(random_bytes(8)));
+
+        try {
+            $store->claim($probeClaim, 60);
+            $store->release($probeClaim);
+        } catch (WebhookIdStoreFailedException $exception) {
+            // The previous exception may carry a connection string: only its class is shown.
+            $cause = $exception->getPrevious() === null ? $exception::class : $exception->getPrevious()::class;
+
+            return ["cache.default: the webhook id dedupe store cannot claim an id ({$cause})."];
         }
 
         return [];
@@ -94,7 +111,8 @@ final class CheckOutboundCommand extends Command
 
         $usersTable = $this->laravel->make('config')->get('outbound.webhooks.users_table');
 
-        if (is_string($usersTable) && ! Schema::hasTable($usersTable)) {
+        // Null or empty: the migrations create no users foreign keys.
+        if (is_string($usersTable) && $usersTable !== '' && ! Schema::hasTable($usersTable)) {
             $problems[] = "outbound.webhooks.users_table: table {$usersTable} is missing.";
         }
 

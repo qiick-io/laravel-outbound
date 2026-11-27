@@ -139,9 +139,6 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
-        // A product binds its own to choose who hears of a disabled endpoint.
-        $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
-
         $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
             // ArrayStore is atomic but process-local — allow only in the testing env.
             return new CacheSeenWebhookIdStore(
@@ -263,6 +260,14 @@ final class OutboundServiceProvider extends ServiceProvider
     {
         $config = $this->app->make(ConfigRepository::class);
 
+        // mergeConfigFrom() merges the top level only: a key an older
+        // published config lacks gets its shipped default here, so
+        // `config:cache` (which boots the providers) stores it, and a cached
+        // config is never read against `.env` again.
+        if (! $this->app->configurationIsCached()) {
+            $config->set('outbound', array_replace_recursive(self::packageDefaults(), (array) $config->get('outbound', [])));
+        }
+
         $this->app->make(SecretRotator::class);
         // Refuses auto-disable thresholds below 1 and a payload retention
         // shorter than the retry schedule at boot too.
@@ -275,8 +280,11 @@ final class OutboundServiceProvider extends ServiceProvider
         // checked here against CONFIG_TYPES.
         self::assertConfigTypes($config);
         self::defaultRetryPreset($config);
-        // Off means off (F3): no listener when the product sends its own notice.
+        // Off means off (F3): no listener and no recipients binding when the
+        // product sends its own notice. A product binds its own recipients
+        // to choose who hears of a disabled endpoint.
         if (self::configBool($config, 'outbound.webhooks.auto_disable.notify_owner')) {
+            $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
             $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
         }
 

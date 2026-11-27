@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Console\Commands;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 
@@ -29,15 +30,18 @@ final class PruneWebhookPayloadsCommand extends Command
 
     public function handle(DatabaseDeliveryStore $store): int
     {
+        // One instant for both passes, so the dry run reports what the run does.
+        $now = CarbonImmutable::now('UTC');
+
         if ($this->option('dry-run') === true) {
-            ['payloads' => $expiredBodies, 'deliveries' => $expiredDeliveries] = $store->countExpired();
+            ['payloads' => $expiredBodies, 'deliveries' => $expiredDeliveries] = $store->countExpired($now);
             $this->info("Would prune {$expiredBodies} webhook delivery bodies and delete {$expiredDeliveries} webhook deliveries (dry run, nothing changed).");
 
             return self::SUCCESS;
         }
 
-        $prunedBodies = $store->pruneExpiredPayloads();
-        $deletedDeliveries = $store->deleteExpiredDeliveries();
+        $prunedBodies = $store->pruneExpiredPayloads($now);
+        $deletedDeliveries = $store->deleteExpiredDeliveries($now);
 
         $this->info("Pruned {$prunedBodies} webhook delivery bodies and deleted {$deletedDeliveries} webhook deliveries.");
 
