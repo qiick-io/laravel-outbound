@@ -9,9 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **Atomic webhook id claim release** uses Laravel database or Redis locks.
-  Apply Laravel's cache-lock migration for the database driver. See
-  `UPGRADING.md` for the cutover from a beta store.
 - Resolve the Outbound transport and webhook services from Laravel's
   container. Verification always claims the webhook ID. The attempt schema
   drops the unused response excerpt column before 1.0.
@@ -30,12 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`outbound.webhooks.payload_retention_days` is at most 30**: the boot
   fails above. A delivery dispatched without `subjectPublicId` keeps its body
   for the retention only, even when its retry plan is longer.
+- **Atomic webhook id claim release** uses Laravel database or Redis locks.
+  Apply Laravel's cache-lock migration for the database driver. See
+  `UPGRADING.md` for the cutover from a beta store.
 
 ### Added
 
-- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
-  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
-  and `docs/security-checklist.md` mapping O1–O23 and S1–S17 to tests (#48).
 - `outbound:check` (fleet convention F2): fails, one line per problem, on a
   missing webhook or users table, a dedupe cache that is not shared between
   processes, or a schedule that uses one of the deprecated command names.
@@ -47,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SQLite, PostgreSQL, MySQL and MariaDB (#51).
 - `WebhookDeliveryCoordinator::dispatch(subjectPublicId: …)` records the
   person an event is about, so the eraser can cancel their pending deliveries.
+- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
+  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S17 to tests (#48).
 
 ### Changed
 
