@@ -30,6 +30,11 @@ from `develop`.
   call `OutboundEraser` from the product's erasure orchestrator only (README,
   "Erasure"). A delivery queued without it keeps its encrypted payload until
   it expires.
+- **Commands renamed** to the fleet form `outbound:<verb>-<object>` (F6):
+  `outbound:webhooks:work` is `outbound:work-deliveries` and
+  `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
+  product's schedule (`routes/console.php`) and any deploy script; the old
+  names no longer exist.
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 

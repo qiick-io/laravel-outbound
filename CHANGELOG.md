@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- **Commands renamed** (fleet convention F6): `outbound:webhooks:work` is
+  `outbound:work-deliveries`, `outbound:webhooks:prune` is
+  `outbound:prune-deliveries`. Update the product's schedule.
 - **New columns `webhook_deliveries.subject_public_id` and
   `claimed_triggered_by`**, and
   `payload_hash` is nullable, in the `create_` migration: recreate the
