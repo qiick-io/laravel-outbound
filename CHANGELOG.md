@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- **Guzzle floor raised to `^7.15.2 || ^8.0.1`**: the older releases the
+  package allowed carry published advisories, one of them a host
+  canonicalisation bypass (CVE-2026-69246) and two on proxy handling.
+  `composer update guzzlehttp/guzzle`.
 - **Commands renamed** (fleet convention F6): `outbound:webhooks:work` is
   `outbound:work-deliveries`, `outbound:webhooks:prune` is
   `outbound:prune-deliveries`. Update the product's schedule.
