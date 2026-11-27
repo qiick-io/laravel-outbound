@@ -5,6 +5,27 @@ public surface as unstable: read the release's section of `CHANGELOG.md` and
 the approved design before upgrading, and prefer a tagged release to a commit
 from `develop`.
 
+## Product adoption checks
+
+- Update the tagged Outbound dependency and the product's Composer lockfile.
+  A product that also installs OIDC must use an OIDC constraint that allows
+  the chosen Outbound tag. OIDC `1.0.0-beta.8` allows Outbound `0.1` or
+  `0.2`.
+- Recreate the prerelease webhook schema on a disposable database and verify
+  the five package tables. If preserving beta deliveries, apply the column
+  and index changes in the upgrade notes below before starting a worker on the new code.
+- Schedule `outbound:work-deliveries`. Keep the package's daily prune, or
+  turn it off with `OUTBOUND_WEBHOOK_SCHEDULE=false` and schedule
+  `outbound:prune-deliveries` yourself if the product needs its own timing
+  or post-prune hook. Run `outbound:check` after migration and config caching.
+- Pass the subject's public UUID as `subjectPublicId:` for each delivery
+  about a person. Add `OutboundEraser` to the product's resumable erasure
+  orchestrator before it deletes the user, and cover cancellation and body
+  removal in the product's C17 test.
+- An inbound consumer passes a stable non-empty tenant-and-sender scope to
+  `StandardWebhookVerifier::verify()`. When using the claim store directly,
+  keep the winning `WebhookIdClaim` for release if processing must be retried.
+
 ## From unreleased commits
 
 - Prefer depending on a tagged release once one exists; do not pin `dev-develop`
@@ -57,27 +78,6 @@ from `develop`.
   A product that resolves the contract independently must supply its own
   binding when the switch is off.
 - Add `php artisan outbound:check` to the deploy (F2).
-
-### Product adoption checks
-
-- Update the tagged Outbound dependency and the product's Composer lockfile.
-  A product that also installs OIDC must use an OIDC constraint that allows
-  the chosen Outbound tag. OIDC `1.0.0-beta.8` allows Outbound `0.1` or
-  `0.2`.
-- Recreate the prerelease webhook schema on a disposable database and verify
-  the five package tables. If preserving beta deliveries, apply the column
-  and index changes listed above before starting a worker on the new code.
-- Schedule `outbound:work-deliveries`. Keep the package's daily prune, or
-  turn it off with `OUTBOUND_WEBHOOK_SCHEDULE=false` and schedule
-  `outbound:prune-deliveries` yourself if the product needs its own timing
-  or post-prune hook. Run `outbound:check` after migration and config caching.
-- Pass the subject's public UUID as `subjectPublicId:` for each delivery
-  about a person. Add `OutboundEraser` to the product's resumable erasure
-  orchestrator before it deletes the user, and cover cancellation and body
-  removal in the product's C17 test.
-- An inbound consumer passes a stable non-empty tenant-and-sender scope to
-  `StandardWebhookVerifier::verify()`. When using the claim store directly,
-  keep the winning `WebhookIdClaim` for release if processing must be retried.
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 

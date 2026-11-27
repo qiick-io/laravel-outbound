@@ -27,9 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
-  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
-  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
 - `outbound:check` (fleet convention F2): fails, one line per problem, on a
   missing webhook or users table, a dedupe cache that is not shared between
   processes, or a schedule that uses one of the deprecated command names.
@@ -41,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SQLite, PostgreSQL, MySQL and MariaDB (#51).
 - `WebhookDeliveryCoordinator::dispatch(subjectPublicId: …)` records the
   person an event is about, so the eraser can cancel their pending deliveries.
+- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
+  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
 
 ### Changed
 
