@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- **Atomic webhook id claim release** uses Laravel database or Redis locks.
+  Apply Laravel's cache-lock migration for the database driver. See
+  `UPGRADING.md` for the cutover from a beta store.
 - **Guzzle floor raised to `^7.15.2 || ^8.0.1`**: the older releases the
   package allowed carry published advisories, one of them a host
   canonicalisation bypass (CVE-2026-69246) and two on proxy handling.
@@ -29,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/public-api.md` with the frozen contracts (URL guard, claim store,
   dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
-  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S16 to tests (#48).
 - `outbound:check` (fleet convention F2): fails, one line per problem, on a
   missing webhook or users table, a dedupe cache that is not shared between
   processes, or a schedule that uses one of the deprecated command names.

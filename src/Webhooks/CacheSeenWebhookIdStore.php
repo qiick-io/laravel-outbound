@@ -6,115 +6,84 @@ namespace Qiick\Outbound\Webhooks;
 
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\DatabaseStore;
-use Illuminate\Cache\DynamoDbStore;
-use Illuminate\Cache\FileStore;
-use Illuminate\Cache\MemcachedStore;
 use Illuminate\Cache\RedisStore;
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Cache\Store;
 use Throwable;
 
 /**
- * Cache-backed {@see SeenWebhookIdStore} using atomic {@see CacheRepository::add()}.
+ * Cache-backed {@see SeenWebhookIdStore} with owner-checked Laravel locks.
  *
- * Keys are `prefix` + sha256(scope + NUL + id) — bounded length, Memcached-safe.
- *
- * Only an explicit allowlist of stores with atomic `add` is accepted: database,
- * redis, memcached, dynamodb, and file (process-safe locks on a **single host**
- * only — not for multi-node fleets). {@see ArrayStore} is allowed only when
- * constructed with `$allowArrayStore = true` (tests). Drivers such as
- * `storage` (get-then-put) and `failover` are refused even when they expose
- * `add()`.
+ * Redis and database locks compare ownership and delete in the same storage
+ * operation. Array locks are available only for process-local tests.
  *
  * @api
  */
 final class CacheSeenWebhookIdStore implements SeenWebhookIdStore
 {
+    private readonly LockProvider $locks;
+
     public function __construct(
         private readonly CacheRepository $cache,
         private readonly string $keyPrefix = 'outbound:whid:',
         bool $allowArrayStore = false,
     ) {
-        $this->assertAtomicAdd($this->cache->getStore(), $allowArrayStore);
+        $this->locks = self::atomicLocks($this->cache->getStore(), $allowArrayStore);
     }
 
     public function claim(WebhookIdClaim $claim, int $ttlSeconds): bool
     {
-        $key = $this->keyFor($claim);
-        $ttl = max(1, $ttlSeconds);
-
         try {
-            return $this->cache->add($key, $claim->token, $ttl);
-        } catch (WebhookException $e) {
-            throw $e;
-        } catch (Throwable $e) {
-            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $e);
-        }
-    }
-
-    public function release(WebhookIdClaim $claim): void
-    {
-        $key = $this->keyFor($claim);
-
-        // ponytail: compare, then forget, is not atomic: another request can
-        // claim the id between the two only once this claim has expired, and
-        // then only with a fresh timestamp. A store-level compare-and-delete
-        // (a Redis script) closes that gap if it ever matters.
-        try {
-            if ($this->cache->get($key) === $claim->token) {
-                $this->cache->forget($key);
+            // A still-live beta record can expire on its original schedule.
+            if ($this->cache->has($this->keyFor($claim))) {
+                return false;
             }
+
+            return $this->locks->lock($this->keyFor($claim, 'lock:'), max(1, $ttlSeconds), $claim->token)->get() === true;
+        } catch (WebhookException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $exception);
         }
     }
 
-    private function keyFor(WebhookIdClaim $claim): string
+    public function release(WebhookIdClaim $claim): void
     {
-        return $this->keyPrefix.hash('sha256', $claim->scope."\0".$claim->webhookId);
+        try {
+            $this->locks->restoreLock($this->keyFor($claim, 'lock:'), $claim->token)->release();
+        } catch (Throwable $exception) {
+            throw new WebhookIdStoreFailedException('Webhook id dedupe store failed.', previous: $exception);
+        }
+    }
+
+    private function keyFor(WebhookIdClaim $claim, string $namespace = ''): string
+    {
+        return $this->keyPrefix.$namespace.hash('sha256', $claim->scope."\0".$claim->webhookId);
     }
 
     /**
-     * @throws UnsupportedWebhookIdCacheStoreException when the store is not allowlisted
+     * @throws UnsupportedWebhookIdCacheStoreException when the driver's release
+     *                                                 cannot atomically verify ownership
      */
-    private function assertAtomicAdd(Store $store, bool $allowArrayStore): void
+    private static function atomicLocks(Store $store, bool $allowArrayStore): LockProvider
     {
         if ($store instanceof ArrayStore) {
             if (! $allowArrayStore) {
                 throw new UnsupportedWebhookIdCacheStoreException(
-                    'CacheSeenWebhookIdStore refuses ArrayStore outside tests; use database, redis, memcached, dynamodb, or file (single-host) cache.',
+                    'CacheSeenWebhookIdStore refuses ArrayStore outside tests; use database or redis cache.',
                 );
             }
 
-            return;
+            return $store;
         }
 
-        foreach (self::atomicStoreClasses() as $allowedClass) {
-            if ($store instanceof $allowedClass) {
-                return;
-            }
+        if ($store instanceof DatabaseStore || $store instanceof RedisStore) {
+            return $store;
         }
 
         throw new UnsupportedWebhookIdCacheStoreException(
-            'CacheSeenWebhookIdStore refuses cache store '.$store::class.'; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.',
+            'CacheSeenWebhookIdStore refuses cache store '.$store::class.'; use database or redis with atomic owner-checked release. Array is tests-only.',
         );
-    }
-
-    /**
-     * Store classes whose `add()` is atomic enough for webhook-id claims. A
-     * method rather than a constant: a constant's lines have no coverage, so
-     * mutation testing could not check that each entry is needed.
-     *
-     * @return list<class-string<Store>>
-     */
-    private static function atomicStoreClasses(): array
-    {
-        return [
-            DatabaseStore::class,
-            RedisStore::class,
-            MemcachedStore::class,
-            DynamoDbStore::class,
-            FileStore::class,
-        ];
     }
 }

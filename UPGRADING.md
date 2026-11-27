@@ -18,6 +18,14 @@ from `develop`.
 
 ## Unreleased (erasure)
 
+- Inbound dedupe uses Laravel locks on Redis or the database. Apply
+  Laravel's cache and cache-lock migrations before deploying a database
+  store. File, Memcached and DynamoDB lock release cannot atomically
+  verify ownership, so move a verifier using them to a supported store.
+  Stop old verifier processes before starting the updated ones. Old beta
+  replay records expire naturally when the backend and namespace stay
+  the same. If changing either, let the previous replay TTL expire
+  before resuming verification. Confirm with `outbound:check`.
 - Refresh a published `config/outbound.php` from the updated vendor template
   and reapply your overrides. Older copies cast environment values before
   the package can validate them. An explicit null or blank is invalid for

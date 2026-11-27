@@ -59,3 +59,28 @@ it('grants one scoped claim to concurrent Redis workers and only releases the wi
         }
     }
 })->group('redis-claim')->skip(getenv('OUTBOUND_TEST_REDIS_PORT') === false, 'Needs the disposable Redis service.');
+
+it('leaves a later Redis worker claim intact when the old owner releases', function (): void {
+    $port = (int) getenv('OUTBOUND_TEST_REDIS_PORT');
+    $scope = 'claim-expiry-'.bin2hex(random_bytes(8));
+    $store = outboundRedisClaimStore($port);
+    $expired = WebhookIdClaim::generate($scope, 'msg_fixture');
+    expect($store->claim($expired, 1))->toBeTrue();
+
+    // Redis expires the short lock on its own clock before a separate process claims it.
+    usleep(1_100_000);
+    $worker = new Process([PHP_BINARY, __DIR__.'/../../Support/redis-claim-worker.php', (string) $port, $scope], timeout: 15);
+    $worker->setInput("start\n");
+    $worker->mustRun();
+    [, $result] = explode("\n", trim($worker->getOutput()));
+    [$outcome, $token] = explode(' ', $result);
+    expect($outcome)->toBe('won');
+
+    $store->release($expired);
+    $next = WebhookIdClaim::generate($scope, 'msg_fixture');
+    expect($store->claim($next, 60))->toBeFalse();
+
+    $store->release(new WebhookIdClaim($scope, 'msg_fixture', $token));
+    expect($store->claim($next, 60))->toBeTrue();
+    $store->release($next);
+})->group('redis-claim')->skip(getenv('OUTBOUND_TEST_REDIS_PORT') === false, 'Needs the disposable Redis service.');
