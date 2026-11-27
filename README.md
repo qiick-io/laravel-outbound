@@ -80,8 +80,10 @@ The service provider is auto-discovered.
 Run `php artisan outbound:check` in the deploy pipeline (fleet convention F2):
 it exits `1`, one line per problem, when the webhook tables or the
 configured users table are missing, or when the cache cannot hold webhook id
-claims across processes (ArrayStore outside tests). A config value of the
-wrong type already stops the boot, naming the key.
+claims across processes (ArrayStore outside tests). It also flags schedules
+that still use the deprecated `outbound:webhooks:work` or
+`outbound:webhooks:prune` name. A config value of the wrong type already
+stops the boot, naming the key.
 
 ## Public API
 

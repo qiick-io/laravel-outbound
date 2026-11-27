@@ -6,6 +6,7 @@ namespace Qiick\Outbound\Console\Commands;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 
 /**
@@ -21,15 +22,21 @@ use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
  */
 final class PruneWebhookPayloadsCommand extends Command
 {
+    public const LEGACY_NAME = 'outbound:webhooks:prune';
+
     /** @var string */
     protected $signature = 'outbound:prune-deliveries
         {--dry-run : Report what would be cleared and deleted, and change nothing}';
 
     /** @var string */
-    protected $description = 'Clear webhook delivery bodies past their retention period';
+    protected $description = 'Clear expired webhook bodies and delete expired deliveries';
 
     public function handle(DatabaseDeliveryStore $store): int
     {
+        if ($this->getName() === self::LEGACY_NAME) {
+            Log::warning('outbound:webhooks:prune is deprecated. Use outbound:prune-deliveries.');
+        }
+
         // One instant for both passes, so the dry run reports what the run does.
         $now = CarbonImmutable::now('UTC');
 

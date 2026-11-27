@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Schema;
 
 /*
@@ -63,3 +64,14 @@ it('skips the users table when the product leaves it empty, as the migrations do
 
     $this->artisan('outbound:check')->assertSuccessful();
 })->with(['empty' => [''], 'null' => [null]]);
+
+it('fails deploy checks on a scheduled deprecated outbound command', function (string $legacy, string $replacement): void {
+    app(Schedule::class)->command($legacy);
+
+    $this->artisan('outbound:check')
+        ->expectsOutput("schedule: replace {$legacy} with {$replacement}.")
+        ->assertFailed();
+})->with([
+    'work' => ['outbound:webhooks:work', 'outbound:work-deliveries'],
+    'prune' => ['outbound:webhooks:prune', 'outbound:prune-deliveries'],
+]);
