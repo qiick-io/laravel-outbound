@@ -8,6 +8,10 @@
 
 # qiick/laravel-outbound
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/qiick-io/laravel-outbound/badge)](https://scorecard.dev/viewer/?uri=github.com/qiick-io/laravel-outbound)
+
+PHPStan at `max` and the existing CI checks cover PHP. CodeQL covers GitHub Actions and JavaScript/TypeScript.
+
 > **Status:** `0.2.0-beta.3`. Pre-1.0: minor versions may break. Prefer a tagged release
 > over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
