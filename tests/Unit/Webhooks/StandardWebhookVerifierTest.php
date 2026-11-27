@@ -164,7 +164,7 @@ it('refuses more signature tokens than maxSignatures', function (): void {
     $header = implode(' ', array_fill(0, 3, $token));
 
     expect(fn () => swVerifier(maxSigs: 2)->verify('{}', 'msg_1', '1700000000', $header, [$secret], $now, 'test-scope'))
-        ->toThrow(WebhookException::class);
+        ->toThrow(WebhookException::class, 'Too many webhook signatures.');
 });
 
 it('refuses empty and oversized secret lists', function (): void {

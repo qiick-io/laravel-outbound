@@ -10,6 +10,8 @@ use Qiick\Outbound\Contracts\HostResolver;
 /**
  * System DNS HostResolver (A + AAAA, then gethostbynamel). Production default;
  * unit tests inject FakeHostResolver or seam closures — never call live DNS from Pest.
+ *
+ * @api
  */
 final class DnsHostResolver implements HostResolver
 {

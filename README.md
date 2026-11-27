@@ -451,6 +451,21 @@ ids, the event type, the reason, the attempt count and the time (standards
 review S5). A body pruned while its delivery was still pending exhausts it
 without an attempt and without the event.
 
+**Every event of the package is dispatched synchronously** (the
+`WebhookDeliveredEvent` after the commit), so no listener may throw: make it
+`ShouldQueue` or catch inside. A listener that throws on a delivery event
+is reported through the exception handler after the attempt is stored, and
+the run carries on; on `WebhookSignedEvent` and `OutboundRequestBlockedEvent`
+see above. Events carry public ids, never a secret or a body;
+`WebhookRedeliveryRequestedEvent` also carries the asking user's local id.
+
+**Responses are never stored or echoed** (standards review S6):
+`webhook_delivery_attempts.response_excerpt` stays empty: an attempt records
+the status, the duration, the transport error kind, the request id and an
+allowlist of response headers (never `Set-Cookie`, each cut at 255
+characters), never the receiver's body, which may reflect the request or
+carry data of the receiver's own. A product must not add it back.
+
 ### Legacy profiles
 
 An endpoint whose `legacy_profile` names a registered profile keeps an older
@@ -491,8 +506,8 @@ signatures (standards review R7; Standard Webhooks "Webhook metadata" keeps the
 id across retries). A consumer that already processed it deduplicates it. A
 consumer that verifies with this package and fails after claiming the id
 drops the redelivery as a duplicate until the claim expires;
-`SeenWebhookIdStore::release()` for giving a claim back arrives in a later
-pull request (review M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
+unless it gives the claim back with `SeenWebhookIdStore::release()` (review
+M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
 
 - A settled delivery (delivered, exhausted, refused, cancelled) gets exactly
   one more attempt: if it fails, it is exhausted again. A pending one is
@@ -686,7 +701,11 @@ so `DB::transaction(..., attempts: n)` still retries it), never Laravel's
 exception with its bindings. Query recorders (Telescope, Debugbar, Flare with
 query bindings, `DB::listen` loggers) still see the hash of every write: a
 short, guessable body can be found from it. `created_by` and `triggered_by` reference
-`outbound.webhooks.users_table` (`users`) with null-on-delete.
+`outbound.webhooks.users_table` (`users`) with null-on-delete, as `foreignId`
+columns: the users table must have an unsigned **bigint** `id` (Laravel's
+default). A product with UUID or ULID user ids sets
+`OUTBOUND_WEBHOOK_USERS_TABLE` empty: the columns stay, nullable and without
+a foreign key, and the product leaves them null.
 
 **Scope column.** The package defines no tenancy column and no morph. A product
 that scopes endpoints adds its own foreign key to `webhook_endpoints` with its
@@ -738,6 +757,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
+| `outbound.webhooks.schedule` | `OUTBOUND_WEBHOOK_SCHEDULE` | `true` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |

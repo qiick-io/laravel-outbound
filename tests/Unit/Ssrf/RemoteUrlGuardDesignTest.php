@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use Qiick\Outbound\Ssrf\PortPolicy;
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
 use Qiick\Outbound\Ssrf\UrlGuardOptions;
+use Qiick\Outbound\Testing\FakeHostResolver;
 
 /**
  * Design §5 edge cases (O15–O23 and related) not already covered by the
@@ -38,7 +40,8 @@ it('canonicalises IDN to punycode before DNS', function (): void {
     $ascii = idn_to_ascii('exämple.test', IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
     expect($ascii)->toBeString();
 
-    $destination = ssrfGuardResolving(false, ['93.184.216.34'])->authorize('https://exämple.test/');
+    $guard = new RemoteUrlGuard(new FakeHostResolver(answers: [strtolower($ascii) => ['93.184.216.34']]));
+    $destination = $guard->authorize('https://exämple.test/');
 
     expect($destination->host)->toBe(strtolower($ascii));
 });

@@ -21,7 +21,7 @@ use Qiick\Outbound\Models\WebhookEndpoint;
  * than one full 75 h schedule, so at least one delivery has used every retry
  * first. The endpoint's `auto_disable` overrides the configured switch.
  *
- * @api
+ * @internal
  */
 final class EndpointDisablePolicy
 {

@@ -26,6 +26,8 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
  *
  * The rules are applied in Eloquent's `initialize{Trait}` hook instead of
  * property defaults, so each one is executed code the mutation suite checks.
+ *
+ * @internal
  */
 trait PackageModelTrait
 {

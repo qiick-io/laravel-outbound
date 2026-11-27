@@ -141,7 +141,9 @@ it('re-authorises each redirect hop when followRedirects is on', function (): vo
         new HttpRequestOptions(followRedirects: true, maxRedirects: 3, allowCrossOriginRedirects: true),
     );
 
-    expect($response->body())->toBe('done');
+    expect($response->body())->toBe('done')
+        ->and($resolver->resolve('start.test'))->toBe([])
+        ->and($resolver->resolve('next.test'))->toBe([]);
     Http::assertSentCount(2);
 });
 
