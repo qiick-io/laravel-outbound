@@ -55,11 +55,15 @@ it('strips an ideographic full stop after IDN and still blocks localhost', funct
         ->toThrow(UnsafeUrl::class);
 });
 
-it('honours per-call UrlGuardOptions over constructor defaults', function (): void {
+it('takes the guard private-host setting as a ceiling a call can only narrow', function (): void {
     $closed = new RemoteUrlGuard(new FakeHostResolver, allowPrivateHosts: false, httpsOnly: false);
+    $open = new RemoteUrlGuard(new FakeHostResolver, allowPrivateHosts: true, httpsOnly: false);
 
     expect($closed->tryAuthorize('http://10.0.0.5/')['ok'])->toBeFalse()
-        ->and($closed->tryAuthorize('http://10.0.0.5/', new UrlGuardOptions(allowPrivateHosts: true))['ok'])->toBeTrue();
+        ->and($closed->tryAuthorize('http://10.0.0.5/', new UrlGuardOptions(allowPrivateHosts: true))['ok'])->toBeFalse()
+        ->and($open->tryAuthorize('http://10.0.0.5/')['ok'])->toBeTrue()
+        ->and($open->tryAuthorize('http://10.0.0.5/', new UrlGuardOptions(allowPrivateHosts: true))['ok'])->toBeTrue()
+        ->and($open->tryAuthorize('http://10.0.0.5/', new UrlGuardOptions(allowPrivateHosts: false))['ok'])->toBeFalse();
 
     $public = new RemoteUrlGuard(
         new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']]),

@@ -1,0 +1,20 @@
+name: PR title
+
+# PRs are squash-merged, so the title becomes the commit on develop. A
+# workflow of its own, so that editing a title (or a description) reruns only
+# this check, not the whole CI matrix. Required check: `pr-title / commitlint`.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    # qiick-io/app-ui@v0.11.0
+    uses: qiick-io/app-ui/.github/workflows/pr-title.yml@cbb1843eb1f50ef5a38e7e7bdf9b8dbec7b48bed # v0.11.0
