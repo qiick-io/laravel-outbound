@@ -286,6 +286,20 @@ it('records a delivered attempt and resets the endpoint failure streak', functio
         ->and($endpoint->last_failure_at?->toDateTimeString())->toBe('2026-11-23 09:00:00');
 });
 
+it('never stores the body of a failed answer, which may reflect the request or the receiver data (S6)', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(500, ['Content-Type' => 'text/plain'], 'Unknown customer Ada Lovelace');
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($attempt->http_status)->toBe(500)
+        ->and($attempt->response_excerpt)->toBeNull()
+        ->and((string) $attempt->error_message)->not->toContain('Ada')
+        ->and((string) onlyDelivery()->last_error)->not->toContain('Ada');
+});
+
 it('schedules a failed attempt on the Standard Webhooks delays and counts the failure streak', function (): void {
     $endpoint = deliveryEndpoint();
     $this->transfer->respond(500)->respond(500);

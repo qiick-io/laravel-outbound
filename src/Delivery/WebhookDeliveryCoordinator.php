@@ -68,6 +68,9 @@ final class WebhookDeliveryCoordinator
      * @param  int|null  $maxResponseBytes  `outbound.http.max_response_bytes`
      * @param  (Closure(): int)|null  $nanosecondClock  monotonic clock for `duration_ms`
      * @param  array<string, LegacyWebhookProfileContract>  $legacyProfiles  `outbound.webhooks.legacy_profiles`, by name
+     *
+     * @internal Resolve the coordinator from the container: the constructor
+     *           takes internal collaborators and may change in any release.
      */
     public function __construct(
         private readonly DatabaseDeliveryStore $store,

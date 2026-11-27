@@ -3,8 +3,10 @@
 declare(strict_types=1);
 
 use Qiick\Outbound\Ssrf\PortPolicy;
+use Qiick\Outbound\Ssrf\RemoteUrlGuard;
 use Qiick\Outbound\Ssrf\UnsafeUrl;
 use Qiick\Outbound\Ssrf\UrlGuardOptions;
+use Qiick\Outbound\Testing\FakeHostResolver;
 
 /**
  * Design §5 edge cases (O15–O23 and related) not already covered by the
@@ -38,7 +40,8 @@ it('canonicalises IDN to punycode before DNS', function (): void {
     $ascii = idn_to_ascii('exämple.test', IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
     expect($ascii)->toBeString();
 
-    $destination = ssrfGuardResolving(false, ['93.184.216.34'])->authorize('https://exämple.test/');
+    $guard = new RemoteUrlGuard(new FakeHostResolver(answers: [strtolower($ascii) => ['93.184.216.34']]));
+    $destination = $guard->authorize('https://exämple.test/');
 
     expect($destination->host)->toBe(strtolower($ascii));
 });
@@ -143,6 +146,29 @@ it('lowercases allowlist entries so mixed-case config still matches', function (
 
     expect(ssrfGuardResolving()->tryAuthorize('https://example.test/', $options)['ok'])->toBeTrue()
         ->and(ssrfGuardResolving()->tryAuthorize('https://other.test/', $options)['ok'])->toBeFalse();
+});
+
+it('matches an allowlist entry written in Unicode or with a trailing dot, as the URL host is', function (string $allowlistEntry, string $url): void {
+    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: [$allowlistEntry]);
+
+    expect(ssrfGuardResolving()->tryAuthorize($url, $options)['ok'])->toBeTrue()
+        ->and(ssrfGuardResolving()->tryAuthorize('https://other.test/', $options)['ok'])->toBeFalse();
+})->with([
+    'a Unicode name' => ['Bücher.example', 'https://xn--bcher-kva.example/'],
+    'a Unicode name against a Unicode URL' => ['Bücher.example', 'https://bücher.example/'],
+    'a trailing dot' => ['example.test.', 'https://example.test/'],
+    'a trailing dot against a trailing-dot URL' => ['example.test.', 'https://example.test./'],
+    'an IPv6 address written out in full' => ['2606:4700:0:0:0:0:0:1111', 'https://[2606:4700::1111]/'],
+]);
+
+it('refuses a host with two trailing dots, one more than the root', function (): void {
+    expect(ssrfGuardResolving()->tryAuthorize('https://example.test../'))->toBe(['ok' => false, 'reason' => 'URL is invalid.']);
+});
+
+it('never lets an allowlist entry that is not a host match anything', function (): void {
+    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: ['exa mple.test', '', 'example.test..']);
+
+    expect(ssrfGuardResolving()->tryAuthorize('https://example.test/', $options)['ok'])->toBeFalse();
 });
 
 it('exposes tryAuthorize ok/reason keys and destination', function (): void {

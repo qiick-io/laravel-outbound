@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `composer update guzzlehttp/guzzle`.
 - **Commands renamed** (fleet convention F6): `outbound:webhooks:work` is
   `outbound:work-deliveries`, `outbound:webhooks:prune` is
-  `outbound:prune-deliveries`. Update the product's schedule.
+  `outbound:prune-deliveries`. Update the product's schedule. The old names
+  remain available as hidden, logged aliases through the betas.
 - **New columns `webhook_deliveries.subject_public_id` and
   `claimed_triggered_by`**, and
   `payload_hash` is nullable, in the `create_` migration: recreate the
@@ -26,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docs/public-api.md` with the frozen contracts (URL guard, claim store,
+  dedupe scope, `DeliveryStatus`, subject reference), `tests/Arch/PublicApiTest.php`,
+  and `docs/security-checklist.md` mapping O1–O23 and S1–S15 to tests (#48).
+- `outbound:check` (fleet convention F2): fails, one line per problem, on a
+  missing webhook or users table, a dedupe cache that is not shared between
+  processes, or a schedule that uses one of the deprecated command names.
+- `outbound:prune-deliveries --dry-run` (F6), and the package schedules the
+  prune itself daily on one server behind `outbound.webhooks.schedule` (F9).
 - `Qiick\Outbound\Erasure\OutboundEraser`, the fleet-standard eraser, with
   `ErasureReport`, `OrganisationScopeUnsupportedException` and
   `Events\SubjectErasedEvent`; the fleet erasure suite (E1–E14) runs in CI on
@@ -35,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `EndpointDisablePolicy`, `NotifyWebhookEndpointOwnerListener` and the
+  console command classes are `@internal` (decision D6); the command names
+  stay public. `DnsHostResolver` is `@api`.
 - A delivery cancelled while a worker was sending it stays cancelled: the
   attempt is not recorded. A worker reads the row again after DNS, right
   before the transport (`PinnedHttpClient::send(beforeTransport: …)`), so a
@@ -46,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `subjectPublicId` is stored in lower case.
 - The eraser clears `payload_hash` on deliveries about the person.
 - The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
+- The owner email listener is not registered when
+  `outbound.webhooks.auto_disable.notify_owner` is off (F3).
+- **The boot checks every `outbound.*` value** against the type of its
+  package default and the retry preset name, naming the key (fleet
+  convention F1): a wrong value used to surface only when the verifier, retry
+  policy or coordinator was first built (#49).
+- **Boolean and integer variables are parsed strictly**: a malformed value
+  (`OUTBOUND_ALLOW_PRIVATE_HOSTS=flase`) stops the boot instead of being cast
+  to `true` or `0`.
+- A host allowlist entry is normalised as the URL host is: `Bücher.example`
+  matches `xn--bcher-kva.example`, `example.test.` matches `example.test`, and
+  an IPv6 entry matches in any spelling (#49).
 
 ## [0.2.0-beta.3] - 2026-11-26
 

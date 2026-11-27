@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Laravel;
 
+use Illuminate\Console\Application as Artisan;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -12,6 +14,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
+use Qiick\Outbound\Console\Commands\CheckOutboundCommand;
 use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
@@ -48,6 +51,9 @@ use Qiick\Outbound\Webhooks\WebhookSecretResolver;
  */
 final class OutboundServiceProvider extends ServiceProvider
 {
+    /** @var array<mixed>|null */
+    private ?array $defaults = null;
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../../config/outbound.php', 'outbound');
@@ -60,8 +66,8 @@ final class OutboundServiceProvider extends ServiceProvider
 
             return new RemoteUrlGuard(
                 hostResolver: $resolver,
-                allowPrivateHosts: self::configBool($config, 'outbound.ssrf.allow_private_hosts'),
-                httpsOnly: self::configBool($config, 'outbound.ssrf.https_only'),
+                allowPrivateHosts: $this->configBool($config, 'outbound.ssrf.allow_private_hosts'),
+                httpsOnly: $this->configBool($config, 'outbound.ssrf.https_only'),
                 metadataPolicy: $app->bound(MetadataPolicyContract::class) ? $app->make(MetadataPolicyContract::class) : null,
             );
         });
@@ -70,9 +76,9 @@ final class OutboundServiceProvider extends ServiceProvider
             $config = $app->make(ConfigRepository::class);
 
             return new OutboundHttpLimits(
-                maxTimeoutSeconds: self::configInt($config, 'outbound.http.max_timeout_seconds'),
-                maxConnectTimeoutSeconds: self::configInt($config, 'outbound.http.max_connect_timeout_seconds'),
-                totalDeadlineSeconds: self::configInt($config, 'outbound.http.total_deadline_seconds'),
+                maxTimeoutSeconds: $this->configInt($config, 'outbound.http.max_timeout_seconds'),
+                maxConnectTimeoutSeconds: $this->configInt($config, 'outbound.http.max_connect_timeout_seconds'),
+                totalDeadlineSeconds: $this->configInt($config, 'outbound.http.total_deadline_seconds'),
             );
         });
 
@@ -92,9 +98,6 @@ final class OutboundServiceProvider extends ServiceProvider
             );
         });
 
-        // A product binds its own to choose who hears of a disabled endpoint.
-        $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
-
         $this->app->singleton(SeenWebhookIdStore::class, function (Application $app): SeenWebhookIdStore {
             // ArrayStore is atomic but process-local — allow only in the testing env.
             return new CacheSeenWebhookIdStore(
@@ -107,8 +110,8 @@ final class OutboundServiceProvider extends ServiceProvider
             $config = $app->make(ConfigRepository::class);
 
             return new StandardWebhookSigner(
-                maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes'),
-                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets'),
+                maxPayloadBytes: $this->configInt($config, 'outbound.webhooks.max_payload_bytes'),
+                maxSecrets: $this->configInt($config, 'outbound.webhooks.max_secrets'),
                 events: $app->make(EventDispatcher::class),
             );
         });
@@ -117,27 +120,31 @@ final class OutboundServiceProvider extends ServiceProvider
             $config = $app->make(ConfigRepository::class);
 
             return new StandardWebhookVerifier(
-                replayToleranceSeconds: self::configInt($config, 'outbound.webhooks.replay_tolerance_seconds'),
-                maxPayloadBytes: self::configInt($config, 'outbound.webhooks.max_payload_bytes'),
-                maxSignatures: self::configInt($config, 'outbound.webhooks.max_signatures'),
-                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets'),
+                replayToleranceSeconds: $this->configInt($config, 'outbound.webhooks.replay_tolerance_seconds'),
+                maxPayloadBytes: $this->configInt($config, 'outbound.webhooks.max_payload_bytes'),
+                maxSignatures: $this->configInt($config, 'outbound.webhooks.max_signatures'),
+                maxSecrets: $this->configInt($config, 'outbound.webhooks.max_secrets'),
                 seenIds: $app->make(SeenWebhookIdStore::class),
             );
         });
 
         $this->app->singleton(WebhookSecretResolver::class, function (Application $app): WebhookSecretResolver {
             return new DatabaseWebhookSecretResolver(
-                allowRawLegacySecret: self::configBool($app->make(ConfigRepository::class), 'outbound.webhooks.allow_raw_legacy_secret'),
+                allowRawLegacySecret: $this->configBool($app->make(ConfigRepository::class), 'outbound.webhooks.allow_raw_legacy_secret'),
             );
         });
 
         $this->app->singleton(DatabaseDeliveryStore::class, function (Application $app): DatabaseDeliveryStore {
             $scopeColumn = $app->make(ConfigRepository::class)->get('outbound.webhooks.scope_column');
 
+            if ($scopeColumn !== null && ! is_string($scopeColumn)) {
+                throw new InvalidArgumentException('outbound.webhooks.scope_column must be a string.');
+            }
+
             return new DatabaseDeliveryStore(
-                scopeColumn: is_string($scopeColumn) && $scopeColumn !== '' ? $scopeColumn : null,
-                payloadRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.payload_retention_days'),
-                deliveryRetentionDays: self::configInt($app->make(ConfigRepository::class), 'outbound.webhooks.delivery_retention_days'),
+                scopeColumn: $scopeColumn !== null && $scopeColumn !== '' ? $scopeColumn : null,
+                payloadRetentionDays: $this->configInt($app->make(ConfigRepository::class), 'outbound.webhooks.payload_retention_days'),
+                deliveryRetentionDays: $this->configInt($app->make(ConfigRepository::class), 'outbound.webhooks.delivery_retention_days'),
             );
         });
 
@@ -146,9 +153,9 @@ final class OutboundServiceProvider extends ServiceProvider
 
             return new RetryPolicy(
                 new SystemRandomizer,
-                jitterSeconds: self::configInt($config, 'outbound.webhooks.retry_jitter_seconds'),
-                respectRetryAfter: self::configBool($config, 'outbound.webhooks.respect_retry_after'),
-                retryAfterCapSeconds: self::configInt($config, 'outbound.webhooks.retry_after_cap_seconds'),
+                jitterSeconds: $this->configInt($config, 'outbound.webhooks.retry_jitter_seconds'),
+                respectRetryAfter: $this->configBool($config, 'outbound.webhooks.respect_retry_after'),
+                retryAfterCapSeconds: $this->configInt($config, 'outbound.webhooks.retry_after_cap_seconds'),
             );
         });
 
@@ -156,9 +163,9 @@ final class OutboundServiceProvider extends ServiceProvider
             $config = $app->make(ConfigRepository::class);
 
             return new EndpointDisablePolicy(
-                isEnabled: self::configBool($config, 'outbound.webhooks.auto_disable.enabled'),
-                noSuccessDays: self::configInt($config, 'outbound.webhooks.auto_disable.no_success_days'),
-                minConsecutiveFailures: self::configInt($config, 'outbound.webhooks.auto_disable.min_consecutive_failures'),
+                isEnabled: $this->configBool($config, 'outbound.webhooks.auto_disable.enabled'),
+                noSuccessDays: $this->configInt($config, 'outbound.webhooks.auto_disable.no_success_days'),
+                minConsecutiveFailures: $this->configInt($config, 'outbound.webhooks.auto_disable.min_consecutive_failures'),
             );
         });
 
@@ -172,16 +179,15 @@ final class OutboundServiceProvider extends ServiceProvider
                 $app->make(PinnedHttpClient::class),
                 $app->make(RetryPolicy::class),
                 $app->make(OutboundHttpLimits::class),
-                timeoutSeconds: self::configInt($config, 'outbound.webhooks.timeout_seconds'),
-                connectTimeoutSeconds: self::configInt($config, 'outbound.http.connect_timeout_seconds'),
-                defaultRetryPreset: WebhookRetryPresetEnum::tryFrom(self::configString($config, 'outbound.webhooks.retry_preset'))
-                    ?? throw new InvalidArgumentException('outbound.webhooks.retry_preset must be standard or short.'),
-                defaultMaxConcurrency: self::configInt($config, 'outbound.webhooks.default_max_concurrency'),
-                maxResponseBytes: self::configInt($config, 'outbound.http.max_response_bytes'),
+                timeoutSeconds: $this->configInt($config, 'outbound.webhooks.timeout_seconds'),
+                connectTimeoutSeconds: $this->configInt($config, 'outbound.http.connect_timeout_seconds'),
+                defaultRetryPreset: $this->defaultRetryPreset($config),
+                defaultMaxConcurrency: $this->configInt($config, 'outbound.webhooks.default_max_concurrency'),
+                maxResponseBytes: $this->configInt($config, 'outbound.http.max_response_bytes'),
                 exceptionHandler: $app->make(ExceptionHandler::class),
                 disablePolicy: $app->make(EndpointDisablePolicy::class),
                 events: $app->make(EventDispatcher::class),
-                legacyProfiles: self::legacyProfiles($app, $config),
+                legacyProfiles: $this->legacyProfiles($app, $config),
             );
         });
 
@@ -189,8 +195,8 @@ final class OutboundServiceProvider extends ServiceProvider
             $config = $app->make(ConfigRepository::class);
 
             return new SecretRotator(
-                maxSecrets: self::configInt($config, 'outbound.webhooks.max_secrets'),
-                defaultGraceSeconds: self::configInt($config, 'outbound.webhooks.secret_rotation_grace_seconds'),
+                maxSecrets: $this->configInt($config, 'outbound.webhooks.max_secrets'),
+                defaultGraceSeconds: $this->configInt($config, 'outbound.webhooks.secret_rotation_grace_seconds'),
             );
         });
     }
@@ -200,12 +206,26 @@ final class OutboundServiceProvider extends ServiceProvider
      * migrations unless `outbound.migrations.load` is off; a product that
      * turns it off publishes them instead (standards review R1).
      *
+     * Every `outbound.*` value is read once here, so a value of the wrong
+     * type stops the boot naming its key (fleet convention F1) instead of
+     * failing at the first delivery or verification.
+     *
      * @throws WebhookException when `outbound.webhooks.max_secrets` is outside
      *                          1–4: the fixed limit is refused at boot, not at
      *                          the first rotation
+     * @throws InvalidArgumentException when a value has the wrong type or range
      */
     public function boot(): void
     {
+        $config = $this->app->make(ConfigRepository::class);
+
+        // mergeConfigFrom() merges the top level only: a key an older
+        // published config lacks gets its shipped default here, so
+        // `config:cache` (which boots the providers) stores the merged result.
+        if (! $this->app->configurationIsCached()) {
+            $config->set('outbound', array_replace_recursive($this->packageDefaults(), (array) $config->get('outbound', [])));
+        }
+
         $this->app->make(SecretRotator::class);
         // Refuses auto-disable thresholds below 1 and a payload retention
         // shorter than the retry schedule at boot too.
@@ -213,11 +233,30 @@ final class OutboundServiceProvider extends ServiceProvider
         $this->app->make(DatabaseDeliveryStore::class);
         // Refuses an egress proxy that is not an http(s) proxy URL at boot.
         $this->app->make(PinnedHttpClient::class);
-        $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        // The other services are built on first use, after a test or a
+        // product has changed the config or a binding; their values are
+        // checked here against their shipped types.
+        $this->assertConfigTypes($config);
+        $this->defaultRetryPreset($config);
+        // Off means off (F3): no listener and no recipients binding when the
+        // product sends its own notice. A product binds its own recipients
+        // to choose who hears of a disabled endpoint.
+        if ($this->configBool($config, 'outbound.webhooks.auto_disable.notify_owner')) {
+            $this->app->bindIf(WebhookEndpointNoticeRecipientsContract::class, EndpointCreatorRecipients::class);
+            $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        }
+
+        if ($this->configBool($config, 'outbound.webhooks.schedule')) {
+            $this->callAfterResolving(Schedule::class, static function (Schedule $schedule): void {
+                $schedule->command('outbound:prune-deliveries')
+                    ->name(CheckOutboundCommand::PACKAGE_PRUNE_SCHEDULE)
+                    ->daily()->onOneServer()->withoutOverlapping();
+            });
+        }
 
         $migrationsPath = __DIR__.'/../../database/migrations';
 
-        if (self::configBool($this->app->make(ConfigRepository::class), 'outbound.migrations.load')) {
+        if ($this->configBool($config, 'outbound.migrations.load')) {
             $this->loadMigrationsFrom($migrationsPath);
         }
 
@@ -228,7 +267,13 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
 
-            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class]);
+            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class, CheckOutboundCommand::class]);
+
+            // shortcut: remove before 1.0.0-rc.1. Keep beta schedules running in the meantime.
+            Artisan::starting(static function (Artisan $artisan): void {
+                $artisan->add((new WorkWebhookDeliveriesCommand)->setName(WorkWebhookDeliveriesCommand::LEGACY_NAME)->setHidden());
+                $artisan->add((new PruneWebhookPayloadsCommand)->setName(PruneWebhookPayloadsCommand::LEGACY_NAME)->setHidden());
+            });
         }
     }
 
@@ -240,14 +285,14 @@ final class OutboundServiceProvider extends ServiceProvider
      * @throws InvalidArgumentException when an entry is not a name and a
      *                                  binding of a LegacyWebhookProfileContract
      */
-    private static function legacyProfiles(Application $app, ConfigRepository $config): array
+    private function legacyProfiles(Application $app, ConfigRepository $config): array
     {
         $profiles = [];
 
-        foreach ((array) self::configValue($config, 'outbound.webhooks.legacy_profiles') as $name => $binding) {
-            $profile = is_string($name) && is_string($binding) ? $app->make($binding) : null;
+        foreach ($this->namedBindings($config) as $name => $binding) {
+            $profile = $app->make($binding);
 
-            if (! is_string($name) || ! $profile instanceof LegacyWebhookProfileContract) {
+            if (! $profile instanceof LegacyWebhookProfileContract) {
                 throw new InvalidArgumentException('outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.');
             }
 
@@ -258,11 +303,119 @@ final class OutboundServiceProvider extends ServiceProvider
     }
 
     /**
+     * Shipped types are fixed independently of environment values, so a typo
+     * can never redefine the type of a configuration key.
+     *
+     * @return iterable<string, 'int'|'bool'|'string'|'?string'|'map'>
+     */
+    private static function configTypes(): iterable
+    {
+        yield 'outbound.migrations.load' => 'bool';
+        yield 'outbound.ssrf.allow_private_hosts' => 'bool';
+        yield 'outbound.ssrf.https_only' => 'bool';
+        yield 'outbound.http.timeout_seconds' => 'int';
+        yield 'outbound.http.connect_timeout_seconds' => 'int';
+        yield 'outbound.http.max_timeout_seconds' => 'int';
+        yield 'outbound.http.max_connect_timeout_seconds' => 'int';
+        yield 'outbound.http.total_deadline_seconds' => 'int';
+        yield 'outbound.http.max_response_bytes' => 'int';
+        yield 'outbound.http.max_redirects' => 'int';
+        yield 'outbound.http.egress_proxy' => '?string';
+        yield 'outbound.webhooks.replay_tolerance_seconds' => 'int';
+        yield 'outbound.webhooks.max_payload_bytes' => 'int';
+        yield 'outbound.webhooks.max_signatures' => 'int';
+        yield 'outbound.webhooks.max_secrets' => 'int';
+        yield 'outbound.webhooks.secret_rotation_grace_seconds' => 'int';
+        yield 'outbound.webhooks.retry_preset' => 'string';
+        yield 'outbound.webhooks.retry_jitter_seconds' => 'int';
+        yield 'outbound.webhooks.timeout_seconds' => 'int';
+        yield 'outbound.webhooks.respect_retry_after' => 'bool';
+        yield 'outbound.webhooks.retry_after_cap_seconds' => 'int';
+        yield 'outbound.webhooks.default_max_concurrency' => 'int';
+        yield 'outbound.webhooks.payload_retention_days' => 'int';
+        yield 'outbound.webhooks.delivery_retention_days' => 'int';
+        yield 'outbound.webhooks.schedule' => 'bool';
+        yield 'outbound.webhooks.auto_disable.enabled' => 'bool';
+        yield 'outbound.webhooks.auto_disable.no_success_days' => 'int';
+        yield 'outbound.webhooks.auto_disable.min_consecutive_failures' => 'int';
+        yield 'outbound.webhooks.auto_disable.notify_owner' => 'bool';
+        yield 'outbound.webhooks.auto_disable.endpoint_url' => '?string';
+        yield 'outbound.webhooks.allow_raw_legacy_secret' => 'bool';
+        yield 'outbound.webhooks.legacy_profiles' => 'map';
+        yield 'outbound.webhooks.scope_column' => '?string';
+        yield 'outbound.webhooks.users_table' => '?string';
+    }
+
+    /**
+     * Checks every configured value against its shipped type, and every section
+     * (`outbound.webhooks`, …) against an array, so a section replaced by a
+     * scalar is not read as "every key missing".
+     *
+     * @throws InvalidArgumentException naming the first key of the wrong type
+     */
+    private function assertConfigTypes(ConfigRepository $config): void
+    {
+        foreach (self::configTypes() as $key => $type) {
+            for ($section = dirname(str_replace('.', '/', $key)); $section !== 'outbound'; $section = dirname($section)) {
+                $sectionKey = str_replace('/', '.', $section);
+
+                if ($config->has($sectionKey) && ! is_array($config->get($sectionKey))) {
+                    throw new InvalidArgumentException("{$sectionKey} must be an array.");
+                }
+            }
+
+            match ($type) {
+                'int' => $this->configInt($config, $key),
+                'bool' => $this->configBool($config, $key),
+                'string' => $this->configString($config, $key),
+                '?string' => $this->configValue($config, $key) === null ? null : $this->configString($config, $key),
+                'map' => $this->namedBindings($config),
+            };
+        }
+    }
+
+    /**
+     * @return array<string, string>
+     *
+     * @throws InvalidArgumentException when the value is not a map of names to bindings
+     */
+    private function namedBindings(ConfigRepository $config): array
+    {
+        $bindingsByName = $this->configValue($config, 'outbound.webhooks.legacy_profiles');
+        $message = 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.';
+
+        if (! is_array($bindingsByName)) {
+            throw new InvalidArgumentException($message);
+        }
+
+        $namedBindings = [];
+
+        foreach ($bindingsByName as $name => $binding) {
+            if (! is_string($name) || ! is_string($binding)) {
+                throw new InvalidArgumentException($message);
+            }
+
+            $namedBindings[$name] = $binding;
+        }
+
+        return $namedBindings;
+    }
+
+    /**
+     * @throws InvalidArgumentException when the value is not a preset name
+     */
+    private function defaultRetryPreset(ConfigRepository $config): WebhookRetryPresetEnum
+    {
+        return WebhookRetryPresetEnum::tryFrom($this->configString($config, 'outbound.webhooks.retry_preset'))
+            ?? throw new InvalidArgumentException('outbound.webhooks.retry_preset must be standard or short.');
+    }
+
+    /**
      * @throws InvalidArgumentException when the value is not an integer
      */
-    private static function configInt(ConfigRepository $config, string $key): int
+    private function configInt(ConfigRepository $config, string $key): int
     {
-        $value = self::configValue($config, $key);
+        $value = $this->configValue($config, $key);
 
         return is_int($value) ? $value : throw new InvalidArgumentException("{$key} must be an integer.");
     }
@@ -270,9 +423,9 @@ final class OutboundServiceProvider extends ServiceProvider
     /**
      * @throws InvalidArgumentException when the value is not a boolean
      */
-    private static function configBool(ConfigRepository $config, string $key): bool
+    private function configBool(ConfigRepository $config, string $key): bool
     {
-        $value = self::configValue($config, $key);
+        $value = $this->configValue($config, $key);
 
         return is_bool($value) ? $value : throw new InvalidArgumentException("{$key} must be true or false.");
     }
@@ -280,9 +433,9 @@ final class OutboundServiceProvider extends ServiceProvider
     /**
      * @throws InvalidArgumentException when the value is not a string
      */
-    private static function configString(ConfigRepository $config, string $key): string
+    private function configString(ConfigRepository $config, string $key): string
     {
-        $value = self::configValue($config, $key);
+        $value = $this->configValue($config, $key);
 
         return is_string($value) ? $value : throw new InvalidArgumentException("{$key} must be a string.");
     }
@@ -291,11 +444,27 @@ final class OutboundServiceProvider extends ServiceProvider
      * The configured value, or the package's own default from
      * config/outbound.php when the key is missing: Laravel merges only the
      * top level of a package config, so a config published before a key
-     * existed lacks it. A value of the wrong type stops the boot instead of
-     * silently becoming the default.
+     * existed lacks it. A value present but of the wrong type, null
+     * included, stops the boot instead of silently becoming the default.
      */
-    private static function configValue(ConfigRepository $config, string $key): mixed
+    private function configValue(ConfigRepository $config, string $key): mixed
     {
-        return $config->get($key) ?? data_get(['outbound' => require __DIR__.'/../../config/outbound.php'], $key);
+        return $config->has($key) ? $config->get($key) : data_get(['outbound' => $this->packageDefaults()], $key);
+    }
+
+    /**
+     * config/outbound.php as shipped, the reference for missing keys and types.
+     *
+     * @return array<mixed>
+     */
+    private function packageDefaults(): array
+    {
+        if ($this->defaults !== null) {
+            return $this->defaults;
+        }
+
+        $defaults = require __DIR__.'/../../config/outbound.php';
+
+        return $this->defaults = is_array($defaults) ? $defaults : [];
     }
 }
