@@ -47,6 +47,19 @@ it('reports a duplicate without aborting the calling database transaction', func
     });
 });
 
+it('keeps unrelated expired locks when the cleanup lottery is disabled or loses', function (array $lottery): void {
+    config()->set('cache.default', 'database');
+    config()->set('cache.stores.database.lock_lottery', $lottery);
+
+    DB::transaction(function (): void {
+        DB::table('cache_locks')->insert(['key' => 'old-fixture', 'owner' => 'old-owner', 'expiration' => 1]);
+        $store = new CacheSeenWebhookIdStore(Cache::store('database'));
+
+        expect($store->claim(WebhookIdClaim::generate('fixture', 'msg_1'), 60))->toBeTrue()
+            ->and(DB::table('cache_locks')->where('key', 'old-fixture')->exists())->toBeTrue();
+    });
+})->with([[[]], [[0, 1]]]);
+
 it('preserves a replacement database claim and deletes with an owner predicate', function (): void {
     $firstWorker = new CacheSeenWebhookIdStore(Cache::store('database'));
     $secondWorker = new CacheSeenWebhookIdStore(Cache::store('database'));

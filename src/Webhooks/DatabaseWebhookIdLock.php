@@ -7,6 +7,7 @@ namespace Qiick\Outbound\Webhooks;
 use Illuminate\Cache\DatabaseLock;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Lottery;
 
 /**
  * Protects the database lock's insert-or-takeover sequence in a caller transaction.
@@ -41,7 +42,8 @@ final class DatabaseWebhookIdLock extends DatabaseLock
                 ]) > 0;
         }
 
-        if (count($lock->lottery ?? []) === 2 && random_int(1, $lock->lottery[1]) <= $lock->lottery[0]) {
+        $lottery = $lock->lottery ?? [];
+        if (count($lottery) === 2 && Lottery::odds(...$lottery)->choose() === true) {
             $connection->table($lock->table)->where('expiration', '<=', $lock->currentTime())->delete();
         }
 
