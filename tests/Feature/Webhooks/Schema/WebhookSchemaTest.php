@@ -71,18 +71,22 @@ it('creates the five tables with the standard fixed names and every column of th
     ]],
     'webhook_deliveries' => ['webhook_deliveries', [
         'id', 'public_id', 'endpoint_id', 'event_id', 'event_type', 'occurred_at', 'payload_version', 'status',
-        'attempts_count', 'max_attempts', 'next_attempt_at', 'claimed_until', 'exhausted_reason',
+        'attempts_count', 'max_attempts', 'next_attempt_at', 'claimed_until', 'claimed_triggered_by', 'exhausted_reason',
         'next_attempt_trigger', 'next_attempt_triggered_by', 'redelivery_requests', 'last_attempt_at',
-        'delivered_at', 'last_http_status', 'last_error', 'payload', 'payload_hash', 'payload_bytes', 'payload_expires_at', 'trigger', 'metadata',
+        'delivered_at', 'last_http_status', 'last_error', 'payload', 'payload_hash', 'payload_bytes', 'payload_expires_at', 'trigger', 'subject_public_id', 'metadata',
         'created_at', 'updated_at',
     ]],
     'webhook_delivery_attempts' => ['webhook_delivery_attempts', [
         'id', 'public_id', 'delivery_id', 'attempt', 'trigger', 'triggered_by', 'status', 'webhook_timestamp',
         'signature_schemes', 'secret_public_ids', 'pinned_address', 'http_status', 'error_code', 'error_message',
-        'retry_after_seconds', 'response_headers', 'response_excerpt', 'response_bytes', 'duration_ms',
+        'retry_after_seconds', 'response_headers', 'response_bytes', 'duration_ms',
         'request_id', 'attempted_at', 'next_attempt_at', 'metadata', 'created_at',
     ]],
 ]);
+
+it('omits response bodies and excerpts from the attempt schema', function (): void {
+    expect(Schema::hasColumn('webhook_delivery_attempts', 'response_excerpt'))->toBeFalse();
+});
 
 it('applies the documented column defaults', function (): void {
     $endpointId = insertEndpointRow();

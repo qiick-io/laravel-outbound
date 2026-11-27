@@ -28,7 +28,7 @@ use Qiick\Outbound\Testing\FakeHostResolver;
  */
 function sendThroughFailingTransport(callable $rejection, ?OutboundHttpLimits $limits = null): OutboundHttpException
 {
-    $client = new PinnedHttpClient(
+    $client = PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['example.test' => ['10.20.30.40']]), allowPrivateHosts: true),
         $limits ?? new OutboundHttpLimits,
@@ -117,7 +117,7 @@ it('never puts the host, the pinned address or the URL in the message', function
 
 it('calls the exhausted chain deadline a timeout', function (): void {
     $ticks = [100.0, 100.5];
-    $client = new PinnedHttpClient(
+    $client = PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']])),
         new OutboundHttpLimits(totalDeadlineSeconds: 1),
@@ -138,7 +138,7 @@ it('calls the exhausted chain deadline a timeout', function (): void {
 });
 
 it('has no transport kind for refusals that are not transport errors', function (): void {
-    $client = new PinnedHttpClient(
+    $client = PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['example.test' => ['93.184.216.34']])),
         new OutboundHttpLimits,

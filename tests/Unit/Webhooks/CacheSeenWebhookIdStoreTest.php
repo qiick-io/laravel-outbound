@@ -12,6 +12,7 @@ use Illuminate\Cache\NullStore;
 use Illuminate\Cache\RedisStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Cache\StorageStore;
+use Illuminate\Contracts\Cache\Lock;
 use Qiick\Outbound\Webhooks\CacheSeenWebhookIdStore;
 use Qiick\Outbound\Webhooks\UnsupportedWebhookIdCacheStoreException;
 use Qiick\Outbound\Webhooks\WebhookIdClaim;
@@ -26,16 +27,29 @@ it('claims atomically with the array store when allowed for tests', function ():
         ->and($store->claim(WebhookIdClaim::generate('scope-b', 'msg_1'), 60))->toBeTrue();
 });
 
+it('keeps an unexpired beta replay record without releasing it through the lock API', function (): void {
+    $cache = new Repository(new ArrayStore);
+    $store = new CacheSeenWebhookIdStore($cache, allowArrayStore: true);
+    $claim = WebhookIdClaim::generate('fixture', 'msg_1');
+    $legacyKey = 'outbound:whid:'.hash('sha256', "fixture\0msg_1");
+    $cache->put($legacyKey, $claim->token, 300);
+
+    $store->release($claim);
+
+    expect($cache->get($legacyKey))->toBe($claim->token)
+        ->and($store->claim(WebhookIdClaim::generate('fixture', 'msg_1'), 300))->toBeFalse();
+});
+
 it('floors claim TTL at one second', function (): void {
     $inner = new class extends ArrayStore
     {
         public ?int $seenTtl = null;
 
-        public function add($key, $value, $seconds): bool
+        public function lock($name, $seconds = 0, $owner = null): Lock
         {
             $this->seenTtl = $seconds;
 
-            return true;
+            return parent::lock($name, $seconds, $owner);
         }
     };
     $store = new CacheSeenWebhookIdStore(new Repository($inner), allowArrayStore: true);
@@ -46,17 +60,16 @@ it('floors claim TTL at one second', function (): void {
         ->and($inner->seenTtl)->toBe(1);
 });
 
-it('hashes scope and id into a bounded Memcached-safe key', function (): void {
+it('hashes scope and id into a bounded namespaced lock key', function (): void {
     $cache = new Repository(new ArrayStore);
     $store = new CacheSeenWebhookIdStore($cache, keyPrefix: 't:', allowArrayStore: true);
 
     expect($store->claim(WebhookIdClaim::generate('tenant', 'msg_'.str_repeat('x', 200)), 30))->toBeTrue();
 
-    $keys = array_keys($cache->getStore()->all());
+    $keys = array_keys($cache->getStore()->locks);
     expect($keys)->toHaveCount(1)
-        ->and($keys[0])->toStartWith('t:')
-        ->and(strlen($keys[0]))->toBe(2 + 64) // prefix + sha256 hex
-        ->and($keys[0])->toBe('t:'.hash('sha256', "tenant\0".'msg_'.str_repeat('x', 200)));
+        ->and(strlen($keys[0]))->toBe(strlen('t:lock:') + 64)
+        ->and($keys[0])->toBe('t:lock:'.hash('sha256', "tenant\0".'msg_'.str_repeat('x', 200)));
 });
 
 it('refuses ArrayStore outside tests with a dedicated exception', function (): void {
@@ -84,34 +97,34 @@ it('accepts the redis store', function (): void {
         ->not->toThrow(UnsupportedWebhookIdCacheStoreException::class);
 });
 
-it('accepts the memcached store', function (): void {
+it('refuses Memcached because its Laravel lock release lacks an atomic owner check', function (): void {
     $inner = new class extends MemcachedStore
     {
         public function __construct() {}
     };
 
     expect(fn () => new CacheSeenWebhookIdStore(new Repository($inner)))
-        ->not->toThrow(UnsupportedWebhookIdCacheStoreException::class);
+        ->toThrow(UnsupportedWebhookIdCacheStoreException::class, MemcachedStore::class);
 });
 
-it('accepts the dynamodb store', function (): void {
+it('refuses DynamoDB because its Laravel lock release lacks an atomic owner check', function (): void {
     $inner = new class extends DynamoDbStore
     {
         public function __construct() {}
     };
 
     expect(fn () => new CacheSeenWebhookIdStore(new Repository($inner)))
-        ->not->toThrow(UnsupportedWebhookIdCacheStoreException::class);
+        ->toThrow(UnsupportedWebhookIdCacheStoreException::class, DynamoDbStore::class);
 });
 
-it('accepts the file store (single-host)', function (): void {
+it('refuses the file store because its Laravel lock release lacks an atomic owner check', function (): void {
     $inner = new class extends FileStore
     {
         public function __construct() {}
     };
 
     expect(fn () => new CacheSeenWebhookIdStore(new Repository($inner)))
-        ->not->toThrow(UnsupportedWebhookIdCacheStoreException::class);
+        ->toThrow(UnsupportedWebhookIdCacheStoreException::class, FileStore::class);
 });
 
 it('refuses the storage store even though it exposes add', function (): void {
@@ -164,7 +177,7 @@ it('refuses stores outside the allowlist and names the store class', function ()
 it('wraps cache failures as WebhookIdStoreFailedException', function (): void {
     $inner = new class extends ArrayStore
     {
-        public function add($key, $value, $seconds): bool
+        public function lock($name, $seconds = 0, $owner = null): Lock
         {
             throw new RuntimeException('cache down');
         }
@@ -175,10 +188,32 @@ it('wraps cache failures as WebhookIdStoreFailedException', function (): void {
         ->toThrow(WebhookIdStoreFailedException::class, 'Webhook id dedupe store failed.');
 });
 
+it('leaves the replacement owner in place after an array lock expires', function (): void {
+    $cache = new Repository(new ArrayStore);
+    $firstWorker = new CacheSeenWebhookIdStore($cache, allowArrayStore: true);
+    $secondWorker = new CacheSeenWebhookIdStore($cache, allowArrayStore: true);
+    $expired = WebhookIdClaim::generate('fixture', 'msg_1');
+    $replacement = WebhookIdClaim::generate('fixture', 'msg_1');
+
+    expect($firstWorker->claim($expired, 1))->toBeTrue();
+    $this->travel(2)->seconds();
+
+    try {
+        expect($secondWorker->claim($replacement, 60))->toBeTrue();
+        $firstWorker->release($expired);
+
+        expect($firstWorker->claim(WebhookIdClaim::generate('fixture', 'msg_1'), 60))->toBeFalse();
+        $secondWorker->release($replacement);
+        expect($firstWorker->claim(WebhookIdClaim::generate('fixture', 'msg_1'), 60))->toBeTrue();
+    } finally {
+        $this->travelBack();
+    }
+});
+
 it('names the refused store and the accepted ones', function (): void {
     expect(fn () => new CacheSeenWebhookIdStore(new Repository(new NullStore)))
         ->toThrow(
             UnsupportedWebhookIdCacheStoreException::class,
-            'CacheSeenWebhookIdStore refuses cache store Illuminate\Cache\NullStore; use database, redis, memcached, dynamodb, or file (single-host). Array is tests-only.',
+            'CacheSeenWebhookIdStore refuses cache store Illuminate\Cache\NullStore; use database or redis with atomic owner-checked release. Array is tests-only.',
         );
 });

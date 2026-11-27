@@ -5,6 +5,27 @@ public surface as unstable: read the release's section of `CHANGELOG.md` and
 the approved design before upgrading, and prefer a tagged release to a commit
 from `develop`.
 
+## Product adoption checks
+
+- Update the tagged Outbound dependency and the product's Composer lockfile.
+  A product that also installs OIDC must use an OIDC constraint that allows
+  the chosen Outbound tag. OIDC `1.0.0-beta.8` allows Outbound `0.1` or
+  `0.2`.
+- Recreate the prerelease webhook schema on a disposable database and verify
+  the five package tables. If preserving beta deliveries, apply the column
+  and index changes in the upgrade notes below before starting a worker on the new code.
+- Schedule `outbound:work-deliveries`. Keep the package's daily prune, or
+  turn it off with `OUTBOUND_WEBHOOK_SCHEDULE=false` and schedule
+  `outbound:prune-deliveries` yourself if the product needs its own timing
+  or post-prune hook. Run `outbound:check` after migration and config caching.
+- Pass the subject's public UUID as `subjectPublicId:` for each delivery
+  about a person. Add `OutboundEraser` to the product's resumable erasure
+  orchestrator before it deletes the user, and cover cancellation and body
+  removal in the product's C17 test.
+- An inbound consumer passes a stable non-empty tenant-and-sender scope to
+  `StandardWebhookVerifier::verify()`. When using the claim store directly,
+  keep the winning `WebhookIdClaim` for release if processing must be retried.
+
 ## From unreleased commits
 
 - Prefer depending on a tagged release once one exists; do not pin `dev-develop`
@@ -15,6 +36,74 @@ from `develop`.
 - After `0.1.0`, `qiick/laravel-oidc` is expected to depend on this package and
   delete its local `RemoteUrlGuardService`. Until then, shared SSRF fixtures are
   copied so blocklists cannot drift silently.
+
+## To 0.2.0-beta.4
+
+- Resolve the signer, verifier, guard, pinned HTTP client, secret rotator
+  and retry policy from the Laravel container. For an independent URL
+  policy and HTTP limits, use `OutboundHttpStackData::make()`. Verification
+  requires a dedupe store and returns a winning claim on success.
+- The `webhook_delivery_attempts` create migration no longer declares
+  `response_excerpt`. Recreate the beta schema, or remove the obsolete
+  column when preserving existing deliveries. The package records only
+  response diagnostics.
+- Refresh a published `config/outbound.php` from the updated vendor template
+  and reapply your overrides. Older copies cast environment values before
+  the package can validate them. An explicit null or blank is invalid for
+  boolean and integer settings. Use an unpadded integer such as `30` in
+  place of `030`. Rebuild Laravel's config cache after the change.
+- Guzzle must be at least 7.15.2 on the 7 line or 8.0.1 on the 8 line
+  (`composer update guzzlehttp/guzzle`): the older releases have published
+  advisories, one of them a host check bypass.
+- `webhook_deliveries.subject_public_id` (uuid, nullable, indexed) and
+  `claimed_triggered_by` (nullable, indexed, foreign key to the users table
+  like `next_attempt_triggered_by`) are new in the `create_` migration, and
+  `payload_hash` is nullable (pre-1.0): recreate the database, or add the
+  columns and their indexes and alter `payload_hash`.
+- `outbound.webhooks.payload_retention_days` above 30 now fails the boot.
+  Deliveries dispatched without `subjectPublicId` keep their body for the
+  retention only: a retry plan longer than that is cut short.
+- Pass `subjectPublicId:` to `dispatch()` for every event about a person, and
+  call `OutboundEraser` from the product's erasure orchestrator only (README,
+  "Erasure"). A delivery queued without it keeps its encrypted payload until
+  it expires.
+- **Commands renamed** to the fleet form `outbound:<verb>-<object>` (F6):
+  `outbound:webhooks:work` is `outbound:work-deliveries` and
+  `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
+  product's schedule (`routes/console.php`) and any deploy script.
+  Version `0.2.0-beta.4` is the last beta with these hidden aliases.
+  They are removed in `1.0.0-rc.1`. The old worker command logs at most once
+  an hour through the configured cache.
+  `outbound:check` fails if a schedule still uses either old name.
+- **The package schedules `outbound:prune-deliveries` itself** (daily,
+  `onOneServer()`, `withoutOverlapping()`): remove the product's own
+  `Schedule::command(...prune...)` line, or set `OUTBOUND_WEBHOOK_SCHEDULE=false`
+  to keep it. A published config gets the new `outbound.webhooks.schedule`
+  key from the package default.
+- **The owner email listener and the package's default
+  `WebhookEndpointNoticeRecipientsContract` binding are registered only
+  while `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+  A product that resolves the contract independently must supply its own
+  binding when the switch is off.
+- Add `php artisan outbound:check` to the deploy (F2).
+
+### Inbound claim stores
+
+- Inbound dedupe uses Laravel locks on Redis or the database. Apply
+  Laravel's cache and cache-lock migrations before deploying a database
+  store. File, Memcached and DynamoDB lock release cannot atomically
+  verify ownership, so move a verifier using them to a supported store.
+  Excubia and Signaculum both default to the database store in their
+  versioned config. Check the actual deploy setting before upgrading.
+  Stop old verifier processes before starting the updated ones. Keep
+  PHP and Redis host clocks synchronized. Old beta replay records stay
+  active until expiry and cannot be released by the new lock API. A
+  redelivery for one of those records is dropped until its original TTL
+  expires. For Redis, the old records use the cache connection and the
+  new locks use the configured lock connection. If changing the cache
+  backend, connection or namespace, wait out the previous replay TTL
+  before resuming verification. Also wait before rolling back to a beta
+  that reads only the old cache records. Confirm with `outbound:check`.
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 
@@ -76,9 +165,10 @@ reached.
   and hidden from arrays and JSON: recreate the database. Like `secret` and
   `payload`, it is unreadable after an `APP_KEY` rotation unless the old key
   is in `APP_PREVIOUS_KEYS`.
-- Schedule `outbound:webhooks:work` (for example `everyFiveSeconds()`) and
-  dispatch events with `WebhookDeliveryCoordinator::dispatch()` instead of a
-  product job. Webhook POSTs now time out after 15 s
+- Schedule `outbound:webhooks:work` (`outbound:work-deliveries` since the F6
+  rename above, for example `everyFiveSeconds()`) and dispatch events with
+  `WebhookDeliveryCoordinator::dispatch()` instead of a product job. Webhook
+  POSTs now time out after 15 s
   (`OUTBOUND_WEBHOOK_TIMEOUT_SECONDS`): a scheduler or queue timeout around
   the command must be longer. `webhook_deliveries` gains `claimed_until` and
   `exhausted_reason`: recreate the database.
@@ -96,11 +186,13 @@ reached.
   `next_attempt_triggered_by` (redelivery): recreate the database. A
   redelivery keeps its `webhook-id`, so a consumer that claimed the id and
   then failed drops it as a duplicate until the claim expires.
-- Schedule `outbound:webhooks:prune` (for example `daily()`): bodies are
-  kept 30 days after dispatch (`OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS`), or
-  until their retry plan ends if later, then cleared; settled delivery rows
-  are deleted after 90 days (`OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS`). `WebhookExhaustedReasonEnum` gains
-  `PayloadExpired`: add it to any exhaustive `match`.
+- Schedule `outbound:webhooks:prune` (`outbound:prune-deliveries` since the
+  F6 rename above, for example `daily()`). Bodies are kept 30 days after
+  dispatch (`OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS`), or until their retry
+  plan ends if later, then cleared. Settled delivery rows are deleted after
+  90 days (`OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS`).
+  `WebhookExhaustedReasonEnum` gains `PayloadExpired`: add it to any
+  exhaustive `match`.
 - `SeenWebhookIdStore` gains `release()`: a custom implementation must add
   it. Webhook ids with a `.` and event types outside dot-separated
   `[A-Za-z0-9_]` segments (for example `invoice-paid`) are now refused.
@@ -110,7 +202,8 @@ reached.
   `$claim->token`, and releases only while it still holds that token. A
   direct caller builds the claim with `WebhookIdClaim::generate($scope,
   $webhookId)`. `StandardWebhookVerifier::verify()` returns the claim it won
-  (null without a store); keep it to release the id when processing fails.
+  (null without a store in that beta). Keep it to release the id when
+  processing fails. The unreleased verifier always requires a store.
   Event types are at most 191 bytes, and webhook ids must be valid UTF-8.
 - The minimum Guzzle on the 7 line is 7.12 (`^7.12 || ^8.0`): run
   `composer update guzzlehttp/guzzle` if the application pins an older 7.x.
@@ -142,6 +235,22 @@ reached.
   any exhaustive `match`.
 - Until `1.0.0` the package edits its `create_` migrations instead of adding
   new ones, so recreate the database after each pre-1.0 upgrade.
+
+## To 0.1.1 (webhook id stores)
+
+- Catch the typed webhook exceptions (`DuplicateWebhookIdException`,
+  `WebhookIdStoreFailedException`, `InvalidWebhookSignatureException`)
+  instead of matching messages; the messages are unchanged.
+- The webhook id cache must be database, redis, memcached, dynamodb or file
+  (single host). `storage` and `failover` are refused and array is for tests
+  only: resolving `StandardWebhookVerifier` with a refused store throws
+  `UnsupportedWebhookIdCacheStoreException`.
+
+## To 0.1.0 (first release)
+
+- `composer require qiick/laravel-outbound`, publish `outbound-config` if the
+  defaults need changing, and replace the product's own URL guard with
+  `RemoteUrlGuard` (README, "SSRF").
 
 ## Deprecation windows (products)
 

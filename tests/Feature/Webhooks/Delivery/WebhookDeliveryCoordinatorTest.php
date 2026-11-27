@@ -9,7 +9,10 @@ use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\LegacyWebhookProfileContract;
 use Qiick\Outbound\Delivery\DatabaseDeliveryStore;
 use Qiick\Outbound\Delivery\DeliveryStatus;
@@ -19,8 +22,10 @@ use Qiick\Outbound\Enums\WebhookAttemptStatusEnum;
 use Qiick\Outbound\Enums\WebhookAttemptTriggerEnum;
 use Qiick\Outbound\Enums\WebhookExhaustedReasonEnum;
 use Qiick\Outbound\Enums\WebhookRetryPresetEnum;
+use Qiick\Outbound\Erasure\OutboundEraser;
 use Qiick\Outbound\Events\WebhookDeliveredEvent;
 use Qiick\Outbound\Events\WebhookDeliveryFailedEvent;
+use Qiick\Outbound\Events\WebhookSignedEvent;
 use Qiick\Outbound\Http\OutboundHttpLimits;
 use Qiick\Outbound\Http\PinnedHttpClient;
 use Qiick\Outbound\Models\WebhookDelivery;
@@ -56,7 +61,7 @@ beforeEach(function (): void {
     ]);
     // A fixed clock keeps the chain deadline (30 s) whole for the timeout assertions.
     $this->clock = static fn (): float => 1_000.0;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -271,7 +276,6 @@ it('records a delivered attempt and resets the endpoint failure streak', functio
         ])
         ->and($attempt->request_id)->toBe('req-'.str_repeat('r', 60))
         ->and($attempt->response_bytes)->toBe(6)
-        ->and($attempt->response_excerpt)->toBeNull()
         ->and($attempt->duration_ms)->toBeGreaterThanOrEqual(0)
         ->and($attempt->attempted_at->toDateTimeString())->toBe('2026-11-23 10:00:00')
         ->and($attempt->next_attempt_at)->toBeNull()
@@ -279,6 +283,20 @@ it('records a delivered attempt and resets the endpoint failure streak', functio
         ->and($endpoint->failing_since)->toBeNull()
         ->and($endpoint->last_success_at?->toDateTimeString())->toBe('2026-11-23 10:00:00')
         ->and($endpoint->last_failure_at?->toDateTimeString())->toBe('2026-11-23 09:00:00');
+});
+
+it('never stores the body of a failed answer, which may reflect the request or the receiver data (S6)', function (): void {
+    deliveryEndpoint();
+    $this->transfer->respond(500, ['Content-Type' => 'text/plain'], 'Unknown customer Ada Lovelace');
+    coordinator()->dispatch(invoicePaidMessage());
+
+    coordinator()->work(50);
+    $attempt = WebhookDeliveryAttempt::query()->sole();
+
+    expect($attempt->http_status)->toBe(500)
+        ->and(json_encode($attempt->getAttributes(), JSON_THROW_ON_ERROR))->not->toContain('Ada Lovelace')
+        ->and((string) $attempt->error_message)->not->toContain('Ada')
+        ->and((string) onlyDelivery()->last_error)->not->toContain('Ada');
 });
 
 it('schedules a failed attempt on the Standard Webhooks delays and counts the failure streak', function (): void {
@@ -494,7 +512,7 @@ it('holds a lease of the chain deadline plus a minute while it sends', function 
     $recordLease = function () use (&$leaseSeenBySender): void {
         $leaseSeenBySender = WebhookDelivery::query()->sole()->claimed_until?->toDateTimeString();
     };
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -540,21 +558,21 @@ it('skips deliveries of endpoints that are disabled or deleted, and settled deli
         ->and($this->transfer->requests)->toBe([]);
 });
 
-it('works through due deliveries from the outbound:webhooks:work command', function (): void {
+it('works through due deliveries from the outbound:work-deliveries command', function (): void {
     deliveryEndpoint(['max_concurrency' => 5]);
     coordinator()->dispatch(invoicePaidMessage('msg_1'));
     coordinator()->dispatch(invoicePaidMessage('msg_2'));
 
-    $this->artisan('outbound:webhooks:work', ['--limit' => 1])
+    $this->artisan('outbound:work-deliveries', ['--limit' => 1])
         ->expectsOutput('Sent 1 webhook delivery attempt(s).')
         ->assertSuccessful();
-    $this->artisan('outbound:webhooks:work')
+    $this->artisan('outbound:work-deliveries')
         ->expectsOutput('Sent 1 webhook delivery attempt(s).')
         ->assertSuccessful();
 });
 
 it('refuses a limit below one', function (): void {
-    $this->artisan('outbound:webhooks:work', ['--limit' => 0])
+    $this->artisan('outbound:work-deliveries', ['--limit' => 0])
         ->expectsOutput('The --limit option must be a positive integer.')
         ->assertFailed();
 });
@@ -609,7 +627,7 @@ it('measures the attempt duration in whole milliseconds on a monotonic clock', f
 it('drops its result when another worker recorded this attempt after the lease ran out', function (): void {
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -672,7 +690,7 @@ it('claims nothing for an endpoint already over its concurrency', function (): v
 it('records nothing for a delivery deleted while it was being sent', function (): void {
     $endpoint = deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -688,6 +706,186 @@ it('records nothing for a delivery deleted while it was being sent', function ()
     expect(coordinator()->work(50))->toBe(1)
         ->and(WebhookDeliveryAttempt::query()->count())->toBe(0)
         ->and($endpoint->refresh()->last_success_at)->toBeNull();
+});
+
+it('keeps a delivery cancelled while it was being sent cancelled, with no attempt recorded', function (): void {
+    Event::fake([WebhookDeliveredEvent::class]);
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) {
+            // The eraser cancels the person's pending delivery after the claim.
+            WebhookDelivery::query()->update(['status' => DeliveryStatus::Cancelled->value, 'payload' => null]);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and(onlyDelivery()->delivered_at)->toBeNull()
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+    Event::assertNotDispatched(WebhookDeliveredEvent::class);
+});
+
+it('never sends a claimed delivery that is cancelled before its transport starts', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    // The eraser commits its cancel between this worker's claim and its send.
+    Event::listen(WebhookSignedEvent::class, function (): void {
+        WebhookDelivery::query()->update(['status' => DeliveryStatus::Cancelled->value, 'payload' => null]);
+    });
+
+    coordinator()->work(50);
+
+    expect($this->transfer->requests)->toBe([])
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+});
+
+it('never sends a delivery cancelled while its host was being resolved', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $resolver = new class implements HostResolver
+    {
+        public function resolve(string $host): array
+        {
+            // The eraser commits its cancel while DNS answers.
+            WebhookDelivery::query()->update(['status' => DeliveryStatus::Cancelled->value, 'payload' => null]);
+
+            return ['93.184.216.34'];
+        }
+    };
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
+        new HttpFactory,
+        new RemoteUrlGuard($resolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        $this->transfer,
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect($this->transfer->requests)->toBe([])
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Cancelled)
+        ->and(WebhookDeliveryAttempt::query()->count())->toBe(0);
+});
+
+it('never claims or sends a delivery whose body has expired, before prune runs', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    onlyDelivery()->forceFill(['payload_expires_at' => CarbonImmutable::now()->subSecond()])->save();
+
+    expect(coordinator()->work(50))->toBe(0)
+        ->and($this->transfer->requests)->toBe([])
+        ->and(onlyDelivery()->claimed_until)->toBeNull();
+});
+
+it('never sends a body that expires between the claim and the transport', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    Event::listen(WebhookSignedEvent::class, function (): void {
+        WebhookDelivery::query()->update(['payload_expires_at' => CarbonImmutable::now()->subSecond()]);
+    });
+
+    coordinator()->work(50);
+
+    expect($this->transfer->requests)->toBe([]);
+});
+
+it('records the asker the claim stored, and clears it from the delivery once recorded', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $askerId = (int) DB::table('users')->insertGetId(['name' => 'Asker', 'email' => 'asker@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $askerId])->save();
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBe($askerId)
+        ->and(onlyDelivery()->claimed_triggered_by)->toBeNull();
+});
+
+it('does not attribute an attempt to an asker erased while it was being sent', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11');
+    $askerId = (int) DB::table('users')->insertGetId(['name' => 'Asker', 'email' => 'asker@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $askerId])->save();
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use ($askerId) {
+            // The asker is erased; the delivery is someone else's, so it goes on.
+            app(OutboundEraser::class)->erase((string) $askerId, (string) Str::uuid(), OutboundEraser::DELETE);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole())
+        ->triggered_by->toBeNull()
+        ->trigger->toBe(WebhookAttemptTriggerEnum::Manual)
+        ->and(onlyDelivery()->status)->toBe(DeliveryStatus::Delivered);
+});
+
+it('never writes back an asker the eraser unlinked, even when a new redelivery is asked while it is sent', function (): void {
+    deliveryEndpoint();
+    coordinator()->dispatch(invoicePaidMessage());
+    $firstAskerId = (int) DB::table('users')->insertGetId(['name' => 'First', 'email' => 'first@example.com', 'password' => 'x']);
+    $secondAskerId = (int) DB::table('users')->insertGetId(['name' => 'Second', 'email' => 'second@example.com', 'password' => 'x']);
+    onlyDelivery()->forceFill(['next_attempt_trigger' => 'manual', 'next_attempt_triggered_by' => $firstAskerId])->save();
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
+        new HttpFactory,
+        new RemoteUrlGuard($this->hostResolver),
+        $this->app->make(OutboundHttpLimits::class),
+        $this->clock,
+        function ($request, array $options) use ($firstAskerId, $secondAskerId) {
+            // The first asker is erased, then a second one asks again.
+            app(OutboundEraser::class)->erase((string) $firstAskerId, (string) Str::uuid(), OutboundEraser::DELETE);
+            coordinator()->redeliver(onlyDelivery(), $secondAskerId);
+
+            return ($this->transfer)($request, $options);
+        },
+    ));
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+
+    coordinator()->work(50);
+
+    expect(WebhookDeliveryAttempt::query()->sole()->triggered_by)->toBeNull()
+        ->and(onlyDelivery()->next_attempt_triggered_by)->toBe($secondAskerId);
+
+});
+
+it('stores the subject public id the product names at dispatch, and only a UUID', function (): void {
+    deliveryEndpoint();
+    $subjectPublicId = '0198c0b6-3c3e-7d3f-9a3e-2f1f3b9b6a11';
+
+    coordinator()->dispatch(invoicePaidMessage(), subjectPublicId: strtoupper($subjectPublicId));
+
+    // Stored in lower case, the spelling the eraser compares.
+    expect(onlyDelivery()->subject_public_id)->toBe($subjectPublicId)
+        ->and(onlyDelivery()->toArray())->not->toHaveKey('subject_public_id')
+        ->and(fn () => coordinator()->dispatch(invoicePaidMessage('msg_other'), subjectPublicId: 'user-42'))
+        ->toThrow(InvalidArgumentException::class, 'The subject public id must be a UUID.');
+});
+
+it('stores no subject public id when the product names none', function (): void {
+    deliveryEndpoint();
+
+    coordinator()->dispatch(invoicePaidMessage());
+
+    expect(onlyDelivery()->subject_public_id)->toBeNull();
 });
 
 it('sends to a plain-http URL when neither the endpoint nor the config asks for https', function (): void {
@@ -771,7 +969,7 @@ it('never sends a delivery twice when a second worker starts while the first is 
     }
     $sentHosts = [];
     $secondWorkerHasRun = false;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: $resolverAnswers)),
         $this->app->make(OutboundHttpLimits::class),
@@ -820,7 +1018,7 @@ it('does not send to an endpoint disabled after the batch was selected', functio
     $first = deliveryEndpoint();
     $second = deliveryEndpoint(['url' => 'https://other.example.com/receive']);
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -839,7 +1037,7 @@ it('does not send to an endpoint disabled after the batch was selected', functio
 });
 
 it('reaches private hosts only for an endpoint set to, under a global setting that allows them', function (bool $isAllowedGlobally, ?bool $endpointSetting, ?string $errorCode): void {
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver, allowPrivateHosts: $isAllowedGlobally),
         $this->app->make(OutboundHttpLimits::class),
@@ -942,7 +1140,7 @@ it('reports nothing for a delivery deleted while it was being sent', function ()
     $this->app->instance(ExceptionHandler::class, $spy);
     deliveryEndpoint();
     coordinator()->dispatch(invoicePaidMessage());
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard($this->hostResolver),
         $this->app->make(OutboundHttpLimits::class),
@@ -1265,10 +1463,10 @@ it('refuses a time budget below one second', function (): void {
 
 it('takes the time budget from the command', function (): void {
     foreach (['soon', '0'] as $refused) {
-        $this->artisan('outbound:webhooks:work', ['--max-seconds' => $refused])
+        $this->artisan('outbound:work-deliveries', ['--max-seconds' => $refused])
             ->expectsOutput('The --max-seconds option must be a positive integer.')
             ->assertFailed();
     }
 
-    $this->artisan('outbound:webhooks:work', ['--max-seconds' => '1'])->assertSuccessful();
+    $this->artisan('outbound:work-deliveries', ['--max-seconds' => '1'])->assertSuccessful();
 });

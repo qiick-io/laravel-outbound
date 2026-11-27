@@ -5,23 +5,29 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
+use Throwable;
 
 /**
  * Sends one attempt for each due webhook delivery, up to `--limit`.
  *
  * Run it from the scheduler, for example
- * `Schedule::command('outbound:webhooks:work')->everyFiveSeconds()`:
+ * `Schedule::command('outbound:work-deliveries')->everyFiveSeconds()`:
  * retries are driven by `next_attempt_at`, so the first retry (5 s) is only
  * as punctual as this schedule. Overlapping runs are safe: each delivery is
  * leased on its own, right before its send.
  *
- * @api
+ * @internal
  */
 final class WorkWebhookDeliveriesCommand extends Command
 {
+    /** @internal Temporary beta alias. */
+    public const LEGACY_NAME = 'outbound:webhooks:work';
+
     /** @var string */
-    protected $signature = 'outbound:webhooks:work
+    protected $signature = 'outbound:work-deliveries
         {--limit=50 : Most deliveries to attempt in this run}
         {--max-seconds= : Start no attempt after this many seconds (none by default)}';
 
@@ -30,6 +36,10 @@ final class WorkWebhookDeliveriesCommand extends Command
 
     public function handle(WebhookDeliveryCoordinator $coordinator): int
     {
+        if ($this->getName() === self::LEGACY_NAME) {
+            $this->reportDeprecation();
+        }
+
         $limit = filter_var($this->option('limit'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 
         if ($limit === false) {
@@ -51,5 +61,19 @@ final class WorkWebhookDeliveriesCommand extends Command
         $this->info("Sent {$coordinator->work($limit, $maxSeconds)} webhook delivery attempt(s).");
 
         return self::SUCCESS;
+    }
+
+    /** Keep scheduled deliveries working while the optional warning cache recovers. */
+    private function reportDeprecation(): void
+    {
+        try {
+            $shouldWarn = Cache::add('outbound:deprecated-work-command', true, 3600);
+        } catch (Throwable) {
+            return;
+        }
+
+        if ($shouldWarn) {
+            Log::warning('outbound:webhooks:work is deprecated. Use outbound:work-deliveries.');
+        }
     }
 }

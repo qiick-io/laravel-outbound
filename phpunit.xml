@@ -8,6 +8,8 @@
     <testsuites>
         <testsuite name="Test Suite">
             <directory>tests</directory>
+            <!-- Synced app-level checks require a product application. Packages run tests/Erasure. -->
+            <exclude>tests/Conformance</exclude>
         </testsuite>
     </testsuites>
     <source>

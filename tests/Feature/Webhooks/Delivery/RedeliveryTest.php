@@ -35,7 +35,7 @@ beforeEach(function (): void {
     config()->set('outbound.webhooks.retry_jitter_seconds', 0);
     Event::fake([WebhookRedeliveryRequestedEvent::class]);
     $this->transfer = new RecordingTransferHandler;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34'], 'other.example.com' => ['93.184.216.35']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -313,7 +313,7 @@ it('honours a redelivery asked for while the delivery is being sent', function (
     $endpoint = redeliveryEndpoint();
     $delivery = sentDelivery($endpoint);
     $operatorId = redeliveryUserId();
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -383,7 +383,7 @@ it('honours a second user\'s request made while the first user\'s redelivery is 
     $firstOperatorId = redeliveryUserId();
     $secondOperatorId = redeliveryUserId();
     app(WebhookDeliveryCoordinator::class)->redeliver($delivery, $firstOperatorId);
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -422,7 +422,7 @@ it('honours a repeated request by the same asker made while the delivery is bein
     };
     $ask();
     $this->transfer->respond(500);
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -485,4 +485,15 @@ it('says in the audit event what was redelivered', function (): void {
         && $event->deliveryPublicId === null
         && $event->from?->equalTo($from) === true && $event->until?->equalTo($until) === true
         && $event->statuses === [DeliveryStatus::Exhausted, DeliveryStatus::Pending]);
+});
+
+it('sends a redelivery through the guard: an endpoint moved to a private address gets nothing', function (): void {
+    $endpoint = redeliveryEndpoint();
+    $delivery = settledDelivery($endpoint, 'msg_1', ['status' => 'exhausted', 'exhausted_reason' => 'max_attempts', 'max_attempts' => 10]);
+    $endpoint->forceFill(['url' => 'https://10.0.0.5/receive'])->save();
+
+    expect(app(WebhookDeliveryCoordinator::class)->redeliver($delivery))->toBeTrue()
+        ->and(app(WebhookDeliveryCoordinator::class)->work(50))->toBe(1)
+        ->and($this->transfer->requests)->toBe([])
+        ->and(WebhookDeliveryAttempt::query()->sole()->error_code)->toBe('ssrf_refused');
 });

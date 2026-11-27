@@ -29,8 +29,8 @@ interface SeenWebhookIdStore
      * Give a claim back, so the same `(scope, webhookId)` can be processed
      * again: for a consumer whose processing failed after the claim, which
      * the sender's redelivery will retry with the same `webhook-id`
-     * (standards review M14, R7). Only the claim that won does anything:
-     * one that lost, or an id never claimed, leaves the store as it is.
+     * (standards review M14, R7). Compare the token and delete in one storage
+     * operation. The token of an expired claim cannot release a replacement.
      *
      * @throws WebhookException when the store cannot release the claim (fail closed)
      */

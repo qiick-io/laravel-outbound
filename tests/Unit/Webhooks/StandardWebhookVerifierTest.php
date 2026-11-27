@@ -21,7 +21,7 @@ function swVerifier(
     int $maxSecrets = 4,
     ?SeenWebhookIdStore $seenIds = null,
 ): StandardWebhookVerifier {
-    return new StandardWebhookVerifier($tolerance, $maxPayload, $maxSigs, $maxSecrets, $seenIds);
+    return new StandardWebhookVerifier($seenIds ?? new FakeSeenWebhookIdStore, $tolerance, $maxPayload, $maxSigs, $maxSecrets);
 }
 
 it('verifies the official sign vector at the vector timestamp', function (): void {
@@ -164,7 +164,7 @@ it('refuses more signature tokens than maxSignatures', function (): void {
     $header = implode(' ', array_fill(0, 3, $token));
 
     expect(fn () => swVerifier(maxSigs: 2)->verify('{}', 'msg_1', '1700000000', $header, [$secret], $now, 'test-scope'))
-        ->toThrow(WebhookException::class);
+        ->toThrow(WebhookException::class, 'Too many webhook signatures.');
 });
 
 it('refuses empty and oversized secret lists', function (): void {
@@ -593,18 +593,18 @@ it('refuses webhook ids with control characters', function (): void {
  */
 
 it('accepts by default a timestamp 300 s off, 1 MiB, 8 signatures and 4 secrets, and refuses one more of each', function (): void {
-    $verifier = new StandardWebhookVerifier;
+    $verifier = new StandardWebhookVerifier(new FakeSeenWebhookIdStore);
     $secrets = [WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate(), WebhookSecret::generate()];
     $now = 1_700_000_000;
-    $signedAt = fn (int $timestamp, string $body) => (new StandardWebhookSigner(2_000_000))->sign('msg_1', $timestamp, $body, $secrets);
-    $verify = fn (string $body, int $timestamp, string $header, array $verifySecrets) => $verifier->verify($body, 'msg_1', (string) $timestamp, $header, $verifySecrets, new DateTimeImmutable('@'.$now), 'test-scope');
+    $signedAt = fn (int $timestamp, string $body) => (new StandardWebhookSigner(2_000_000))->sign('msg_'.$timestamp, $timestamp, $body, $secrets);
+    $verify = fn (string $body, int $timestamp, string $header, array $verifySecrets) => $verifier->verify($body, 'msg_'.$timestamp, (string) $timestamp, $header, $verifySecrets, new DateTimeImmutable('@'.$now), 'test-scope');
     $padding = str_repeat(' v1,'.base64_encode(str_repeat('x', 32)), 4);
 
     $oldest = $signedAt($now - 300, '{}');
     $largest = $signedAt($now, str_repeat('a', 1_048_576));
 
-    expect($verify('{}', $now - 300, $oldest->headers['webhook-signature'].$padding, $secrets))->toBeNull()
-        ->and($verify($largest->rawBody, $now, $largest->headers['webhook-signature'], $secrets))->toBeNull()
+    expect($verify('{}', $now - 300, $oldest->headers['webhook-signature'].$padding, $secrets))->toBeInstanceOf(WebhookIdClaim::class)
+        ->and($verify($largest->rawBody, $now, $largest->headers['webhook-signature'], $secrets))->toBeInstanceOf(WebhookIdClaim::class)
         ->and(fn () => $verify('{}', $now - 301, $signedAt($now - 301, '{}')->headers['webhook-signature'], $secrets))->toThrow(WebhookException::class, 'Webhook timestamp is outside the replay tolerance window.')
         ->and(fn () => $verify(str_repeat('a', 1_048_577), $now, 'v1,x', $secrets))->toThrow(WebhookException::class, 'Webhook payload exceeds the configured size limit.')
         ->and(fn () => $verify('{}', $now, $oldest->headers['webhook-signature'].$padding.' v1,eA==', $secrets))->toThrow(WebhookException::class, 'Too many webhook signatures.')
@@ -615,7 +615,7 @@ it('skips a signature of an unknown scheme even when it holds commas', function 
     $secret = WebhookSecret::generate();
     $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
 
-    expect(swVerifier()->verify('{}', 'msg_1', '1700000000', 'v9,a,b '.$signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))->toBeNull();
+    expect(swVerifier()->verify('{}', 'msg_1', '1700000000', 'v9,a,b '.$signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))->toBeInstanceOf(WebhookIdClaim::class);
 });
 
 it('wraps a store that fails with anything but a WebhookException', function (): void {

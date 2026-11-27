@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Http;
 
+use Closure;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\Psr7\Uri;
@@ -37,9 +38,14 @@ use RuntimeException;
  */
 final class PinnedHttpClient
 {
+    /** @var (Closure(): float)|null */
+    private ?Closure $clock = null;
+
+    private ?Closure $transferHandler = null;
+
     /**
-     * @param  (callable(): float)|null  $clock  test seam for deadline arithmetic
-     * @param  callable|null  $transferHandler  test seam replacing CurlHandler
+     * @internal Resolve the production client from the container.
+     *
      * @param  EgressProxy|null  $egressProxy  `outbound.http.egress_proxy`; null
      *                                         sends directly with every proxy off
      * @param  Dispatcher|null  $events  receives {@see OutboundRequestBlockedEvent}
@@ -49,14 +55,42 @@ final class PinnedHttpClient
         private HttpFactory $http,
         private RemoteUrlGuard $guard,
         private OutboundHttpLimits $limits = new OutboundHttpLimits,
-        private mixed $clock = null,
-        private mixed $transferHandler = null,
         private ?EgressProxy $egressProxy = null,
         private ?Dispatcher $events = null,
     ) {}
 
     /**
+     * Creates an isolated client with deterministic clock or transfer fixtures.
+     *
+     * @internal Package tests only.
+     *
+     * @param  (Closure(): float)|null  $clock
+     */
+    public static function forTesting(
+        HttpFactory $http,
+        RemoteUrlGuard $guard,
+        OutboundHttpLimits $limits = new OutboundHttpLimits,
+        ?Closure $clock = null,
+        ?callable $transferHandler = null,
+        ?EgressProxy $egressProxy = null,
+        ?Dispatcher $events = null,
+    ): self {
+        $client = new self($http, $guard, $limits, $egressProxy, $events);
+        $client->clock = $clock;
+        $client->transferHandler = $transferHandler === null ? null : $transferHandler(...);
+
+        return $client;
+    }
+
+    /**
      * @param  callable(OutboundRequest): void  $configure
+     * @param  (Closure(): void)|null  $beforeTransport  runs on every hop
+     *                                                   after the guard
+     *                                                   resolved the host,
+     *                                                   right before the
+     *                                                   request is handed to
+     *                                                   the transport; what it
+     *                                                   throws stops the send
      *
      * @throws UnsafeUrl
      * @throws OutboundHttpException
@@ -67,6 +101,7 @@ final class PinnedHttpClient
         string $url,
         callable $configure,
         HttpRequestOptions $options = new HttpRequestOptions,
+        ?Closure $beforeTransport = null,
     ): Response {
         $this->assertTimeoutBounds($options);
 
@@ -96,6 +131,10 @@ final class PinnedHttpClient
 
                 throw $unsafeUrl;
             }
+            if ($beforeTransport !== null) {
+                $beforeTransport();
+            }
+
             $hopTimeout = min($options->timeoutSeconds, max(1, (int) floor($remaining)));
             $hopConnect = min($options->connectTimeoutSeconds, $hopTimeout);
 
@@ -386,7 +425,7 @@ final class PinnedHttpClient
         int $timeoutSeconds,
         int $connectTimeoutSeconds,
     ): callable {
-        $inner = is_callable($this->transferHandler) ? $this->transferHandler : new CurlHandler;
+        $inner = $this->transferHandler ?? new CurlHandler;
 
         return function (RequestInterface $request, array $requestOptions) use (
             $inner,
@@ -607,11 +646,7 @@ final class PinnedHttpClient
 
     private function now(): float
     {
-        if (is_callable($this->clock)) {
-            return ($this->clock)();
-        }
-
-        return microtime(true);
+        return $this->clock === null ? microtime(true) : ($this->clock)();
     }
 
     /**

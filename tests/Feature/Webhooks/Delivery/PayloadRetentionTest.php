@@ -44,16 +44,16 @@ function retentionEndpoint(): WebhookEndpoint
 /**
  * @param  array<string, mixed>  $attributes
  */
-function retainedDelivery(string $messageId, array $attributes = []): WebhookDelivery
+function retainedDelivery(string $messageId, array $attributes = [], ?string $subjectPublicId = null): WebhookDelivery
 {
-    app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage($messageId, 'invoice.paid', new DateTimeImmutable('2026-11-23 09:00:00'), ['n' => 1]));
+    app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage($messageId, 'invoice.paid', new DateTimeImmutable('2026-11-23 09:00:00'), ['n' => 1]), subjectPublicId: $subjectPublicId);
     $delivery = WebhookDelivery::query()->where('event_id', $messageId)->sole();
     $delivery->forceFill($attributes)->save();
 
     return $delivery->refresh();
 }
 
-it('keeps a dispatched body until 30 days after dispatch, or the configured days', function (?int $retentionDays, string $expiresAt): void {
+it('keeps a dispatched body about a person until 30 days after dispatch, or the configured days', function (?int $retentionDays, string $expiresAt): void {
     if ($retentionDays !== null) {
         config()->set('outbound.webhooks.payload_retention_days', $retentionDays);
         $this->app->forgetInstance(DatabaseDeliveryStore::class);
@@ -62,7 +62,7 @@ it('keeps a dispatched body until 30 days after dispatch, or the configured days
 
     retentionEndpoint();
 
-    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe($expiresAt);
+    expect(retainedDelivery('msg_1', subjectPublicId: (string) Str::uuid())->payload_expires_at?->toDateTimeString())->toBe($expiresAt);
 })->with([
     'default' => [null, '2026-12-23 10:00:00'],
     // The default plan (10 attempts, Retry-After up to 24 h honoured) can last
@@ -71,6 +71,17 @@ it('keeps a dispatched body until 30 days after dispatch, or the configured days
     'configured, longer than the retry plan' => [12, '2026-12-05 10:00:00'],
 ]);
 
+it('keeps a body about nobody the product named for the retention only, even when the retry plan is longer', function (): void {
+    config()->set('outbound.webhooks.payload_retention_days', 7);
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    retentionEndpoint();
+
+    // The eraser cannot find it, so it never outlives the retention (the
+    // fleet erasure decision: 30 days at most); prune then exhausts it.
+    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe('2026-11-30 10:00:00');
+});
+
 it('clears expired bodies and keeps their hash and length', function (): void {
     retentionEndpoint();
     $expired = retainedDelivery('msg_expired', ['status' => 'delivered', 'next_attempt_at' => null, 'payload_expires_at' => '2026-11-23 09:59:59']);
@@ -78,7 +89,7 @@ it('clears expired bodies and keeps their hash and length', function (): void {
     $kept = retainedDelivery('msg_kept', ['status' => 'delivered', 'next_attempt_at' => null, 'payload_expires_at' => '2026-11-23 10:00:01']);
     $hash = $expired->payload_hash;
 
-    $this->artisan('outbound:webhooks:prune')
+    $this->artisan('outbound:prune-deliveries')
         ->expectsOutput('Pruned 2 webhook delivery bodies and deleted 0 webhook deliveries.')
         ->assertSuccessful();
 
@@ -90,14 +101,14 @@ it('clears expired bodies and keeps their hash and length', function (): void {
         ->and($atTheLimit->status)->toBe(DeliveryStatus::Exhausted)
         ->and($kept->refresh()->payload)->not->toBeNull();
 
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
 });
 
 it('stops a pending delivery whose body expired, since nothing is left to sign', function (): void {
     retentionEndpoint();
     $pending = retainedDelivery('msg_pending', ['payload_expires_at' => '2026-11-23 09:00:00', 'next_attempt_at' => '2026-11-23 11:00:00']);
 
-    $this->artisan('outbound:webhooks:prune')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->assertSuccessful();
     $pending->refresh();
 
     expect($pending->payload)->toBeNull()
@@ -110,13 +121,13 @@ it('leaves a delivery a worker is sending until its lease ends', function (): vo
     retentionEndpoint();
     $inFlight = retainedDelivery('msg_flight', ['payload_expires_at' => '2026-11-23 09:00:00', 'claimed_until' => '2026-11-23 10:01:00']);
 
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
 
     expect($inFlight->refresh()->payload)->not->toBeNull()
         ->and($inFlight->status)->toBe(DeliveryStatus::Pending);
 
     CarbonImmutable::setTestNow('2026-11-23 10:01:00');
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 1 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 1 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
 
     expect($inFlight->refresh()->payload)->toBeNull();
 });
@@ -131,6 +142,7 @@ it('refuses a retention of less than a day, or rows kept shorter than bodies, wh
 })->with([
     'no days' => [['outbound.webhooks.payload_retention_days' => 0], 'outbound.webhooks.payload_retention_days must be at least 1.'],
     'negative' => [['outbound.webhooks.payload_retention_days' => -1], 'outbound.webhooks.payload_retention_days must be at least 1.'],
+    'more than 30 days' => [['outbound.webhooks.payload_retention_days' => 31], 'outbound.webhooks.payload_retention_days must be at most 30.'],
     'rows shorter than bodies' => [['outbound.webhooks.payload_retention_days' => 30, 'outbound.webhooks.delivery_retention_days' => 29], 'outbound.webhooks.delivery_retention_days must be at least outbound.webhooks.payload_retention_days.'],
 ]);
 
@@ -153,7 +165,7 @@ it('drops a pending redelivery request when the body expires', function (): void
         'next_attempt_triggered_by' => $operatorId,
     ]);
 
-    $this->artisan('outbound:webhooks:prune')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->assertSuccessful();
     $pending->refresh();
 
     expect($pending->status)->toBe(DeliveryStatus::Exhausted)
@@ -174,7 +186,7 @@ it('keeps the body until the end of the retry plan when Retry-After is not honou
     retentionEndpoint();
 
     // 9 retries on the standard delays plus their jitter, plus an hour of slack.
-    expect(retainedDelivery('msg_1')->payload_expires_at?->toDateTimeString())->toBe('2026-11-26 14:39:07');
+    expect(retainedDelivery('msg_1', subjectPublicId: (string) Str::uuid())->payload_expires_at?->toDateTimeString())->toBe('2026-11-26 14:39:07');
 });
 
 it('deletes settled deliveries and their attempts once the row retention ends', function (): void {
@@ -188,7 +200,7 @@ it('deletes settled deliveries and their attempts once the row retention ends', 
     $recent = retainedDelivery('msg_recent', ['status' => 'delivered', 'next_attempt_at' => null, ...$prunedBody, 'created_at' => '2026-08-25 10:00:01']);
     $oldPending = retainedDelivery('msg_pending', ['created_at' => '2026-08-01 10:00:00', 'payload_expires_at' => '2026-12-31 00:00:00']);
 
-    $this->artisan('outbound:webhooks:prune')
+    $this->artisan('outbound:prune-deliveries')
         ->expectsOutput('Pruned 0 webhook delivery bodies and deleted 2 webhook deliveries.')
         ->assertSuccessful();
 
@@ -230,7 +242,7 @@ it('prunes in blocks, so a large backlog never takes one long transaction', func
         }
     });
 
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 1001 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 1001 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
 
     expect(WebhookDelivery::query()->whereNotNull('payload')->count())->toBe(0)
         ->and($bodyUpdates)->toBe(3);
@@ -256,17 +268,41 @@ it('keeps a settled delivery while its body may still be redelivered, even past 
     $this->app->forgetInstance(DatabaseDeliveryStore::class);
     $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
     retentionEndpoint();
-    $delivered = retainedDelivery('msg_live_body', ['status' => 'delivered', 'next_attempt_at' => null]);
+    $delivered = retainedDelivery('msg_live_body', ['status' => 'delivered', 'next_attempt_at' => null], (string) Str::uuid());
 
     expect($delivered->payload_expires_at?->toDateTimeString())->toBe('2026-12-02 11:04:30');
 
     CarbonImmutable::setTestNow('2026-12-02 11:04:29');
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 0 webhook delivery bodies and deleted 0 webhook deliveries.')->assertSuccessful();
 
     expect($delivered->refresh()->payload)->not->toBeNull();
 
     CarbonImmutable::setTestNow('2026-12-02 11:04:30');
-    $this->artisan('outbound:webhooks:prune')->expectsOutput('Pruned 1 webhook delivery bodies and deleted 1 webhook deliveries.')->assertSuccessful();
+    $this->artisan('outbound:prune-deliveries')->expectsOutput('Pruned 1 webhook delivery bodies and deleted 1 webhook deliveries.')->assertSuccessful();
 
     expect(WebhookDelivery::query()->whereKey($delivered->id)->exists())->toBeFalse();
+});
+
+it('reports what it would prune with --dry-run and changes nothing', function (): void {
+    config()->set('outbound.webhooks.payload_retention_days', 7);
+    config()->set('outbound.webhooks.delivery_retention_days', 7);
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    retentionEndpoint();
+    $delivered = retainedDelivery('msg_dry_run', ['status' => 'delivered', 'next_attempt_at' => null], (string) Str::uuid());
+    $pending = retainedDelivery('msg_dry_pending', ['payload_expires_at' => '2026-11-23 09:00:00', 'next_attempt_at' => '2026-11-23 11:00:00']);
+    CarbonImmutable::setTestNow('2026-12-02 11:04:30');
+
+    $this->artisan('outbound:prune-deliveries', ['--dry-run' => true])
+        ->expectsOutput('Would prune 2 webhook delivery bodies and delete 2 webhook deliveries (dry run, nothing changed).')
+        ->assertSuccessful();
+
+    expect($delivered->refresh()->payload)->not->toBeNull()
+        ->and($pending->refresh()->payload)->not->toBeNull()
+        ->and($pending->status)->toBe(DeliveryStatus::Pending);
+
+    // The pending one is exhausted by the prune, then old enough to delete.
+    $this->artisan('outbound:prune-deliveries')
+        ->expectsOutput('Pruned 2 webhook delivery bodies and deleted 2 webhook deliveries.')
+        ->assertSuccessful();
 });

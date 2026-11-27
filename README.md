@@ -8,6 +8,10 @@
 
 # qiick/laravel-outbound
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/qiick-io/laravel-outbound/badge)](https://scorecard.dev/viewer/?uri=github.com/qiick-io/laravel-outbound)
+
+PHPStan at `max` and the existing CI checks cover PHP. CodeQL covers GitHub Actions and JavaScript/TypeScript.
+
 > **Status:** `0.2.0-beta.3`. Pre-1.0: minor versions may break. Prefer a tagged release
 > over `dev-develop`. See [CHANGELOG](./CHANGELOG.md) Upgrade notes.
 
@@ -66,7 +70,7 @@ timeout, `Retry-After`, 410 and auto-disable after repeated failures.
 
 - PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
-- guzzlehttp/guzzle ^7.12 or ^8.0
+- guzzlehttp/guzzle ^7.15.2 or ^8.0.1
 
 ## Install
 
@@ -76,6 +80,14 @@ php artisan vendor:publish --tag=outbound-config
 ```
 
 The service provider is auto-discovered.
+
+Run `php artisan outbound:check` in the deploy pipeline (fleet convention F2):
+it exits `1`, one line per problem, when the webhook tables or the
+configured users table are missing, or when the cache cannot atomically
+release a webhook id claim by its owner. It also flags schedules
+that still use the deprecated `outbound:webhooks:work` or
+`outbound:webhooks:prune` name. A config value of the wrong type already
+stops the boot, naming the key.
 
 ## Public API
 
@@ -155,10 +167,10 @@ client makes itself (response size, redirect rules) have no kind.
 for example `http://user:secret@egress.internal:3128`) to send every request
 through a filtering forward proxy, as Standard Webhooks "Server side request
 forgery (SSRF)" recommends. It is deployment config, never set per endpoint
-or per call; null (the default) sends directly, and the `HTTP(S)_PROXY` and
-`NO_PROXY` environment variables are never read either way (Guzzle 7.12 is
-the first 7.x that guarantees this, hence the minimum). Any value other than
-an http(s) proxy URL, null or an empty string stops the boot.
+or per call. Null sends directly. The supported Guzzle floors (7.15.2 and
+8.0.1) keep the `HTTP(S)_PROXY` and `NO_PROXY` environment variables out of
+both paths. Any value other than an HTTP(S) proxy URL, null or an empty string
+stops the boot.
 
 - The guard still authorises and pins every destination, so the proxy adds a
   network-layer control without replacing the application one. curl is
@@ -177,14 +189,19 @@ an http(s) proxy URL, null or an empty string stops the boot.
   messages above.
 
 
-### Testing `PinnedHttpClient`
+### Isolated policies and testing
+
+Use `OutboundHttpStackData::make($hostResolver, limits: $limits)` for an
+isolated guard and client. The default requires HTTPS and refuses private
+addresses. Set `allowPrivateHosts` and `httpsOnly` explicitly when the
+integration has a different trusted deployment policy.
 
 `Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
 reach `PinnedHttpClient` when the service provider binds a private factory. Each
 transfer also strips a request-level `handler` from factory global options so a
-poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factory
-from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
-or use the `transferHandler` constructor seam for unit tests without a real client.
+poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, pass
+`Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` as the
+`httpFactory` argument to `OutboundHttpStackData::make()`.
 
 
 ### Standard Webhooks
@@ -218,25 +235,21 @@ directions), oversize payloads, too many signatures/secrets, and uses
 `hash_equals` against every candidate (no early return). Timestamp tolerance
 alone is **not** replay protection: after a signature match the verifier
 atomically `claim`s `(scope, webhook-id)` until `timestamp + tolerance + 1`
-(covers sender skew; holds through the last accepted second). The seen-id
-cache allowlist is **database, redis, memcached, dynamodb, and file**
-(file is single-host only). `storage` and `failover` are refused even when
-they expose `add()`. The array store is tests-only. Resolving
-`StandardWebhookVerifier` (or `SeenWebhookIdStore`) with a refused driver
-throws `UnsupportedWebhookIdCacheStoreException` immediately — not a later
-generic 500. Catch `DuplicateWebhookIdException`,
-`WebhookIdStoreFailedException`, and `InvalidWebhookSignatureException`
-instead of string-matching; messages stay stable for BC. The service
-provider binds a cache-backed `SeenWebhookIdStore` by default.
+(covers sender skew and holds through the last accepted second). The
+seen-id store supports Laravel **database and Redis** owner-checked locks.
+With the database driver, apply Laravel's cache and cache-lock migrations.
+Array locks are available in tests. `outbound:check` reports an unsupported
+driver. Resolving the default `SeenWebhookIdStore` with that driver throws
+`UnsupportedWebhookIdCacheStoreException`. Catch the typed duplicate,
+storage and invalid-signature exceptions in the receiver.
 
-`verify()` returns the `WebhookIdClaim` it won (null without a store). A
+`verify()` requires a dedupe store and returns the `WebhookIdClaim` it won. A
 consumer whose processing fails after that gives it back with
 `SeenWebhookIdStore::release($claim)`, so the sender's retry or redelivery
 (same `webhook-id`) is processed instead of being dropped as a duplicate.
-Only the winning claim releases: a duplicate gets no claim, and a claim
-another request holds carries a different random token, so it is left in
-place. A store that cannot release fails closed
-(`WebhookIdStoreFailedException`).
+Release compares the owner token and deletes in one storage operation.
+A replacement owner keeps its lock if the previous owner releases after
+expiry. A store failure throws `WebhookIdStoreFailedException`.
 
 The signer and the verifier refuse a `webhook-id` that is empty, holds a `.`
 (it separates the signed fields) or a control character. `WebhookMessage`
@@ -316,15 +329,16 @@ use Qiick\Outbound\Webhooks\WebhookMessage;
 app(WebhookDeliveryCoordinator::class)->dispatch(
     new WebhookMessage('msg_'.Str::ulid(), 'invoice.paid', now()->toDateTimeImmutable(), ['invoice' => $invoice->public_id]),
     scope: $project->public_id, // the product's scope column value; omit for instance scope
+    subjectPublicId: $customer->public_id, // the person the event is about, if any (see Erasure)
 );
 
 // routes/console.php
-Schedule::command('outbound:webhooks:work')->everyFiveSeconds();
+Schedule::command('outbound:work-deliveries')->everyFiveSeconds();
 ```
 
 `dispatch()` stores one pending delivery per active endpoint subscribed to the
 type (or to `*`), with the exact body every attempt signs; dispatching the same
-message again creates nothing. `outbound:webhooks:work` takes up to `--limit`
+message again creates nothing. `outbound:work-deliveries` takes up to `--limit`
 (50) due deliveries, and with `--max-seconds` starts no attempt once that
 long has passed (an attempt on the wire finishes, so a run can overrun by one
 send); it leases each delivery on its own right before its send, signs
@@ -442,6 +456,19 @@ ids, the event type, the reason, the attempt count and the time (standards
 review S5). A body pruned while its delivery was still pending exhausts it
 without an attempt and without the event.
 
+**Every event of the package is dispatched synchronously** (the
+`WebhookDeliveredEvent` after the commit), so no listener may throw: make it
+`ShouldQueue` or catch inside. A listener that throws on a delivery event
+is reported through the exception handler after the attempt is stored, and
+the run carries on; on `WebhookSignedEvent` and `OutboundRequestBlockedEvent`
+see above. Events carry public ids, never a secret or a body;
+`WebhookRedeliveryRequestedEvent` also carries the asking user's local id.
+
+An attempt records the status, duration, transport error kind, request ID
+and allowlisted response headers, each capped at 255 characters. Receiver
+bodies and excerpts are excluded from the attempt record because they may
+contain receiver or customer data (security review S6).
+
 ### Legacy profiles
 
 An endpoint whose `legacy_profile` names a registered profile keeps an older
@@ -476,14 +503,14 @@ $coordinator->redeliver($delivery, triggeredBy: auth()->id());
 $coordinator->redeliverRange($endpoint, $from, $until, [DeliveryStatus::Exhausted], auth()->id()); // "Redeliver failed since…"
 ```
 
-A redelivery is sent by the next `outbound:webhooks:work` run with the **same
+A redelivery is sent by the next `outbound:work-deliveries` run with the **same
 `webhook-id`** (the delivery's event id), a fresh `webhook-timestamp` and fresh
 signatures (standards review R7; Standard Webhooks "Webhook metadata" keeps the
 id across retries). A consumer that already processed it deduplicates it. A
 consumer that verifies with this package and fails after claiming the id
 drops the redelivery as a duplicate until the claim expires;
-`SeenWebhookIdStore::release()` for giving a claim back arrives in a later
-pull request (review M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
+unless it gives the claim back with `SeenWebhookIdStore::release()` (review
+M14). The attempt records `trigger = manual|bulk` and `triggered_by`.
 
 - A settled delivery (delivered, exhausted, refused, cancelled) gets exactly
   one more attempt: if it fails, it is exhausted again. A pending one is
@@ -510,22 +537,29 @@ pull request (review M14). The attempt records `trigger = manual|bulk` and `trig
 
 ### Body retention
 
-```php
-// routes/console.php
-Schedule::command('outbound:webhooks:prune')->daily();
-```
+The package schedules `outbound:prune-deliveries` daily, on one server and
+without overlapping (fleet convention F9). Set `outbound.webhooks.schedule`
+(`OUTBOUND_WEBHOOK_SCHEDULE`) to `false` to schedule it yourself.
+`onOneServer()` needs a cache all scheduler hosts share (database, Redis,
+Memcached or DynamoDB): with a node-local file cache, two hosts both run it,
+which is harmless (each block is its own transaction) but doubles the work.
+`--dry-run` reports what it would clear and delete and changes nothing.
 
 A delivery's body is the exact payload every attempt signs, encrypted at rest
 (`encrypted` cast). It is kept until `payload_expires_at`: 30 days after
-dispatch by default (`outbound.webhooks.payload_retention_days`, at least 1;
-the maintainer's decision Q3 of 2026-11-22), or until the delivery's longest
-possible retry plan ends, plus an hour, if that is later. The plan counts
+dispatch by default (`outbound.webhooks.payload_retention_days`, from 1 to
+30, the boot fails outside; the maintainer's decision Q3 of 2026-11-22 and the
+fleet erasure decision). A delivery about a person named at dispatch
+(`subjectPublicId`) keeps it until its longest possible retry plan ends, plus
+an hour, if that is later; one about nobody named never longer than the
+retention, because the eraser cannot find it: prune exhausts it
+(`payload_expired`) even mid-schedule. The plan counts
 every retry at its delay plus the most jitter, or at the `Retry-After` cap
 when Retry-After is honoured, so a receiver that keeps answering `503` with
 a long `Retry-After`, or an endpoint with a higher `max_attempts`, never loses
 its body mid-schedule.
 
-`outbound:webhooks:prune` then clears the body and keeps `payload_hash` and
+`outbound:prune-deliveries` then clears the body and keeps `payload_hash` and
 `payload_bytes`, so the delivery log still proves what was sent. It also
 deletes settled deliveries created `outbound.webhooks.delivery_retention_days`
 ago (90, at least the payload retention), with their attempts, once their
@@ -535,6 +569,59 @@ body has expired too; pending ones are kept. It works in blocks of 500, each in 
 - A pending delivery whose body expires (an endpoint disabled for weeks) is
   exhausted (`payload_expired`); one a worker is sending keeps its body until
   its lease ends.
+
+### Erasure
+
+```php
+use Qiick\Outbound\Erasure\OutboundEraser;
+
+$report = app(OutboundEraser::class)->erase(
+    userId: (string) $user->id,
+    userPublicId: $user->public_id,
+    mode: OutboundEraser::DELETE, // or ANONYMISE: outbound does the same in both
+    publicIds: $principalAndApiKeyPublicIds,
+    identifiers: [$user->email, $user->name],
+    dryRun: false,
+);
+```
+
+`OutboundEraser` is the package's step of the qiick fleet erasure standard
+(`.qiick/standards/erasure.md`); a product calls it only through its erasure
+orchestrator, after collecting the Art. 19 recipients (the endpoints of the
+person's delivered deliveries). Endpoints and the delivery log are the
+organisation's, so nothing is deleted. In one transaction it:
+
+- cancels every pending delivery whose `subject_public_id` is the person's
+  public id or one of `$publicIds` (compared in lower case, as `dispatch()`
+  stores it), and drops the payload, its hash and the reference of every
+  delivery about them, delivered ones included (the erasure report is the
+  evidence that remains);
+- clears receiver diagnostics (`response_headers` and `request_id`)
+  on every attempt of those deliveries, whoever
+  triggered it;
+- nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
+  they point at the person (a non-numeric `$userId` matches none of them).
+
+A worker that claimed a delivery before the cancel reads the row again after
+DNS, right before the transport, and sends nothing when the delivery was
+cancelled or its body expired (an expired body is never claimed either). An
+attempt on the wire records the asker the claim stored in
+`claimed_triggered_by`, which the eraser nulls too, so an unlinked asker is
+never written back. Known limit: a cancel committed after that last read,
+while the request is being written, does not stop it; a request on the wire
+cannot be recalled, and its attempt is not recorded. A deadlock is
+rethrown as `WebhookDeliveryConcurrencyException`, other database errors as
+a `RuntimeException`, both without the query's bindings.
+
+It returns an `ErasureReport` with counts only and, after the commit,
+dispatches `Events\SubjectErasedEvent`; a dry run writes and dispatches
+nothing. An organisation-scoped run throws
+`OrganisationScopeUnsupportedException`: endpoints have no organisation.
+
+A delivery is attributable only if the product passed `subjectPublicId` to
+`dispatch()`. A delivery queued without it keeps its encrypted payload for
+the payload retention only (30 days at most, whatever its retry plan), then
+only the hash: pass it for every event about a person.
 
 ### Retry schedule and delivery records
 
@@ -617,7 +704,11 @@ so `DB::transaction(..., attempts: n)` still retries it), never Laravel's
 exception with its bindings. Query recorders (Telescope, Debugbar, Flare with
 query bindings, `DB::listen` loggers) still see the hash of every write: a
 short, guessable body can be found from it. `created_by` and `triggered_by` reference
-`outbound.webhooks.users_table` (`users`) with null-on-delete.
+`outbound.webhooks.users_table` (`users`) with null-on-delete, as `foreignId`
+columns: the users table must have an unsigned **bigint** `id` (Laravel's
+default). A product with UUID or ULID user ids sets
+`OUTBOUND_WEBHOOK_USERS_TABLE` empty: the columns stay, nullable and without
+a foreign key, and the product leaves them null.
 
 **Scope column.** The package defines no tenancy column and no morph. A product
 that scopes endpoints adds its own foreign key to `webhook_endpoints` with its
@@ -669,6 +760,7 @@ upgrade. From `1.0.0` the migrations are frozen and change only additively.
 | `outbound.webhooks.default_max_concurrency` | `OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY` | `2` |
 | `outbound.webhooks.payload_retention_days` | `OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` |
 | `outbound.webhooks.delivery_retention_days` | `OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS` | `90` |
+| `outbound.webhooks.schedule` | `OUTBOUND_WEBHOOK_SCHEDULE` | `true` |
 | `outbound.webhooks.auto_disable.enabled` | `OUTBOUND_WEBHOOK_AUTO_DISABLE` | `true` |
 | `outbound.webhooks.auto_disable.no_success_days` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS` | `5` |
 | `outbound.webhooks.auto_disable.min_consecutive_failures` | `OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES` | `10` |

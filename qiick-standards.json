@@ -1,5 +1,21 @@
 {
-    "$comment": "qiick standards pack: https://github.com/qiick-io/app-ui/tree/v0.11.0/standards. Sync: node <app-ui>/scripts/sync-standards.mjs --target .",
-    "ref": "v0.11.0",
-    "php": true
+    "$comment": "qiick standards pack: https://github.com/qiick-io/app-ui/tree/v0.15.0/standards. Sync: node <app-ui>/scripts/sync-standards.mjs --target .",
+    "ref": "v0.15.0",
+    "php": true,
+    "erasure": true,
+    "requiredChecks": [
+        "package-matrix / export",
+        "PHP 8.5 Laravel 13 stable",
+        "Pest on PostgreSQL 17",
+        "Pest on MySQL 8.4",
+        "Pest on MariaDB 11.4",
+        "Real transport Guzzle 7.15.2",
+        "Real transport Guzzle 8.0.1",
+        "Redis webhook claims",
+        "Mutation (per-class ≥95%)",
+        "standards / standards",
+        "Workflow action pins",
+        "pr-title / commitlint"
+    ],
+    "package": true
 }
