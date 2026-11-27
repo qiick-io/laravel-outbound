@@ -158,8 +158,12 @@ it('matches an allowlist entry written in Unicode or with a trailing dot, as the
     'an IPv6 address written out in full' => ['2606:4700:0:0:0:0:0:1111', 'https://[2606:4700::1111]/'],
 ]);
 
+it('refuses a host with two trailing dots, one more than the root', function (): void {
+    expect(ssrfGuardResolving()->tryAuthorize('https://example.test../'))->toBe(['ok' => false, 'reason' => 'URL is invalid.']);
+});
+
 it('never lets an allowlist entry that is not a host match anything', function (): void {
-    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: ['exa mple.test', '']);
+    $options = new UrlGuardOptions(enforceHostAllowlist: true, hostAllowlist: ['exa mple.test', '', 'example.test..']);
 
     expect(ssrfGuardResolving()->tryAuthorize('https://example.test/', $options)['ok'])->toBeFalse();
 });

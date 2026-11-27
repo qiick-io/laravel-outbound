@@ -224,8 +224,10 @@ final class RemoteUrlGuard
 
         // Nontransitional UTS46: full-width digits/punctuation must not mint an
         // IP-like hostname (closed below). Underscores stay allowed (curl/S3).
+        // The whole host, root dot included: stripping a dot before and
+        // another after would read `example.test..` as `example.test`.
         $ascii = idn_to_ascii(
-            $name,
+            $host,
             IDNA_NONTRANSITIONAL_TO_ASCII,
             INTL_IDNA_VARIANT_UTS46,
         );
@@ -234,7 +236,7 @@ final class RemoteUrlGuard
             throw new UnsafeUrl('URL is invalid.');
         }
 
-        // Ideographic full stop and similar can map to '.' — strip after IDN.
+        // One root dot, written or mapped from an ideographic full stop.
         if (str_ends_with($ascii, '.')) {
             $ascii = substr($ascii, 0, -1);
         }

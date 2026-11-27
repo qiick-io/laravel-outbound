@@ -3,10 +3,12 @@
 declare(strict_types=1);
 
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Arr;
 use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
+use Qiick\Outbound\Laravel\OutboundServiceProvider;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
@@ -199,7 +201,43 @@ it('refuses to boot with a config value of the wrong type, naming the key', func
     'a whole section' => ['outbound.ssrf', 'strict', 'outbound.ssrf must be an array.'],
     'the retry preset' => ['outbound.webhooks.retry_preset', 'fast', 'outbound.webhooks.retry_preset must be standard or short.'],
     'the scope column' => ['outbound.webhooks.scope_column', 7, 'outbound.webhooks.scope_column must be a string.'],
+    'an explicit null where an integer belongs' => ['outbound.http.max_response_bytes', null, 'outbound.http.max_response_bytes must be an integer.'],
+    'the legacy profiles as a string' => ['outbound.webhooks.legacy_profiles', 'legacy-1', 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'a legacy profile without a name' => ['outbound.webhooks.legacy_profiles', ['test.legacy-profile'], 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'the endpoint page URL as an array' => ['outbound.webhooks.auto_disable.endpoint_url', ['https://app.example/hooks'], 'outbound.webhooks.auto_disable.endpoint_url must be a string.'],
+    'the users table as a boolean' => ['outbound.webhooks.users_table', false, 'outbound.webhooks.users_table must be a string.'],
 ]);
+
+it('knows the type of every key the package config ships', function (): void {
+    $flatten = function (array $section, string $prefix) use (&$flatten): array {
+        $keys = [];
+
+        foreach ($section as $name => $value) {
+            $keys = [...$keys, ...(is_array($value) && $value !== [] ? $flatten($value, "{$prefix}.{$name}") : ["{$prefix}.{$name}"])];
+        }
+
+        return $keys;
+    };
+    $configTypes = (new ReflectionClassConstant(OutboundServiceProvider::class, 'CONFIG_TYPES'))->getValue();
+
+    expect(array_keys($configTypes))->toBe($flatten(require __DIR__.'/../../config/outbound.php', 'outbound'));
+});
+
+it('reads the types from the shipped schema, not from the environment', function (): void {
+    // env() turns "false" into a boolean: the default must not change type with it.
+    putenv('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL=false');
+    $this->configBeforeBoot = ['outbound.webhooks.auto_disable.endpoint_url' => 'https://app.example/hooks/{endpoint}'];
+
+    try {
+        $this->refreshApplication();
+
+        expect(config('outbound.webhooks.auto_disable.endpoint_url'))->toBe('https://app.example/hooks/{endpoint}');
+    } finally {
+        putenv('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL');
+        $this->configBeforeBoot = [];
+        $this->refreshApplication();
+    }
+});
 
 it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {
     config()->set('outbound.webhooks.retry_preset', $preset);
@@ -212,7 +250,7 @@ it('refuses a retry preset that is not a known name', function (mixed $preset, s
 ]);
 
 it('uses the package default for a key a published config lacks', function (): void {
-    config()->set('outbound.webhooks.max_secrets', null);
+    config()->set('outbound.webhooks', Arr::except(config('outbound.webhooks'), 'max_secrets'));
     $this->app->forgetInstance(StandardWebhookSigner::class);
     $secrets = array_map(fn (): WebhookSecret => WebhookSecret::generate(), range(1, 5));
 

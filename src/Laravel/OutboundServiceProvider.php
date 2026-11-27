@@ -48,6 +48,50 @@ use Qiick\Outbound\Webhooks\WebhookSecretResolver;
  */
 final class OutboundServiceProvider extends ServiceProvider
 {
+    /**
+     * The type of every `outbound.*` key, fixed here rather than read from
+     * the defaults: an uncast `env()` default changes type with the
+     * environment ("false" becomes a boolean). A test keeps it in step with
+     * config/outbound.php.
+     *
+     * @var array<string, 'int'|'bool'|'string'|'?string'|'map'>
+     */
+    private const CONFIG_TYPES = [
+        'outbound.migrations.load' => 'bool',
+        'outbound.ssrf.allow_private_hosts' => 'bool',
+        'outbound.ssrf.https_only' => 'bool',
+        'outbound.http.timeout_seconds' => 'int',
+        'outbound.http.connect_timeout_seconds' => 'int',
+        'outbound.http.max_timeout_seconds' => 'int',
+        'outbound.http.max_connect_timeout_seconds' => 'int',
+        'outbound.http.total_deadline_seconds' => 'int',
+        'outbound.http.max_response_bytes' => 'int',
+        'outbound.http.max_redirects' => 'int',
+        'outbound.http.egress_proxy' => '?string',
+        'outbound.webhooks.replay_tolerance_seconds' => 'int',
+        'outbound.webhooks.max_payload_bytes' => 'int',
+        'outbound.webhooks.max_signatures' => 'int',
+        'outbound.webhooks.max_secrets' => 'int',
+        'outbound.webhooks.secret_rotation_grace_seconds' => 'int',
+        'outbound.webhooks.retry_preset' => 'string',
+        'outbound.webhooks.retry_jitter_seconds' => 'int',
+        'outbound.webhooks.timeout_seconds' => 'int',
+        'outbound.webhooks.respect_retry_after' => 'bool',
+        'outbound.webhooks.retry_after_cap_seconds' => 'int',
+        'outbound.webhooks.default_max_concurrency' => 'int',
+        'outbound.webhooks.payload_retention_days' => 'int',
+        'outbound.webhooks.delivery_retention_days' => 'int',
+        'outbound.webhooks.auto_disable.enabled' => 'bool',
+        'outbound.webhooks.auto_disable.no_success_days' => 'int',
+        'outbound.webhooks.auto_disable.min_consecutive_failures' => 'int',
+        'outbound.webhooks.auto_disable.notify_owner' => 'bool',
+        'outbound.webhooks.auto_disable.endpoint_url' => '?string',
+        'outbound.webhooks.allow_raw_legacy_secret' => 'bool',
+        'outbound.webhooks.legacy_profiles' => 'map',
+        'outbound.webhooks.scope_column' => '?string',
+        'outbound.webhooks.users_table' => 'string',
+    ];
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../../config/outbound.php', 'outbound');
@@ -225,8 +269,8 @@ final class OutboundServiceProvider extends ServiceProvider
         $this->app->make(PinnedHttpClient::class);
         // The other services are built on first use, after a test or a
         // product has changed the config or a binding; their values are
-        // checked here against the type of the package default.
-        self::assertConfigTypes($config, self::packageDefaults(), 'outbound');
+        // checked here against CONFIG_TYPES.
+        self::assertConfigTypes($config);
         self::defaultRetryPreset($config);
         $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
 
@@ -259,6 +303,8 @@ final class OutboundServiceProvider extends ServiceProvider
     {
         $profiles = [];
 
+        self::assertNamedBindings($config, 'outbound.webhooks.legacy_profiles');
+
         foreach ((array) self::configValue($config, 'outbound.webhooks.legacy_profiles') as $name => $binding) {
             $profile = is_string($name) && is_string($binding) ? $app->make($binding) : null;
 
@@ -273,33 +319,42 @@ final class OutboundServiceProvider extends ServiceProvider
     }
 
     /**
-     * Checks every configured value whose package default is an integer, a
-     * boolean or a string against that type, and every section against an
-     * array. Defaults that are null or an empty list (an optional proxy, the
-     * legacy profiles) are checked where they are read.
-     *
-     * @param  array<mixed>  $defaults
+     * Checks every configured value against CONFIG_TYPES, and every section
+     * (`outbound.webhooks`, …) against an array, so a section replaced by a
+     * scalar is not read as "every key missing".
      *
      * @throws InvalidArgumentException naming the first key of the wrong type
      */
-    private static function assertConfigTypes(ConfigRepository $config, array $defaults, string $prefix): void
+    private static function assertConfigTypes(ConfigRepository $config): void
     {
-        foreach ($defaults as $name => $default) {
-            $key = "{$prefix}.{$name}";
+        foreach (self::CONFIG_TYPES as $key => $type) {
+            for ($section = dirname(str_replace('.', '/', $key)); $section !== 'outbound'; $section = dirname($section)) {
+                $sectionKey = str_replace('/', '.', $section);
 
-            if (is_array($default) && $default !== []) {
-                if (! is_array(self::configValue($config, $key))) {
-                    throw new InvalidArgumentException("{$key} must be an array.");
+                if ($config->has($sectionKey) && ! is_array($config->get($sectionKey))) {
+                    throw new InvalidArgumentException("{$sectionKey} must be an array.");
                 }
-
-                self::assertConfigTypes($config, $default, $key);
-            } elseif (is_int($default)) {
-                self::configInt($config, $key);
-            } elseif (is_bool($default)) {
-                self::configBool($config, $key);
-            } elseif (is_string($default)) {
-                self::configString($config, $key);
             }
+
+            match ($type) {
+                'int' => self::configInt($config, $key),
+                'bool' => self::configBool($config, $key),
+                'string' => self::configString($config, $key),
+                '?string' => self::configValue($config, $key) === null ? null : self::configString($config, $key),
+                'map' => self::assertNamedBindings($config, $key),
+            };
+        }
+    }
+
+    /**
+     * @throws InvalidArgumentException when the value is not a map of names to binding names
+     */
+    private static function assertNamedBindings(ConfigRepository $config, string $key): void
+    {
+        $bindingsByName = self::configValue($config, $key);
+
+        if (! is_array($bindingsByName) || array_filter($bindingsByName, is_string(...)) !== $bindingsByName || array_filter(array_keys($bindingsByName), is_string(...)) !== array_keys($bindingsByName)) {
+            throw new InvalidArgumentException("{$key} must map a name to a LegacyWebhookProfileContract binding.");
         }
     }
 
@@ -346,12 +401,12 @@ final class OutboundServiceProvider extends ServiceProvider
      * The configured value, or the package's own default from
      * config/outbound.php when the key is missing: Laravel merges only the
      * top level of a package config, so a config published before a key
-     * existed lacks it. A value of the wrong type stops the boot instead of
-     * silently becoming the default.
+     * existed lacks it. A value present but of the wrong type, null
+     * included, stops the boot instead of silently becoming the default.
      */
     private static function configValue(ConfigRepository $config, string $key): mixed
     {
-        return $config->get($key) ?? data_get(['outbound' => self::packageDefaults()], $key);
+        return $config->has($key) ? $config->get($key) : data_get(['outbound' => self::packageDefaults()], $key);
     }
 
     /**
