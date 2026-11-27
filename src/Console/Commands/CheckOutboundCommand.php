@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qiick\Outbound\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
@@ -43,9 +44,11 @@ final class CheckOutboundCommand extends Command
         WebhookDeliveryAttempt::class,
     ];
 
-    public function handle(): int
+    public function handle(Schedule $schedule): int
     {
-        $problems = [...$this->dedupeStoreProblems(), ...$this->tableProblems()];
+        // A failed database-backed cache query can abort the current
+        // transaction on PostgreSQL. Inspect the schema before the probe.
+        $problems = [...$this->tableProblems(), ...$this->scheduleProblems($schedule), ...$this->dedupeStoreProblems()];
 
         foreach ($problems as $problem) {
             $this->error($problem);
@@ -58,6 +61,25 @@ final class CheckOutboundCommand extends Command
         $this->info('outbound: configuration and environment are ready.');
 
         return self::SUCCESS;
+    }
+
+    /** @return list<string> */
+    private function scheduleProblems(Schedule $schedule): array
+    {
+        $replacements = [
+            WorkWebhookDeliveriesCommand::LEGACY_NAME => 'outbound:work-deliveries',
+            PruneWebhookPayloadsCommand::LEGACY_NAME => 'outbound:prune-deliveries',
+        ];
+        $problems = [];
+
+        foreach ($schedule->events() as $event) {
+            if (preg_match('/(?:^|\s)[\'"]?artisan[\'"]?\s+[\'"]?(outbound:webhooks:\w+)[\'"]?(?:\s|$)/', $event->command ?? '', $matches) === 1
+                && isset($replacements[$matches[1]])) {
+                $problems[] = "schedule: replace {$matches[1]} with {$replacements[$matches[1]]}.";
+            }
+        }
+
+        return $problems;
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Laravel;
 
+use Illuminate\Console\Application as Artisan;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -308,6 +309,12 @@ final class OutboundServiceProvider extends ServiceProvider
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
 
             $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class, CheckOutboundCommand::class]);
+
+            // Keep beta schedules working until the product can deploy the new names.
+            Artisan::starting(static function (Artisan $artisan): void {
+                $artisan->add((new WorkWebhookDeliveriesCommand)->setName(WorkWebhookDeliveriesCommand::LEGACY_NAME)->setHidden());
+                $artisan->add((new PruneWebhookPayloadsCommand)->setName(PruneWebhookPayloadsCommand::LEGACY_NAME)->setHidden());
+            });
         }
     }
 
