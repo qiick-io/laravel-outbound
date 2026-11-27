@@ -185,6 +185,12 @@ All in `Qiick\Outbound\Events`, dispatched synchronously (listeners must not thr
 
 `webhook_endpoints`, `webhook_endpoint_secrets`, `webhook_subscriptions`, `webhook_deliveries`, `webhook_delivery_attempts`, with the columns of their `create_` migrations in `database/migrations/`. `created_by`, `triggered_by`, `next_attempt_triggered_by` and `claimed_triggered_by` reference `outbound.webhooks.users_table` (bigint `id`); with the key null or empty they are plain nullable columns without a foreign key, the option for a product whose user ids are not bigints. The publish tags `outbound-config` and `outbound-migrations` are public too.
 
+The 1.0 schema has one create migration per table. It includes the delivery
+subject reference, nullable payload hash and active-claim initiator in the
+delivery table's create migration. The measured claim plan used the existing
+indexes, so it requires no additional index.
+[#50 query plan](https://github.com/qiick-io/laravel-outbound/issues/50#issuecomment-7217419740)
+
 ## Routes and error codes
 
 None: the package registers no route and answers no HTTP request, so it has no `error` codes of the fleet registry. Its exceptions are public classes above; their messages are not a contract.
