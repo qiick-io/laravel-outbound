@@ -17,6 +17,8 @@ it('passes on a migrated database with a usable dedupe store', function (): void
 });
 
 it('fails on a dedupe store that is not shared between processes', function (): void {
+    // The test database migrates lazily, on first use: before production, which would ask to confirm.
+    expect(Schema::hasTable('webhook_endpoints'))->toBeTrue();
     $this->app->detectEnvironment(fn (): string => 'production');
     config()->set('cache.default', 'array');
 
