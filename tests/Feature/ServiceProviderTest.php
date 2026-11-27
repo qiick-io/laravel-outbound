@@ -273,3 +273,18 @@ it('gives the guard the metadata policy a product binds', function (): void {
 
     expect($result['ok'] ? null : $result['reason'])->toBe('Host is not allowed.');
 });
+
+it('refuses a malformed boolean or integer variable instead of casting it', function (string $variable, string $value, string $message): void {
+    putenv("{$variable}={$value}");
+
+    try {
+        expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $message);
+    } finally {
+        putenv($variable);
+        $this->refreshApplication();
+    }
+})->with([
+    // A cast would read this typo as true and open private hosts.
+    'a boolean typo' => ['OUTBOUND_ALLOW_PRIVATE_HOSTS', 'flase', 'outbound.ssrf.allow_private_hosts must be true or false.'],
+    'an integer in words' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'ten', 'outbound.webhooks.timeout_seconds must be an integer.'],
+]);

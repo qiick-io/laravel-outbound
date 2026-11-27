@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package default and the retry preset name, naming the key (fleet
   convention F1): a wrong value used to surface only when the verifier, retry
   policy or coordinator was first built (#49).
+- **Boolean and integer variables are parsed strictly**: a malformed value
+  (`OUTBOUND_ALLOW_PRIVATE_HOSTS=flase`) stops the boot instead of being cast
+  to `true` or `0`.
 - A host allowlist entry is normalised as the URL host is: `Bücher.example`
   matches `xn--bcher-kva.example`, `example.test.` matches `example.test`, and
   an IPv6 entry matches in any spelling (#49).
