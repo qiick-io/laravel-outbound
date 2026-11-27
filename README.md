@@ -66,7 +66,7 @@ timeout, `Retry-After`, 410 and auto-disable after repeated failures.
 
 - PHP ^8.3 with `ext-curl`, `ext-intl`, and `ext-mbstring`
 - illuminate/contracts, illuminate/http, illuminate/support ^12 or ^13
-- guzzlehttp/guzzle ^7.12 or ^8.0
+- guzzlehttp/guzzle ^7.15.2 or ^8.0.1
 
 ## Install
 

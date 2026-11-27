@@ -95,10 +95,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Lowest supported Guzzle 7 line (composer.json ^7.12 || ^8.0):
-          # the first 7.x that pins CURLOPT_NOPROXY, so NO_PROXY in the
-          # environment cannot send around the egress proxy.
-          - guzzle: '7.12'
+          # Lowest supported Guzzle 7 (composer.json ^7.15.2 || ^8.0.1): the
+          # first 7.x without a published advisory, and like every 7.x since
+          # 7.12 it pins CURLOPT_NOPROXY, so NO_PROXY cannot send around the
+          # egress proxy.
+          - guzzle: '7.15.2'
             prefer: lowest
           # Current stable Guzzle 8.
           - guzzle: '8.5'
@@ -119,9 +120,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Packagist advisories block older Guzzle 7 installs; this job exists
-          # to exercise that line under real curl, so advisory blocking is off here only.
-          composer config audit.block-insecure false
           composer require --dev --no-interaction --no-update "orchestra/testbench:^11.0"
           composer require --no-interaction --no-update "illuminate/support:^13.0" "illuminate/http:^13.0" "illuminate/contracts:^13.0" "illuminate/database:^13.0"
           composer require --no-interaction --no-update "guzzlehttp/guzzle:^${{ matrix.guzzle }}"
@@ -131,6 +129,11 @@ jobs:
             composer update --no-interaction --prefer-dist --with-all-dependencies
           fi
           composer show guzzlehttp/guzzle | head -5
+
+      # Evidence for the supported floor: the lowest Guzzle a product can
+      # resolve has no published advisory.
+      - name: Composer audit
+        run: composer audit
 
       - name: Real-transport Pest
         run: vendor/bin/pest --group=real-transport
