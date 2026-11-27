@@ -6,16 +6,14 @@ namespace Qiick\Outbound\Testing;
 
 use Closure;
 use Illuminate\Http\Client\Factory as HttpFactory;
-use Illuminate\Support\Facades\Http;
+use Qiick\Outbound\Http\OutboundHttpStackData;
 use Qiick\Outbound\Http\PinnedHttpClient;
 
 /**
  * Builds an HttpFactory for {@see PinnedHttpClient} tests.
  *
- * {@see Http::fake()} and shared-factory global
- * middleware do not reach PinnedHttpClient when the service provider binds a
- * private factory. Inject the factory returned here into PinnedHttpClient
- * (or bind it over the container binding in a test).
+ * The shared facade fake does not reach the service provider's private client.
+ * Pass the factory returned here to {@see OutboundHttpStackData::make()}.
  *
  * @api
  */
