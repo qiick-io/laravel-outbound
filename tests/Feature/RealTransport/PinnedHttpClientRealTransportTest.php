@@ -614,8 +614,6 @@ function clientThroughProxy(RealTransportServer $server, RealTransportProxy $pro
         new HttpFactory,
         new RemoteUrlGuard((new FakeHostResolver)->with('app.test', ['127.0.0.1'])->with('metadata.test', ['169.254.169.254']), allowPrivateHosts: true),
         new OutboundHttpLimits,
-        null,
-        null,
         EgressProxy::fromUrl('http://'.($credentials === null ? '' : $credentials.'@').'127.0.0.1:'.$proxy->port),
     );
 }

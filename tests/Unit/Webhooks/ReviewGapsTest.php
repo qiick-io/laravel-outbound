@@ -93,24 +93,17 @@ it('returns the claim from verify, and gives a duplicate none to release', funct
     $verifier = new StandardWebhookVerifier(seenIds: $idStore);
     $secret = WebhookSecret::generate();
     $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
-    $verify = fn (): ?WebhookIdClaim => $verifier->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'endpoint-1');
+    $verify = fn (): WebhookIdClaim => $verifier->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'endpoint-1');
 
     $claim = $verify();
 
-    expect($claim?->scope)->toBe('endpoint-1')
-        ->and($claim?->webhookId)->toBe('msg_1')
+    expect($claim->scope)->toBe('endpoint-1')
+        ->and($claim->webhookId)->toBe('msg_1')
         ->and($verify)->toThrow(DuplicateWebhookIdException::class);
 
-    $idStore->release($claim ?? throw new LogicException('no claim'));
+    $idStore->release($claim);
 
     expect($verify())->toBeInstanceOf(WebhookIdClaim::class);
-});
-
-it('returns no claim when the verifier has no store', function (): void {
-    $secret = WebhookSecret::generate();
-    $signed = (new StandardWebhookSigner)->sign('msg_1', 1_700_000_000, '{}', [$secret]);
-
-    expect((new StandardWebhookVerifier)->verify($signed->rawBody, 'msg_1', '1700000000', $signed->headers['webhook-signature'], [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))->toBeNull();
 });
 
 it('draws a fresh token for every claim', function (): void {
@@ -122,7 +115,7 @@ it('draws a fresh token for every claim', function (): void {
 it('refuses on verify the webhook ids the signer refuses (M4)', function (string $webhookId, string $message): void {
     $secret = WebhookSecret::generate();
 
-    expect(fn () => (new StandardWebhookVerifier)->verify('{}', $webhookId, '1700000000', 'v1,x', [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))
+    expect(fn () => (new StandardWebhookVerifier(new FakeSeenWebhookIdStore))->verify('{}', $webhookId, '1700000000', 'v1,x', [$secret], new DateTimeImmutable('@1700000000'), 'test-scope'))
         ->toThrow(WebhookException::class, $message);
 })->with([
     ['msg.1', 'Webhook id must not contain a dot.'],

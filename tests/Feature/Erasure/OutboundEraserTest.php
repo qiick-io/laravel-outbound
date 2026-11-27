@@ -287,7 +287,7 @@ it('scrubs the receiver diagnostics of every attempt of a delivery about the per
     erasureEndpoint();
     $aboutThePerson = erasureDelivery('msg_1', $userPublicId);
     $someoneElses = erasureDelivery('msg_2', (string) Str::uuid());
-    $diagnostics = ['response_headers' => ['x-request-id' => 'customer-4711'], 'request_id' => 'customer-4711', 'response_excerpt' => 'Hello Ada'];
+    $diagnostics = ['response_headers' => ['x-request-id' => 'customer-4711'], 'request_id' => 'customer-4711'];
 
     foreach ([$aboutThePerson, $someoneElses] as $delivery) {
         $delivery->attempts()->make()->forceFill([
@@ -298,9 +298,9 @@ it('scrubs the receiver diagnostics of every attempt of a delivery about the per
 
     $report = eraseSubject('100001', $userPublicId);
 
-    expect($aboutThePerson->attempts()->sole()->only(['response_headers', 'request_id', 'response_excerpt']))
-        ->toBe(['response_headers' => null, 'request_id' => null, 'response_excerpt' => null])
-        ->and($someoneElses->attempts()->sole()->only(['response_headers', 'request_id', 'response_excerpt']))->toBe($diagnostics)
+    expect($aboutThePerson->attempts()->sole()->only(['response_headers', 'request_id']))
+        ->toBe(['response_headers' => null, 'request_id' => null])
+        ->and($someoneElses->attempts()->sole()->only(['response_headers', 'request_id']))->toBe($diagnostics)
         ->and($report->stores['webhook_delivery_attempts']['anonymised'])->toBe(1);
 });
 

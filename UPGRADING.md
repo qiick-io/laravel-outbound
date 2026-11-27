@@ -39,6 +39,14 @@ from `develop`.
 
 ## Unreleased (erasure)
 
+- Resolve the signer, verifier, guard, pinned HTTP client, secret rotator
+  and retry policy from the Laravel container. For an independent URL
+  policy and HTTP limits, use `OutboundHttpStackData::make()`. Verification
+  requires a dedupe store and returns a winning claim on success.
+- The `webhook_delivery_attempts` create migration no longer declares
+  `response_excerpt`. Recreate the beta schema, or remove the obsolete
+  column when preserving existing deliveries. The package records only
+  response diagnostics.
 - Refresh a published `config/outbound.php` from the updated vendor template
   and reapply your overrides. Older copies cast environment values before
   the package can validate them. An explicit null or blank is invalid for
@@ -176,7 +184,8 @@ reached.
   `$claim->token`, and releases only while it still holds that token. A
   direct caller builds the claim with `WebhookIdClaim::generate($scope,
   $webhookId)`. `StandardWebhookVerifier::verify()` returns the claim it won
-  (null without a store); keep it to release the id when processing fails.
+  (null without a store in that beta). Keep it to release the id when
+  processing fails. The unreleased verifier always requires a store.
   Event types are at most 191 bytes, and webhook ids must be valid UTF-8.
 - The minimum Guzzle on the 7 line is 7.12 (`^7.12 || ^8.0`): run
   `composer update guzzlehttp/guzzle` if the application pins an older 7.x.

@@ -163,10 +163,10 @@ client makes itself (response size, redirect rules) have no kind.
 for example `http://user:secret@egress.internal:3128`) to send every request
 through a filtering forward proxy, as Standard Webhooks "Server side request
 forgery (SSRF)" recommends. It is deployment config, never set per endpoint
-or per call; null (the default) sends directly, and the `HTTP(S)_PROXY` and
-`NO_PROXY` environment variables are never read either way (Guzzle 7.12 is
-the first 7.x that guarantees this, hence the minimum). Any value other than
-an http(s) proxy URL, null or an empty string stops the boot.
+or per call. Null sends directly. The supported Guzzle floors (7.15.2 and
+8.0.1) keep the `HTTP(S)_PROXY` and `NO_PROXY` environment variables out of
+both paths. Any value other than an HTTP(S) proxy URL, null or an empty string
+stops the boot.
 
 - The guard still authorises and pins every destination, so the proxy adds a
   network-layer control without replacing the application one. curl is
@@ -185,14 +185,19 @@ an http(s) proxy URL, null or an empty string stops the boot.
   messages above.
 
 
-### Testing `PinnedHttpClient`
+### Isolated policies and testing
+
+Use `OutboundHttpStackData::make($hostResolver, limits: $limits)` for an
+isolated guard and client. The default requires HTTPS and refuses private
+addresses. Set `allowPrivateHosts` and `httpsOnly` explicitly when the
+integration has a different trusted deployment policy.
 
 `Http::fake()` and `Http::globalOptions()` on the shared facade factory do **not**
 reach `PinnedHttpClient` when the service provider binds a private factory. Each
 transfer also strips a request-level `handler` from factory global options so a
-poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, inject a factory
-from `Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` (or `::make()`),
-or use the `transferHandler` constructor seam for unit tests without a real client.
+poisoned factory cannot bypass CONNECT_TO on Guzzle 7. In tests, pass
+`Qiick\Outbound\Testing\FakeOutboundHttpFactory::fake([...])` as the
+`httpFactory` argument to `OutboundHttpStackData::make()`.
 
 
 ### Standard Webhooks
@@ -237,7 +242,7 @@ generic 500. Catch `DuplicateWebhookIdException`,
 instead of string-matching; messages stay stable for BC. The service
 provider binds a cache-backed `SeenWebhookIdStore` by default.
 
-`verify()` returns the `WebhookIdClaim` it won (null without a store). A
+`verify()` requires a dedupe store and returns the `WebhookIdClaim` it won. A
 consumer whose processing fails after that gives it back with
 `SeenWebhookIdStore::release($claim)`, so the sender's retry or redelivery
 (same `webhook-id`) is processed instead of being dropped as a duplicate.
@@ -459,12 +464,10 @@ the run carries on; on `WebhookSignedEvent` and `OutboundRequestBlockedEvent`
 see above. Events carry public ids, never a secret or a body;
 `WebhookRedeliveryRequestedEvent` also carries the asking user's local id.
 
-**Responses are never stored or echoed** (standards review S6):
-`webhook_delivery_attempts.response_excerpt` stays empty: an attempt records
-the status, the duration, the transport error kind, the request id and an
-allowlist of response headers (never `Set-Cookie`, each cut at 255
-characters), never the receiver's body, which may reflect the request or
-carry data of the receiver's own. A product must not add it back.
+An attempt records the status, duration, transport error kind, request ID
+and allowlisted response headers, each capped at 255 characters. Receiver
+bodies and excerpts are excluded from the attempt record because they may
+contain receiver or customer data (security review S6).
 
 ### Legacy profiles
 
@@ -593,8 +596,8 @@ organisation's, so nothing is deleted. In one transaction it:
   stores it), and drops the payload, its hash and the reference of every
   delivery about them, delivered ones included (the erasure report is the
   evidence that remains);
-- clears what receivers answered (`response_headers`, `request_id`,
-  `response_excerpt`) on every attempt of those deliveries, whoever
+- clears receiver diagnostics (`response_headers` and `request_id`)
+  on every attempt of those deliveries, whoever
   triggered it;
 - nulls `created_by`, `next_attempt_triggered_by` and `triggered_by` where
   they point at the person (a non-numeric `$userId` matches none of them).

@@ -19,6 +19,8 @@ final class StandardWebhookSigner
 {
     /**
      * @param  Dispatcher|null  $events  receives {@see WebhookSignedEvent} after each signing
+     *
+     * @internal Resolve the production service from the container.
      */
     public function __construct(
         private readonly int $maxPayloadBytes = 1_048_576,

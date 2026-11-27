@@ -34,7 +34,6 @@ use Qiick\Outbound\Models\Concerns\PackageModelTrait;
  * @property string|null $error_message
  * @property int|null $retry_after_seconds
  * @property array<string, string>|null $response_headers
- * @property string|null $response_excerpt
  * @property int|null $response_bytes
  * @property int|null $duration_ms
  * @property string|null $request_id

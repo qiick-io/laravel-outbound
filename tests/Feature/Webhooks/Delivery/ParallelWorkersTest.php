@@ -37,7 +37,7 @@ it('sends every delivery exactly once when two workers run in parallel', functio
     }
 
     $transfer = new RecordingTransferHandler;
-    app()->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    app()->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: $resolverAnswers)),
         app(OutboundHttpLimits::class),

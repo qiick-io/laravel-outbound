@@ -26,7 +26,7 @@ beforeEach(function (): void {
     CarbonImmutable::setTestNow('2026-11-23 10:00:00');
     config()->set('outbound.webhooks.retry_jitter_seconds', 0);
     $this->transfer = new RecordingTransferHandler;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),

@@ -12,11 +12,21 @@ The deprecation policy below governs the public API. Everything else in `src/` i
 - **Delivery status:** `DeliveryStatus::Pending = 'pending'`, `Delivered = 'delivered'`, `Failed = 'failed'`, `Refused = 'refused'`, `Exhausted = 'exhausted'`, `Cancelled = 'cancelled'`; the backing values are stored in `webhook_deliveries.status`.
 - **Subject reference:** `WebhookDeliveryCoordinator::dispatch(WebhookMessage $message, ?string $scope = null, ?string $subjectPublicId = null)`; `subjectPublicId` is stored lower-case in `webhook_deliveries.subject_public_id` and is what `OutboundEraser` matches.
 
-The coordinator is resolved from the container: its public methods are the API, its constructor is `@internal`.
+Resolve `PinnedHttpClient`, `RemoteUrlGuard`, `StandardWebhookSigner`,
+`StandardWebhookVerifier`, `SecretRotator`, `RetryPolicy` and
+`WebhookDeliveryCoordinator` from the Laravel container. Their constructors
+are `@internal`. The verifier requires a `SeenWebhookIdStore` and returns
+the winning `WebhookIdClaim` after successful verification.
+
+Use `OutboundHttpStackData::make()` for a caller-owned URL policy. It returns
+an immutable pair of `guard` and `client` sharing that policy and the supplied
+transport limits. Its defaults refuse private hosts and require HTTPS.
 
 ## Classes, interfaces and enums
 
-Public means the class name, its public methods and constructor, and for enums the case names and backing values (backing values are wire values). The Eloquent models are public for their table, casts, relations and scopes; their attributes are the columns below.
+The public API covers class names, public members without an `@internal`
+annotation and enum case names and backing values. The Eloquent models
+expose their tables, columns, casts, relations and scopes.
 
 ### `Qiick\Outbound\Contracts`
 
@@ -67,6 +77,7 @@ Public means the class name, its public methods and constructor, and for enums t
 - `HttpRequestOptions` (class)
 - `OutboundHttpException` (class)
 - `OutboundHttpLimits` (class)
+- `OutboundHttpStackData` (class)
 - `OutboundRequest` (class)
 - `PinnedHttpClient` (class)
 

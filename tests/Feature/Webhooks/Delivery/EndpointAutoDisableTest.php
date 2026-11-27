@@ -35,7 +35,7 @@ beforeEach(function (): void {
     config()->set('outbound.webhooks.retry_jitter_seconds', 0);
     Event::fake([WebhookEndpointDisabledEvent::class]);
     $this->transfer = new RecordingTransferHandler;
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
@@ -159,7 +159,7 @@ it('does not decide on an attempt another worker already recorded', function ():
     // Already failing: a 410 the worker did record would disable it.
     $endpoint = failingEndpoint(['consecutive_failures' => 3, 'failing_since' => '2026-11-22 10:00:00']);
     app(WebhookDeliveryCoordinator::class)->dispatch(new WebhookMessage('msg_1', 'invoice.paid', new DateTimeImmutable('2026-11-23 09:00:00'), []));
-    $this->app->instance(PinnedHttpClient::class, new PinnedHttpClient(
+    $this->app->instance(PinnedHttpClient::class, PinnedHttpClient::forTesting(
         new HttpFactory,
         new RemoteUrlGuard(new FakeHostResolver(answers: ['hooks.example.com' => ['93.184.216.34']])),
         $this->app->make(OutboundHttpLimits::class),
