@@ -173,7 +173,7 @@ it('keeps the named parameters and return types used by downstream packages', fu
     'authorize' => [RemoteUrlGuard::class, 'authorize', ['url', 'options'], 1, AuthorizedDestination::class],
     'try authorize' => [RemoteUrlGuard::class, 'tryAuthorize', ['url', 'options'], 1, 'array'],
     'browser URL' => [RemoteUrlGuard::class, 'assertBrowserUrlIsSafe', ['url', 'options'], 1, 'void'],
-    'isolated outbound stack' => [OutboundHttpStackData::class, 'make', ['hostResolver', 'allowPrivateHosts', 'httpsOnly', 'limits', 'httpFactory'], 1, 'self'],
+    'isolated outbound stack' => [OutboundHttpStackData::class, 'make', ['hostResolver', 'allowPrivateHosts', 'httpsOnly', 'limits', 'httpFactory'], 1, OutboundHttpStackData::class],
     'claim' => [SeenWebhookIdStore::class, 'claim', ['claim', 'ttlSeconds'], 2, 'bool'],
     'release' => [SeenWebhookIdStore::class, 'release', ['claim'], 1, 'void'],
     'verify' => [StandardWebhookVerifier::class, 'verify', ['rawBody', 'webhookId', 'webhookTimestamp', 'webhookSignatureHeader', 'secrets', 'now', 'dedupeScope'], 7, WebhookIdClaim::class],

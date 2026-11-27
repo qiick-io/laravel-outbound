@@ -26,7 +26,7 @@ final readonly class OutboundHttpStackData
         bool $httpsOnly = true,
         OutboundHttpLimits $limits = new OutboundHttpLimits,
         ?HttpFactory $httpFactory = null,
-    ): self {
+    ): OutboundHttpStackData {
         $guard = new RemoteUrlGuard($hostResolver, $allowPrivateHosts, $httpsOnly);
         $client = new PinnedHttpClient($httpFactory ?? new HttpFactory, $guard, $limits);
 
