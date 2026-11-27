@@ -35,6 +35,14 @@ from `develop`.
   `outbound:webhooks:prune` is `outbound:prune-deliveries`. Update the
   product's schedule (`routes/console.php`) and any deploy script; the old
   names no longer exist.
+- **The package schedules `outbound:prune-deliveries` itself** (daily,
+  `onOneServer()`, `withoutOverlapping()`): remove the product's own
+  `Schedule::command(...prune...)` line, or set `OUTBOUND_WEBHOOK_SCHEDULE=false`
+  to keep it. A published config gets the new `outbound.webhooks.schedule`
+  key from the package default.
+- **The owner email listener is registered only while
+  `outbound.webhooks.auto_disable.notify_owner` is on** at boot (F3).
+- Add `php artisan outbound:check` to the deploy (F2).
 
 ## To 0.2.0-beta.3 (endpoint private hosts)
 

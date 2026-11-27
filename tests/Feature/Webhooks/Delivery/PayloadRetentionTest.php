@@ -282,3 +282,27 @@ it('keeps a settled delivery while its body may still be redelivered, even past 
 
     expect(WebhookDelivery::query()->whereKey($delivered->id)->exists())->toBeFalse();
 });
+
+it('reports what it would prune with --dry-run and changes nothing', function (): void {
+    config()->set('outbound.webhooks.payload_retention_days', 7);
+    config()->set('outbound.webhooks.delivery_retention_days', 7);
+    $this->app->forgetInstance(DatabaseDeliveryStore::class);
+    $this->app->forgetInstance(WebhookDeliveryCoordinator::class);
+    retentionEndpoint();
+    $delivered = retainedDelivery('msg_dry_run', ['status' => 'delivered', 'next_attempt_at' => null], (string) Str::uuid());
+    $pending = retainedDelivery('msg_dry_pending', ['payload_expires_at' => '2026-11-23 09:00:00', 'next_attempt_at' => '2026-11-23 11:00:00']);
+    CarbonImmutable::setTestNow('2026-12-02 11:04:30');
+
+    $this->artisan('outbound:prune-deliveries', ['--dry-run' => true])
+        ->expectsOutput('Would prune 2 webhook delivery bodies and delete 2 webhook deliveries (dry run, nothing changed).')
+        ->assertSuccessful();
+
+    expect($delivered->refresh()->payload)->not->toBeNull()
+        ->and($pending->refresh()->payload)->not->toBeNull()
+        ->and($pending->status)->toBe(DeliveryStatus::Pending);
+
+    // The pending one is exhausted by the prune, then old enough to delete.
+    $this->artisan('outbound:prune-deliveries')
+        ->expectsOutput('Pruned 2 webhook delivery bodies and deleted 2 webhook deliveries.')
+        ->assertSuccessful();
+});

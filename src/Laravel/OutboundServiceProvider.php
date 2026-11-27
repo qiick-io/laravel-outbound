@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Qiick\Outbound\Laravel;
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -12,6 +13,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
+use Qiick\Outbound\Console\Commands\CheckOutboundCommand;
 use Qiick\Outbound\Console\Commands\PruneWebhookPayloadsCommand;
 use Qiick\Outbound\Console\Commands\WorkWebhookDeliveriesCommand;
 use Qiick\Outbound\Contracts\HostResolver;
@@ -81,6 +83,7 @@ final class OutboundServiceProvider extends ServiceProvider
         'outbound.webhooks.default_max_concurrency' => 'int',
         'outbound.webhooks.payload_retention_days' => 'int',
         'outbound.webhooks.delivery_retention_days' => 'int',
+        'outbound.webhooks.schedule' => 'bool',
         'outbound.webhooks.auto_disable.enabled' => 'bool',
         'outbound.webhooks.auto_disable.no_success_days' => 'int',
         'outbound.webhooks.auto_disable.min_consecutive_failures' => 'int',
@@ -272,7 +275,16 @@ final class OutboundServiceProvider extends ServiceProvider
         // checked here against CONFIG_TYPES.
         self::assertConfigTypes($config);
         self::defaultRetryPreset($config);
-        $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        // Off means off (F3): no listener when the product sends its own notice.
+        if (self::configBool($config, 'outbound.webhooks.auto_disable.notify_owner')) {
+            $this->app->make(EventDispatcher::class)->listen(WebhookEndpointDisabledEvent::class, NotifyWebhookEndpointOwnerListener::class);
+        }
+
+        if (self::configBool($config, 'outbound.webhooks.schedule')) {
+            $this->callAfterResolving(Schedule::class, static function (Schedule $schedule): void {
+                $schedule->command('outbound:prune-deliveries')->daily()->onOneServer()->withoutOverlapping();
+            });
+        }
 
         $migrationsPath = __DIR__.'/../../database/migrations';
 
@@ -287,7 +299,7 @@ final class OutboundServiceProvider extends ServiceProvider
 
             $this->publishesMigrations([$migrationsPath => database_path('migrations')], 'outbound-migrations');
 
-            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class]);
+            $this->commands([WorkWebhookDeliveriesCommand::class, PruneWebhookPayloadsCommand::class, CheckOutboundCommand::class]);
         }
     }
 

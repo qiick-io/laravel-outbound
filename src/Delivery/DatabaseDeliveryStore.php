@@ -429,12 +429,7 @@ final class DatabaseDeliveryStore
         $prunedCount = 0;
 
         do {
-            $expiredBlock = WebhookDelivery::query()
-                ->whereNotNull('payload')
-                ->where('payload_expires_at', '<=', $now)
-                ->where(function (Builder $leaseQuery) use ($now): void {
-                    $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
-                })
+            $expiredBlock = $this->expiredPayloads($now)
                 ->orderBy('id')
                 ->limit(500)
                 ->get(['id', 'status']);
@@ -475,14 +470,11 @@ final class DatabaseDeliveryStore
     public function deleteExpiredDeliveries(): int
     {
         $now = CarbonImmutable::now('UTC');
-        $cutoff = $now->subDays($this->deliveryRetentionDays);
         $deletedCount = 0;
 
         do {
-            $expiredIds = WebhookDelivery::query()
+            $expiredIds = $this->expiredDeliveries($now)
                 ->where('status', '!=', DeliveryStatus::Pending->value)
-                ->where('created_at', '<=', $cutoff)
-                ->where('payload_expires_at', '<=', $now)
                 ->orderBy('id')
                 ->limit(500)
                 ->pluck('id')
@@ -492,6 +484,65 @@ final class DatabaseDeliveryStore
         } while (count($expiredIds) === 500);
 
         return $deletedCount;
+    }
+
+    /**
+     * What pruneExpiredPayloads() then deleteExpiredDeliveries() would
+     * change now, changing nothing (`outbound:prune-deliveries --dry-run`).
+     * A pending delivery whose body expired counts as deleted when it is old
+     * enough: the prune exhausts it first.
+     *
+     * @return array{payloads: int, deliveries: int}
+     */
+    public function countExpired(): array
+    {
+        $now = CarbonImmutable::now('UTC');
+
+        return [
+            'payloads' => $this->expiredPayloads($now)->count(),
+            'deliveries' => $this->expiredDeliveries($now)
+                ->where(function (Builder $settledQuery) use ($now): void {
+                    $settledQuery->where('status', '!=', DeliveryStatus::Pending->value)
+                        ->orWhere(fn (Builder $pendingQuery): Builder => self::withoutLease($pendingQuery->whereNotNull('payload'), $now));
+                })
+                ->count(),
+        ];
+    }
+
+    /**
+     * Deliveries whose body's retention ended and that no worker is sending.
+     *
+     * @return Builder<WebhookDelivery>
+     */
+    private function expiredPayloads(CarbonImmutable $now): Builder
+    {
+        return self::withoutLease(WebhookDelivery::query(), $now)
+            ->whereNotNull('payload')
+            ->where('payload_expires_at', '<=', $now);
+    }
+
+    /**
+     * Deliveries past `delivery_retention_days` whose body has expired too,
+     * whatever their status.
+     *
+     * @return Builder<WebhookDelivery>
+     */
+    private function expiredDeliveries(CarbonImmutable $now): Builder
+    {
+        return WebhookDelivery::query()
+            ->where('created_at', '<=', $now->subDays($this->deliveryRetentionDays))
+            ->where('payload_expires_at', '<=', $now);
+    }
+
+    /**
+     * @param  Builder<WebhookDelivery>  $deliveriesQuery
+     * @return Builder<WebhookDelivery>
+     */
+    private static function withoutLease(Builder $deliveriesQuery, CarbonImmutable $now): Builder
+    {
+        return $deliveriesQuery->where(function (Builder $leaseQuery) use ($now): void {
+            $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
+        });
     }
 
     /**
@@ -506,9 +557,7 @@ final class DatabaseDeliveryStore
         return $deliveriesQuery
             ->where('status', DeliveryStatus::Pending->value)
             ->where('payload_expires_at', '>', $now)
-            ->where(function (Builder $leaseQuery) use ($now): void {
-                $leaseQuery->whereNull('claimed_until')->orWhere('claimed_until', '<=', $now);
-            });
+            ->where(fn (Builder $leaseQuery): Builder => self::withoutLease($leaseQuery, $now));
     }
 
     /**

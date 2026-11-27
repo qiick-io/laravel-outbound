@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `outbound:check` (fleet convention F2): fails, one line per problem, on a
+  missing webhook or users table or a dedupe cache that is not shared
+  between processes.
+- `outbound:prune-deliveries --dry-run` (F6), and the package schedules the
+  prune itself daily on one server behind `outbound.webhooks.schedule` (F9).
 - `Qiick\Outbound\Erasure\OutboundEraser`, the fleet-standard eraser, with
   `ErasureReport`, `OrganisationScopeUnsupportedException` and
   `Events\SubjectErasedEvent`; the fleet erasure suite (E1–E14) runs in CI on
@@ -42,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `subjectPublicId` is stored in lower case.
 - The eraser clears `payload_hash` on deliveries about the person.
 - The CI server matrix runs MariaDB 11.4, as the fleet package matrix pins.
+- The owner email listener is not registered when
+  `outbound.webhooks.auto_disable.notify_owner` is off (F3).
 - **The boot checks every `outbound.*` value** against the type of its
   package default and the retry preset name, naming the key (fleet
   convention F1): a wrong value used to surface only when the verifier, retry
