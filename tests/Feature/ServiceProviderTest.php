@@ -8,7 +8,6 @@ use Qiick\Outbound\Contracts\HostResolver;
 use Qiick\Outbound\Contracts\MetadataPolicyContract;
 use Qiick\Outbound\Delivery\WebhookDeliveryCoordinator;
 use Qiick\Outbound\Http\PinnedHttpClient;
-use Qiick\Outbound\Laravel\OutboundServiceProvider;
 use Qiick\Outbound\Models\WebhookEndpoint;
 use Qiick\Outbound\Ssrf\DnsHostResolver;
 use Qiick\Outbound\Ssrf\RemoteUrlGuard;
@@ -204,23 +203,21 @@ it('refuses to boot with a config value of the wrong type, naming the key', func
     'an explicit null where an integer belongs' => ['outbound.http.max_response_bytes', null, 'outbound.http.max_response_bytes must be an integer.'],
     'the legacy profiles as a string' => ['outbound.webhooks.legacy_profiles', 'legacy-1', 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
     'a legacy profile without a name' => ['outbound.webhooks.legacy_profiles', ['test.legacy-profile'], 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
+    'a legacy profile without a binding name' => ['outbound.webhooks.legacy_profiles', ['legacy' => false], 'outbound.webhooks.legacy_profiles must map a name to a LegacyWebhookProfileContract binding.'],
     'the endpoint page URL as an array' => ['outbound.webhooks.auto_disable.endpoint_url', ['https://app.example/hooks'], 'outbound.webhooks.auto_disable.endpoint_url must be a string.'],
     'the users table as a boolean' => ['outbound.webhooks.users_table', false, 'outbound.webhooks.users_table must be a string.'],
 ]);
 
-it('knows the type of every key the package config ships', function (): void {
-    $flatten = function (array $section, string $prefix) use (&$flatten): array {
-        $keys = [];
+it('validates every shipped config key at boot', function (string $key, mixed $invalidValue): void {
+    $this->configBeforeBoot = [$key => $invalidValue];
 
-        foreach ($section as $name => $value) {
-            $keys = [...$keys, ...(is_array($value) && $value !== [] ? $flatten($value, "{$prefix}.{$name}") : ["{$prefix}.{$name}"])];
-        }
+    expect(fn () => $this->refreshApplication())->toThrow(InvalidArgumentException::class, $key);
+})->with(function (): iterable {
+    $defaults = require __DIR__.'/../../config/outbound.php';
 
-        return $keys;
-    };
-    $configTypes = (new ReflectionClassConstant(OutboundServiceProvider::class, 'CONFIG_TYPES'))->getValue();
-
-    expect(array_keys($configTypes))->toBe($flatten(require __DIR__.'/../../config/outbound.php', 'outbound'));
+    foreach (Arr::dot(['outbound' => $defaults]) as $key => $value) {
+        yield $key => [$key, is_array($value) ? false : []];
+    }
 });
 
 it('reads the types from the shipped schema, not from the environment', function (): void {
@@ -237,6 +234,13 @@ it('reads the types from the shipped schema, not from the environment', function
         $this->configBeforeBoot = [];
         $this->refreshApplication();
     }
+});
+
+it('lets products opt out of the users foreign keys with a null table', function (): void {
+    $this->configBeforeBoot = ['outbound.webhooks.users_table' => null];
+    $this->refreshApplication();
+
+    expect(config('outbound.webhooks.users_table'))->toBeNull();
 });
 
 it('refuses a retry preset that is not a known name', function (mixed $preset, string $message): void {
@@ -287,4 +291,6 @@ it('refuses a malformed boolean or integer variable instead of casting it', func
     // A cast would read this typo as true and open private hosts.
     'a boolean typo' => ['OUTBOUND_ALLOW_PRIVATE_HOSTS', 'flase', 'outbound.ssrf.allow_private_hosts must be true or false.'],
     'an integer in words' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'ten', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'a boolean as an integer' => ['OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 'true', 'outbound.webhooks.timeout_seconds must be an integer.'],
+    'null as a boolean' => ['OUTBOUND_HTTPS_ONLY', 'null', 'outbound.ssrf.https_only must be true or false.'],
 ]);

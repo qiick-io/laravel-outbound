@@ -13,6 +13,15 @@ declare(strict_types=1);
  * the boot then stops naming the key, instead of a cast turning it into true
  * or 0.
  */
+// Laravel casts reserved environment literals before returning them. Accept
+// integer text and integers, and boolean text and booleans, respectively.
+$integer = static fn (mixed $value): ?int => is_string($value) || is_int($value)
+    ? filter_var($value, FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE)
+    : null;
+$boolean = static fn (mixed $value): ?bool => is_string($value) || is_bool($value)
+    ? filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE)
+    : null;
+
 return [
 
     'migrations' => [
@@ -22,7 +31,7 @@ return [
          * Turn off only after publishing them with
          * `vendor:publish --tag=outbound-migrations`, so they still run.
          */
-        'load' => filter_var(env('OUTBOUND_MIGRATIONS_LOAD', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+        'load' => $boolean(env('OUTBOUND_MIGRATIONS_LOAD', true)),
 
     ],
 
@@ -34,42 +43,42 @@ return [
          * call's UrlGuardOptions or an endpoint's `allow_private_hosts` can
          * only narrow it, never allow what this refuses.
          */
-        'allow_private_hosts' => filter_var(env('OUTBOUND_ALLOW_PRIVATE_HOSTS', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+        'allow_private_hosts' => $boolean(env('OUTBOUND_ALLOW_PRIVATE_HOSTS', false)),
 
         /*
          * Restrict server-side fetches to https. Browser-target checks may use
          * a different UrlGuardOptions per call.
          */
-        'https_only' => filter_var(env('OUTBOUND_HTTPS_ONLY', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+        'https_only' => $boolean(env('OUTBOUND_HTTPS_ONLY', false)),
 
     ],
 
     'http' => [
 
-        'timeout_seconds' => filter_var(env('OUTBOUND_TIMEOUT_SECONDS', 5), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'timeout_seconds' => $integer(env('OUTBOUND_TIMEOUT_SECONDS', 5)),
 
-        'connect_timeout_seconds' => filter_var(env('OUTBOUND_CONNECT_TIMEOUT_SECONDS', 3), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'connect_timeout_seconds' => $integer(env('OUTBOUND_CONNECT_TIMEOUT_SECONDS', 3)),
 
         /*
          * Caps for per-call HttpRequestOptions. Values below 1s or above these
          * caps are rejected before any request is sent.
          */
-        'max_timeout_seconds' => filter_var(env('OUTBOUND_MAX_TIMEOUT_SECONDS', 60), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_timeout_seconds' => $integer(env('OUTBOUND_MAX_TIMEOUT_SECONDS', 60)),
 
-        'max_connect_timeout_seconds' => filter_var(env('OUTBOUND_MAX_CONNECT_TIMEOUT_SECONDS', 30), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_connect_timeout_seconds' => $integer(env('OUTBOUND_MAX_CONNECT_TIMEOUT_SECONDS', 30)),
 
         /*
          * Wall-clock budget for the whole redirect chain (all hops).
          */
-        'total_deadline_seconds' => filter_var(env('OUTBOUND_TOTAL_DEADLINE_SECONDS', 30), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'total_deadline_seconds' => $integer(env('OUTBOUND_TOTAL_DEADLINE_SECONDS', 30)),
 
-        'max_response_bytes' => filter_var(env('OUTBOUND_MAX_RESPONSE_BYTES', 1_048_576), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_response_bytes' => $integer(env('OUTBOUND_MAX_RESPONSE_BYTES', 1_048_576)),
 
         /*
          * Transport never auto-follows. When > 0, PinnedHttpClient re-authorises
          * and re-pins each hop up to this cap.
          */
-        'max_redirects' => filter_var(env('OUTBOUND_MAX_REDIRECTS', 0), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_redirects' => $integer(env('OUTBOUND_MAX_REDIRECTS', 0)),
 
         /*
          * A filtering forward proxy every outbound request goes through
@@ -85,20 +94,20 @@ return [
 
     'webhooks' => [
 
-        'replay_tolerance_seconds' => filter_var(env('OUTBOUND_WEBHOOK_TOLERANCE_SECONDS', 300), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'replay_tolerance_seconds' => $integer(env('OUTBOUND_WEBHOOK_TOLERANCE_SECONDS', 300)),
 
-        'max_payload_bytes' => filter_var(env('OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES', 1_048_576), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_payload_bytes' => $integer(env('OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES', 1_048_576)),
 
-        'max_signatures' => filter_var(env('OUTBOUND_WEBHOOK_MAX_SIGNATURES', 8), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_signatures' => $integer(env('OUTBOUND_WEBHOOK_MAX_SIGNATURES', 8)),
 
-        'max_secrets' => filter_var(env('OUTBOUND_WEBHOOK_MAX_SECRETS', 4), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'max_secrets' => $integer(env('OUTBOUND_WEBHOOK_MAX_SECRETS', 4)),
 
         /*
          * How long SecretRotator keeps the old primary signing after a
          * rotation, so consumers can switch keys without dropping messages.
          * A rotation may pass its own period; zero revokes the old key at once.
          */
-        'secret_rotation_grace_seconds' => filter_var(env('OUTBOUND_WEBHOOK_SECRET_ROTATION_GRACE_SECONDS', 86_400), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'secret_rotation_grace_seconds' => $integer(env('OUTBOUND_WEBHOOK_SECRET_ROTATION_GRACE_SECONDS', 86_400)),
 
         /*
          * RetrySchedule preset: "standard" (Standard Webhooks example) or
@@ -106,7 +115,7 @@ return [
          */
         'retry_preset' => env('OUTBOUND_WEBHOOK_RETRY_PRESET', 'standard'),
 
-        'retry_jitter_seconds' => filter_var(env('OUTBOUND_WEBHOOK_RETRY_JITTER', 30), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'retry_jitter_seconds' => $integer(env('OUTBOUND_WEBHOOK_RETRY_JITTER', 30)),
 
         /*
          * Timeout of one webhook POST. Standard Webhooks "Request timeouts"
@@ -115,23 +124,23 @@ return [
          * `http.max_timeout_seconds`, and the chain deadline still applies.
          * The product's scheduler or job timeout must be longer.
          */
-        'timeout_seconds' => filter_var(env('OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 15), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'timeout_seconds' => $integer(env('OUTBOUND_WEBHOOK_TIMEOUT_SECONDS', 15)),
 
         /*
          * Honour Retry-After on 429, 502, 503 and 504: the retry never comes
          * sooner. A Retry-After above the cap stops automatic retries
          * (`exhausted`, `retry_after_exceeds_cap`) instead of being shortened.
          */
-        'respect_retry_after' => filter_var(env('OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+        'respect_retry_after' => $boolean(env('OUTBOUND_WEBHOOK_RESPECT_RETRY_AFTER', true)),
 
         // Effective ceiling 30 days: longer Retry-After values are read as 30 days.
-        'retry_after_cap_seconds' => filter_var(env('OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS', 86_400), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'retry_after_cap_seconds' => $integer(env('OUTBOUND_WEBHOOK_RETRY_AFTER_CAP_SECONDS', 86_400)),
 
         /*
          * Attempts in flight at once per endpoint, unless the endpoint sets
          * `max_concurrency`.
          */
-        'default_max_concurrency' => filter_var(env('OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY', 2), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'default_max_concurrency' => $integer(env('OUTBOUND_WEBHOOK_DEFAULT_MAX_CONCURRENCY', 2)),
 
         /*
          * Days the encrypted body of a delivery is kept after dispatch, for
@@ -142,7 +151,7 @@ return [
          * about nobody named never longer. `outbound:webhooks:prune` then
          * clears it and keeps its hash and length.
          */
-        'payload_retention_days' => filter_var(env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'payload_retention_days' => $integer(env('OUTBOUND_WEBHOOK_PAYLOAD_RETENTION_DAYS', 30)),
 
         /*
          * Days a settled delivery row and its attempts are kept before
@@ -150,7 +159,7 @@ return [
          * retention. Pending deliveries, and rows whose body has not
          * expired yet, are never deleted.
          */
-        'delivery_retention_days' => filter_var(env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+        'delivery_retention_days' => $integer(env('OUTBOUND_WEBHOOK_DELIVERY_RETENTION_DAYS', 90)),
 
         /*
          * Disable an endpoint at once on 410 Gone, and after
@@ -159,11 +168,11 @@ return [
          * (standards review R8); an endpoint's `auto_disable` overrides it.
          */
         'auto_disable' => [
-            'enabled' => filter_var(env('OUTBOUND_WEBHOOK_AUTO_DISABLE', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
-            'no_success_days' => filter_var(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS', 5), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
-            'min_consecutive_failures' => filter_var(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES', 10), FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE),
+            'enabled' => $boolean(env('OUTBOUND_WEBHOOK_AUTO_DISABLE', true)),
+            'no_success_days' => $integer(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NO_SUCCESS_DAYS', 5)),
+            'min_consecutive_failures' => $integer(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_MIN_CONSECUTIVE_FAILURES', 10)),
             // Email the endpoint's `created_by` user when it is disabled automatically.
-            'notify_owner' => filter_var(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+            'notify_owner' => $boolean(env('OUTBOUND_WEBHOOK_AUTO_DISABLE_NOTIFY_OWNER', true)),
             // The product's page for an endpoint, `{endpoint}` being its public
             // id: the email's only link. Null sends the email without a link.
             'endpoint_url' => env('OUTBOUND_WEBHOOK_AUTO_DISABLE_ENDPOINT_URL'),
@@ -173,7 +182,7 @@ return [
          * Allow WebhookSecret::parseAllowingLegacyRaw to accept non-whsec_
          * secrets. Off by default; products turn it on only during migration.
          */
-        'allow_raw_legacy_secret' => filter_var(env('OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE),
+        'allow_raw_legacy_secret' => $boolean(env('OUTBOUND_WEBHOOK_ALLOW_RAW_LEGACY_SECRET', false)),
 
         /*
          * Legacy formats by the name an endpoint's `legacy_profile` holds:
